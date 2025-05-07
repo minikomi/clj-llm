@@ -1,0 +1,19 @@
+{:paths ["script", "src"]
+ :deps {
+        co.poyo/clj-llm {:local/root "."}
+        }
+ :tasks
+ {test:stream {:doc "Run stream tests with Babashka"
+              :task (shell "./test_stream.clj")}
+
+  test   {:doc "Run all tests with Clojure"
+          :task (shell "clojure -T:build test")
+          :depends []}
+
+  build  {:doc "Build the jar"
+          :task (shell "clojure -T:build ci")
+          :depends []}
+
+  deploy {:doc "Deploy to clojars"
+          :task (shell "clojure -T:build deploy")
+          :depends []}}}
