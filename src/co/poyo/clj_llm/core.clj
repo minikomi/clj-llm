@@ -2,9 +2,11 @@
   (:require
    [co.poyo.clj-llm.registry :as reg]
    [co.poyo.clj-llm.protocol :as proto]
+   [co.poyo.clj-llm.schema :as sch]
    [clojure.core.async :as a :refer [<!!]]
    [malli.core :as m]
    [malli.util :as mu]
+   [malli.error :as me]
    [malli.transform :as mt]))
 
 ;; ──────────────────────────────────────────────────────────────
@@ -109,14 +111,23 @@
 
         tool-calls-delay (delay
                            (ensure-consumed)
-                           (proto/-get-tool-calls impl model-name metadata))]
+                           (proto/-get-tool-calls impl model-name metadata))
+
+        structured-output-delay (delay
+                                  (ensure-consumed)
+                                  (-> (proto/-get-tool-calls impl model-name metadata)
+                                      first
+                                      (get-in [:function :arguments])))
+        ]
 
     ;; Return the structured response
     {:chunks chunks-seq
      :text text-deref
      :usage usage-delay
      :json json-delay
-     :tool-calls tool-calls-delay}))
+     :tool-calls tool-calls-delay
+     :structured-output structured-output-delay
+     }))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper
@@ -132,3 +143,69 @@
                                  :content (deref (:text resp))}))
                  resp))
      :history history}))
+
+;; ──────────────────────────────────────────────────────────────
+;; Function Helpers
+;; ──────────────────────────────────────────────────────────────
+
+(defn call-function-with-llm
+  ([f model-id content]
+   (call-function-with-llm f model-id content {}))
+  ([f model-id content {:keys [validate? llm-opts]
+                        :or {validate? true llm-opts {}}}]
+   (let [f-meta (sch/f->meta f)
+         f-name (or (-> f-meta :name str) "unnamed-function")
+         full-f-schema (sch/get-schema-from-malli-function-registry f)
+         f-input-schema (-> full-f-schema m/form second second)
+         tool (sch/instrumented-function->tool-spec f)
+         response (prompt model-id content (merge {:tools [tool], :tool-choice "auto"} llm-opts))
+         tool-calls @(:tool-calls response)
+         matching-call (first (filter #(= (get-in % [:function :name]) (str f-name)) tool-calls))]
+     (when-not matching-call
+       (throw (ex-info "LLM did not call expected function"
+                       {:expected f-name, :calls-made (mapv #(get-in % [:function :name]) tool-calls)})))
+
+     (println "mathcing call" matching-call)
+     (let [args-map (get-in matching-call [:function :arguments])]
+       (when validate?
+         (println "VALIDATE"
+                  full-f-schema
+                    f-input-schema
+                    args-map)
+         (let [validation-result (m/validate f-input-schema args-map)]
+           (when-not validation-result
+             (throw (ex-info "Function arguments did not match schema"
+                             {:schema f-input-schema
+                              :args args-map
+                              :errors (m/explain f-input-schema args-map)})))))
+       (f args-map)
+
+       ))))
+
+(defn with-functions
+  "Create an LLM interface with access to multiple functions.
+   Returns a function that takes a prompt and executes the appropriate function."
+  [& functions]
+  (let [tools (mapv sch/instrumented-function->tool-spec functions)]
+    (fn [content & {:keys [model-id] :or {model-id :openai/gpt-4.1-mini}}]
+      (let [response (prompt model-id
+                                content
+                                {:tools tools
+                                 :tool-choice "auto"})
+            tool-calls @(:tool-calls response)]
+
+        (when-not (seq tool-calls)
+          (throw (ex-info "LLM did not make any tool calls"
+                         {:response @(:text response)})))
+
+        (let [call (first tool-calls)
+              fn-name (get-in call [:function :name])
+              args (get-in call [:function :arguments])
+              matching-fn (first (filter #(= (str (-> % meta :name)) fn-name)
+                                       functions))]
+
+          (if matching-fn
+            ((if (var? matching-fn) @matching-fn matching-fn) args)
+            (throw (ex-info "No matching function found"
+                           {:function-called fn-name
+                            :available-functions (map #(-> % meta :name) functions)}))))))))
