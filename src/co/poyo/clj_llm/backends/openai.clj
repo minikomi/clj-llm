@@ -10,7 +10,9 @@
             [malli.registry :as mr]
             [malli.instrument :as mi]
             [malli.util :as mu]
-            ))
+            )
+  )
+
 
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI specific option schema
@@ -22,6 +24,11 @@
    [:tool-choice       {:optional true} [:or keyword? map?]]
    [:functions         {:optional true} [:sequential map?]]
    [:function-call     {:optional true} [:or string? map?]]
+   [:attachments       {:optional true} [:sequential [:map
+                                                      [:type keyword?]
+                                                      [:url {:optional true} string?]
+                                                      [:path {:optional true} string?]
+                                                      [:data {:optional true} any?]]]]
    [:stream-options    {:optional true} [:map
                                          [:include_usage {:optional true} boolean?]]]])
 
@@ -178,12 +185,51 @@
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI API Requests
 ;; ──────────────────────────────────────────────────────────────
+
+
+(defn- file-to-data-url
+  "Convert file content to a data URL"
+  [file-path]
+  (let [file (clojure.java.io/file file-path)
+        content-type (cond
+                       (str/ends-with? file-path ".png") "image/png"
+                       (str/ends-with? file-path ".jpg") "image/jpeg"
+                       (str/ends-with? file-path ".jpeg") "image/jpeg"
+                       (str/ends-with? file-path ".gif") "image/gif"
+                       (str/ends-with? file-path ".webp") "image/webp"
+                       :else "application/octet-stream")
+        bytes (clojure.java.io/input-stream file)
+        encoded (java.util.Base64/getEncoder)
+        base64-data (.encodeToString encoded (byte-array bytes))]
+    (str "data:" content-type ";base64," base64-data)))
+
+(defn- process-attachment
+  "Process a single attachment, converting file paths to data URLs if needed"
+  [attachment]
+  (cond
+    ;; image
+    (= :image (:type attachment))
+    {:type :image_url
+     :image_url {:url (or (:url attachment)
+                     (file-to-data-url (:path attachment)))}}
+
+    :else
+    (throw (ex-info "Unsupported attachment type" {:attachment attachment}))
+    ))
+
 (defn- make-messages
   "Convert prompt string to messages format"
-  [prompt-str]
-  (if (string? prompt-str)
-    [{:role "user" :content prompt-str}]
-    prompt-str))
+  [prompt-str attachments]
+  (let [base-content [{:type "text" :text prompt-str}]
+        full-content
+        (reduce
+         (fn [acc attachment]
+              (let [processed-attachment (process-attachment attachment)]
+                (conj acc processed-attachment)))
+         base-content
+         attachments)]
+    [{:role "user"
+      :content full-content}]))
 
 (defn- get-api-key [opts]
   (or (:api-key opts)
@@ -193,8 +239,10 @@
 (defn- build-request-body
   "Build OpenAI chat completion request body"
   [model-id prompt-str opts]
-  (let [messages (make-messages prompt-str)
-        stream-options (get opts :stream-options {:include_usage true})]
+  (let [messages (make-messages prompt-str (:attachments opts))
+        stream-options (get opts :stream-options {:include_usage true})
+        ]
+    (println messages)
     (cond-> {:model model-id
              :messages messages
              :stream true
@@ -214,26 +262,27 @@
       (:logit-bias opts)        (assoc :logit_bias (:logit-bias opts))
       (:stop opts)              (assoc :stop [(:stop opts)]))))
 
+(require '[clojure.pprint :refer [pprint]])
+
 (defn- make-openai-request
   "Make a streaming request to OpenAI API"
   [model-id prompt-str opts]
   (let [api-key (get-api-key opts)
         request-body (build-request-body model-id prompt-str opts)
         metadata-atom (atom {:raw-events []})
-        {:keys [status body error]} @(http/request
-                                      {:method :post
-                                       :url "https://api.openai.com/v1/chat/completions"
-                                       :headers {"Content-Type" "application/json"
-                                                 "Authorization" (str "Bearer " api-key)}
-                                       :body (json/generate-string request-body)
-                                       :as :stream})]
+        response @(http/request
+                   {:method :post
+                    :url "https://api.openai.com/v1/chat/completions"
+                    :headers {"Content-Type" "application/json"
+                              "Authorization" (str "Bearer " api-key)}
+                    :body (json/generate-string request-body)
+                    :as :stream})
+        {:keys [status body error]} response]
 
-    ;; Handle HTTP errors
     (when (or error (not= status 200))
       (throw (ex-info "OpenAI API request failed"
-                      {:status status :error error :model-id model-id})))
+                      {:status status :error error :model-id model-id :response response})))
 
-    ;; Return the streaming channel and metadata atom
     {:channel (process-openai-stream body metadata-atom)
      :metadata metadata-atom}))
 
