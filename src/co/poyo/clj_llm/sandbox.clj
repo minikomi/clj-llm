@@ -35,12 +35,36 @@
                  :amount amount}
    :status "completed"})
 
-(malli.instrument/instrument!)
-
 (comment
   (openai/register-backend!)
-  @(:usage (llm/prompt :openai/gpt-4.1-nano "hi there"))
+  (malli.instrument/instrument!)
+  @(:text (llm/prompt :openai/gpt-4.1-nano "hi there"))
 
+
+  (def weather-schema
+    [:map
+     [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
+     [:unit {:description "Temperature unit (celsius or fahrenheit)"
+             :optional false}
+      [:enum "celsius" "fahrenheit"]]])
+
+  (def weather-tool
+    (sch/function-schema
+     "get_weather"
+     "Get the current weather in a location"
+     weather-schema))
+
+  (m/validate
+   weather-schema
+   @(:structured-output
+     (llm/prompt :openai/gpt-4.1-mini
+                 "What's the weather like where The Eifel Tower is?"
+                 :tools [weather-tool]
+                 :tool-choice "auto")
+     )
+   )
+
+  (reverse (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there")))
 
   (malli.instrument/instrument!)
 
