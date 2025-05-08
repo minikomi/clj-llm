@@ -1,15 +1,20 @@
 (ns co.poyo.clj-llm.protocol
-  "Protocol definition for LLM providers.")
+  "Protocol definitions for LLM backends")
 
-(defprotocol Backend
-  (-prompt           [this model-id prompt opts]
-    "Execute a non-streaming prompt and return the result text.")
-
-  (-stream           [this model-id prompt opts]
-    "Execute a streaming prompt and return a Manifold stream that emits content chunks.")
-
-  (-attachment-types [this model-id]
-    "Return a set of MIME types supported as attachments for this model.")
-
-  (-opts-schema      [this model-id]
-    "Return a Malli schema for model-specific options, or nil."))
+(defprotocol LLMBackend
+  "Protocol for LLM backends"
+  (-prompt [this model-id prompt-str opts]
+    "Legacy method - execute a prompt and return the result as text.
+     Not used by the new interface but kept for compatibility.")
+  (-stream [this model-id prompt-str opts]
+    "Execute a prompt and return a map containing:
+     :channel - core.async channel that emits text chunks
+     :metadata - atom containing response metadata that gets updated during streaming")
+  (-opts-schema [this model-id]
+    "Return a Malli schema for backend-specific options")
+  (-get-usage [this model-id metadata-atom]
+    "Get token usage statistics from the metadata atom")
+  (-get-raw-json [this model-id metadata-atom]
+    "Get the raw JSON response from the metadata atom")
+  (-get-tool-calls [this model-id metadata-atom]
+    "Get tool calls in a normalized EDN format from the metadata atom"))

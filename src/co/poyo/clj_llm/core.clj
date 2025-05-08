@@ -1,17 +1,15 @@
 (ns co.poyo.clj-llm.core
-  (:require [co.poyo.clj-llm.registry :as reg]
-            [co.poyo.clj-llm.protocol :as proto]
-            [co.poyo.clj-llm.stream :as stream]
-            [clojure.core.async :as async :refer [chan go go-loop <! >! close! <!]]
-            [malli.core :as m]
-            [malli.util :as mu]
-            [malli.transform :as mt]
-            [cheshire.core :as json]))
+  (:require
+   [co.poyo.clj-llm.registry :as reg]
+   [co.poyo.clj-llm.protocol :as proto]
+   [clojure.core.async :as a :refer [<!!]]
+   [malli.core :as m]
+   [malli.util :as mu]
+   [malli.transform :as mt]))
 
-
-(def ^:private reserved-keys #{:schema :raw? :history})
-
-(def json->clj (mt/transformer))
+;; ──────────────────────────────────────────────────────────────
+;; Option-schema plumbing
+;; ──────────────────────────────────────────────────────────────
 
 (def base-opts-schema
   [:map
@@ -25,84 +23,112 @@
    [:seed              {:optional true} int?]
    [:logit-bias        {:optional true} [:map-of int? int?]]])
 
+(def ^:private reserved-keys #{:schema :raw? :history})
+
+(defn- validate-opts [impl model-id opts]
+  (let [extra   (proto/-opts-schema impl model-id)
+        schema  (mu/merge base-opts-schema extra)]
+    (m/decode schema opts (mt/default-value-transformer))))
+
+;; ──────────────────────────────────────────────────────────────
+;; Internal helpers
+;; ──────────────────────────────────────────────────────────────
+
 (defn- split-model-key [kw]
   (when-not (keyword? kw)
     (throw (ex-info "Model id must be a qualified keyword" {:value kw})))
   [(keyword (namespace kw)) (name kw)])
 
-(defn- coerce-json [schema txt raw?]
-  (if (and schema (not raw?))
-    (m/decode schema (json/parse-string txt true) json->clj)
-    txt))
-
-(defn- validate-extra-opts [impl model-id opts]
-  (let [extra (proto/-opts-schema impl model-id)
-        schema (mu/merge base-opts-schema extra)]
-    (m/decode schema opts (mt/default-value-transformer))))
+;; ──────────────────────────────────────────────────────────────
+;; Public API – always-streaming
+;; ──────────────────────────────────────────────────────────────
 
 (defn prompt
-  "Lazily execute and return a delay whose deref yields the coerced result.
-  Accepts standard options plus backend‑specific ones validated via Malli."
-  [model prompt-str & [opts]]
-  (let [[backend-key model-id] (split-model-key model)
-        impl (or (reg/backend-impl backend-key)
-                 (throw (ex-info "Unknown backend" {:backend backend-key})))
-        {:keys [schema raw?] :as opts*} opts
-        backend-opts (validate-extra-opts impl model-id (apply dissoc opts* reserved-keys))]
-    (delay (coerce-json schema (proto/-prompt impl model-id prompt-str backend-opts) raw?))))
+  "Execute a prompt against an LLM model and return a structured response.
 
-(defn prompt>
-  "Streaming version returning a core.async channel that emits coerced chunks."
-  [model prompt-str & [opts]]
-  (let [[backend-key model-id] (split-model-key model)
-        impl (or (reg/backend-impl backend-key)
-                 (throw (ex-info "Unknown backend" {:backend backend-key})))
-        {:keys [schema raw?] :as opts*} opts
-        backend-opts (validate-extra-opts impl model-id (apply dissoc opts* reserved-keys))
-        src (proto/-stream impl model-id prompt-str backend-opts)
-        out (chan)]
+   Returns a map:
+   {:chunks    <lazy-seq of raw strings>
+    :text      <deref-able — delivers full string after chunks consumed>
+    :usage     <delay — blocks until text delivered, returns usage map>
+    :json      <delay — blocks until text delivered, returns raw JSON>
+    :tool-calls <delay — blocks until text delivered, returns tool calls in EDN>}
 
-    ;; Process the source channel and coerce each chunk
-    (go-loop []
-      (if-let [chunk (<! src)]
-        (do
-          (>! out (coerce-json schema chunk raw?))
-          (recur))
-        (close! out)))
+   Realising `:text`, `:usage`, `:json`, or `:tool-calls` forces consumption
+   of the stream only *once*; `:chunks` can be consumed incrementally for live streaming."
+  [model-id prompt-str & {:as opts}]
+  (let [[backend-id model-name] (split-model-key model-id)
+        impl (reg/get-backend backend-id)
 
-    out))
+        ;; Validate options against schema
+        validated-opts (validate-opts impl model-id
+                                      (apply dissoc opts reserved-keys))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Conversations                                                            ;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+        ;; Get the streaming response
+        {:keys [channel metadata]} (proto/-stream impl model-name prompt-str validated-opts)
+
+        ;; Create a promise for the full text
+        text-promise (promise)
+
+        ;; Create an atom to track whether we've consumed the stream
+        consumed? (atom false)
+
+        ;; Function to ensure we only consume the stream once
+        ensure-consumed (fn []
+                          (when (compare-and-set! consumed? false true)
+                            (let [full-text (loop [result ""]
+                                              (if-let [chunk (<!! channel)]
+                                                (recur (str result chunk))
+                                                result))]
+                              (deliver text-promise full-text)))
+                          @text-promise)
+
+        ;; Create a lazy sequence of chunks using a named function
+        chunks-fn (fn chunks-fn []
+                    (when-not @consumed?
+                      (if-let [chunk (<!! channel)]
+                        (cons chunk (chunks-fn))
+                        (do
+                          (deliver text-promise "")
+                          (reset! consumed? true)
+                          nil))))
+        chunks-seq (lazy-seq (chunks-fn))
+
+        ;; Create a deref-able text value that forces consumption
+        text-deref (reify
+                     clojure.lang.IDeref
+                     (deref [_] (ensure-consumed)))
+
+        ;; Create delays for usage, raw JSON, and tool calls
+        usage-delay (delay
+                      (ensure-consumed)
+                      (proto/-get-usage impl model-name metadata))
+
+        json-delay (delay
+                     (ensure-consumed)
+                     (proto/-get-raw-json impl model-name metadata))
+
+        tool-calls-delay (delay
+                           (ensure-consumed)
+                           (proto/-get-tool-calls impl model-name metadata))]
+
+    ;; Return the structured response
+    {:chunks chunks-seq
+     :text text-deref
+     :usage usage-delay
+     :json json-delay
+     :tool-calls tool-calls-delay}))
+
+;; ──────────────────────────────────────────────────────────────
+;; Conversational helper
+;; ──────────────────────────────────────────────────────────────
 
 (defn conversation [model]
   (let [history (atom [])]
     {:prompt (fn [q & [opts]]
                (swap! history conj {:role :user :content q})
-               (let [stream (prompt> model q (assoc opts :history @history))
-                     outside-stream (chan)
-                     response-content (atom "")]
-
-                 ;; Process the stream to capture the full response
-                 (go-loop []
-                   (if-let [chunk (<! stream)]
-                     (do
-                       (swap! response-content str chunk)
-                       (>! outside-stream chunk)
-                       (recur))
-                     ;; When stream is done, update the history
-                     (do
-                       (swap! history conj
-                             {:role :assistant
-                              :content @response-content})
-                       (close! outside-stream))))
-
-                 ;; Return the stream for the caller to consume
-                 outside-stream))
+               (let [resp (prompt model q (assoc opts :history @history))]
+                 (future (swap! history conj
+                                {:role :assistant
+                                 :content (deref (:text resp))}))
+                 resp))
      :history history}))
-
-(defn collect-stream
-  "Utility function to collect all values from a stream into a single string."
-  [stream]
-  (stream/collect-channel stream))
