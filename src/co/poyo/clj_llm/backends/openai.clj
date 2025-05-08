@@ -6,7 +6,11 @@
             [clojure.string :as str]
             [org.httpkit.client :as http]
             [cheshire.core :as json]
-            [malli.core :as m]))
+            [malli.core :as m]
+            [malli.registry :as mr]
+            [malli.instrument :as mi]
+            [malli.util :as mu]
+            ))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI specific option schema
@@ -25,6 +29,57 @@
 ;; SSE Stream Processing
 ;; ──────────────────────────────────────────────────────────────
 
+(defn normalize-tool-calls
+  "Convert raw tool call events into a normalized EDN format"
+  [events]
+  (when (seq events)
+    (let [;; Extract all tool call deltas and group by index
+          by-index (reduce
+                    (fn [acc event]
+                      (let [tool-calls (get-in event [:choices 0 :delta :tool_calls] [])]
+                        (if (seq tool-calls)
+                          (reduce
+                           (fn [a tool-call]
+                             (let [idx (or (:index tool-call) 0)]
+                               (update a idx (fnil conj []) tool-call)))
+                           acc
+                           tool-calls)
+                          acc)))
+                    {}
+                    events)
+
+          ;; Merge fragments for each tool call
+          merged-tool-calls (map
+                             (fn [[idx fragments]]
+                               (reduce
+                                (fn [acc fragment]
+                                  (cond-> acc
+                                    (:id fragment) (assoc :id (:id fragment))
+                                    (:type fragment) (assoc :type (:type fragment))
+                                    (:index fragment) (assoc :index (:index fragment))
+                                    (get-in fragment [:function :name])
+                                    (assoc-in [:function :name] (get-in fragment [:function :name]))
+                                    (get-in fragment [:function :arguments])
+                                    (update-in [:function :arguments] str (get-in fragment [:function :arguments]))))
+                                {}
+                                fragments))
+                             by-index)]
+
+      ;; Parse arguments JSON strings to EDN
+      (mapv (fn [tool-call]
+              (if-let [args-str (get-in tool-call [:function :arguments])]
+                (try
+                  ;; Parse the JSON arguments string
+                  (let [cleaned-args (-> args-str
+                                         (str/replace #"^(\{\"lo)" "{\"lo")
+                                         (str/replace #"(\"}$)" "\"}"))]
+                    (update-in tool-call [:function :arguments]
+                               (fn [_] (json/parse-string cleaned-args true))))
+                  (catch Exception _
+                    ;; If parsing fails, keep the original string
+                    tool-call))
+                tool-call))
+            merged-tool-calls))))
 
 (def openai-transformer
   "Transform OpenAI SSE events"
@@ -105,70 +160,20 @@
                   :on-done (fn []
                              ;; Now that we're done, add the consolidated tool calls to the text
                              (let [normalized-tool-calls (normalize-tool-calls
-                                                           (:tool-calls-events @metadata-atom))]
+                                                          (:tool-calls-events @metadata-atom))]
 
                                ;; Add the tool calls as JSON to the text channel
                                (when (seq normalized-tool-calls)
                                  (let [tool-calls-json (json/generate-string
-                                                         {:tool_calls normalized-tool-calls}
-                                                         {:pretty true})]
+                                                        {:tool_calls normalized-tool-calls}
+                                                        {:pretty true})]
                                    (async/>!! chunks-chan tool-calls-json))))
 
                              ;; Close the channel when done
                              (close! chunks-chan))})
     chunks-chan))
 
-(defn normalize-tool-calls
-  "Convert raw tool call events into a normalized EDN format"
-  [events]
-  (when (seq events)
-    (let [;; Extract all tool call deltas and group by index
-          by-index (reduce
-                    (fn [acc event]
-                      (let [tool-calls (get-in event [:choices 0 :delta :tool_calls] [])]
-                        (if (seq tool-calls)
-                          (reduce
-                           (fn [a tool-call]
-                             (let [idx (or (:index tool-call) 0)]
-                               (update a idx (fnil conj []) tool-call)))
-                           acc
-                           tool-calls)
-                          acc)))
-                    {}
-                    events)
 
-          ;; Merge fragments for each tool call
-          merged-tool-calls (map
-                             (fn [[idx fragments]]
-                               (reduce
-                                (fn [acc fragment]
-                                  (cond-> acc
-                                    (:id fragment) (assoc :id (:id fragment))
-                                    (:type fragment) (assoc :type (:type fragment))
-                                    (:index fragment) (assoc :index (:index fragment))
-                                    (get-in fragment [:function :name])
-                                    (assoc-in [:function :name] (get-in fragment [:function :name]))
-                                    (get-in fragment [:function :arguments])
-                                    (update-in [:function :arguments] str (get-in fragment [:function :arguments]))))
-                                {}
-                                fragments))
-                             by-index)]
-
-      ;; Parse arguments JSON strings to EDN
-      (mapv (fn [tool-call]
-              (if-let [args-str (get-in tool-call [:function :arguments])]
-                (try
-                  ;; Parse the JSON arguments string
-                  (let [cleaned-args (-> args-str
-                                         (str/replace #"^(\{\"lo)" "{\"lo")
-                                         (str/replace #"(\"}$)" "\"}"))]
-                    (update-in tool-call [:function :arguments]
-                               (fn [_] (json/parse-string cleaned-args true))))
-                  (catch Exception _
-                    ;; If parsing fails, keep the original string
-                    tool-call))
-                tool-call))
-            merged-tool-calls))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI API Requests
@@ -219,14 +224,14 @@
                                       {:method :post
                                        :url "https://api.openai.com/v1/chat/completions"
                                        :headers {"Content-Type" "application/json"
-                                                "Authorization" (str "Bearer " api-key)}
+                                                 "Authorization" (str "Bearer " api-key)}
                                        :body (json/generate-string request-body)
                                        :as :stream})]
 
     ;; Handle HTTP errors
     (when (or error (not= status 200))
       (throw (ex-info "OpenAI API request failed"
-                     {:status status :error error :model-id model-id})))
+                      {:status status :error error :model-id model-id})))
 
     ;; Return the streaming channel and metadata atom
     {:channel (process-openai-stream body metadata-atom)
@@ -255,18 +260,18 @@
     (:usage @metadata-atom))
 
   (-get-tool-calls [this model-id metadata-atom]
-  (let [{:keys [tool-calls-events]} @metadata-atom]
-    (normalize-tool-calls tool-calls-events)))
+    (let [{:keys [tool-calls-events]} @metadata-atom]
+      (normalize-tool-calls tool-calls-events)))
 
   (-get-raw-json [this model-id metadata-atom]
-  (let [{:keys [raw-events usage finish-reason tool-calls-events error]} @metadata-atom
-        tool-calls (normalize-tool-calls tool-calls-events)]
-    (cond-> {}
-      (seq raw-events) (assoc :events raw-events)
-      usage (assoc :usage usage)
-      finish-reason (assoc :finish_reason finish-reason)
-      (seq tool-calls) (assoc :tool_calls tool-calls)
-      error (assoc :error error)))))
+    (let [{:keys [raw-events usage finish-reason tool-calls-events error]} @metadata-atom
+          tool-calls (normalize-tool-calls tool-calls-events)]
+      (cond-> {}
+        (seq raw-events) (assoc :events raw-events)
+        usage (assoc :usage usage)
+        finish-reason (assoc :finish_reason finish-reason)
+        (seq tool-calls) (assoc :tool_calls tool-calls)
+        error (assoc :error error)))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Factory function
@@ -274,9 +279,10 @@
 (defn create-backend []
   (->OpenAIBackend))
 
+(defn register-backend! []
+  (reg/register-backend! :openai (->OpenAIBackend)))
 
 (comment
-  (reg/register-backend! :openai (create-backend))
   (require '[co.poyo.clj-llm.core :as llm])
 
   (doseq [chunk (:chunks (llm/prompt :openai/gpt-4.1-nano "Explain quantum computing in simple terms, 10 words or less"))]
@@ -320,5 +326,55 @@
 
   @(:text a)
 
+  (require '[co.poyo.clj-llm.schema :as sch])
 
-)
+  (def weather-schema
+    [:map
+     [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
+     [:unit {:description "Temperature unit (celsius or fahrenheit)"
+             :optional false}
+      [:enum "celsius" "fahrenheit"]]])
+
+  (def weather-tool
+    (sch/function-schema
+     "get_weather"
+     "Get the current weather in a location"
+     weather-schema))
+
+  (m/validate
+   weather-schema
+   @(:structured-output
+     (llm/prompt :openai/gpt-4.1-mini
+                 "What's the weather like where The Eifel Tower is?"
+                 :tools [weather-tool]
+                 :tool-choice "auto")
+     )
+   )
+
+
+
+
+
+    (def small-int [:int {:max 6}])
+
+    (defn plus1 [x] (inc x))
+    (m/=> plus1 [:=> [:cat :int] small-int])
+
+
+
+    (mi/collect!)
+
+    (vector?
+     (m/form
+      (m/deref-all
+       (get-in (m/function-schemas) ['co.poyo.clj-llm.backends.openai 'transfer-money :schema]))))
+
+    (get-schema-from-malli-function-registry #'transfer-money)
+
+
+
+(defn fqns [s] (llm/fn-source s))
+
+
+
+  )
