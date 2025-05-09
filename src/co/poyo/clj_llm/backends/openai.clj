@@ -2,9 +2,12 @@
   (:require [co.poyo.clj-llm.protocol :as proto]
             [co.poyo.clj-llm.stream :refer [process-sse]]
             [co.poyo.clj-llm.registry :as reg]
+            [co.poyo.clj-llm.schema :as sch]
             [clojure.core.async :as async :refer [chan go <! >! <!! >!! close!]]
             [clojure.string :as str]
-            [cheshire.core :as json])
+            [cheshire.core :as json]
+            [malli.core :as m]
+            )
   (:import [java.io InputStream InputStreamReader BufferedReader]
            [java.nio.charset StandardCharsets]))
 
@@ -14,17 +17,12 @@
 (def openai-opts-schema
   [:map
    [:response-format    {:optional true} [:enum "text" "json"]]
-   [:tools              {:optional true} [:sequential map?]]
-   [:tool-choice        {:optional true} [:or keyword? map?]]
-   [:functions          {:optional true} [:sequential map?]]
-   [:function-call      {:optional true} [:or string? map?]]
    [:attachments        {:optional true} [:sequential [:map
                                                      [:type keyword?]
                                                      [:url {:optional true} string?]
                                                      [:path {:optional true} string?]
                                                      [:data {:optional true} any?]]]]
-   [:stream-options     {:optional true} [:map
-                                          [:include_usage {:optional true} boolean?]]]])
+   ])
 
 ;; ──────────────────────────────────────────────────────────────
 ;; SSE Stream Processing Helpers
@@ -199,12 +197,28 @@
       (get-env "OPENAI_API_KEY")
       (throw (ex-info "No OpenAI API key provided" {:missing-key :api-key}))))
 
+(defn function-schema->openai-tool-spec
+  [schema]
+  (let [properties (m/properties schema)
+        name (or (:name properties) "function")
+        description (or (:description properties) "")]
+    (println "PROP" schema (m/properties schema))
+   {:type "function"
+    :function {:name name
+               :description description
+               :parameters (sch/malli->json-schema schema)}}))
+
 (defn- build-request-body
   "Build OpenAI chat completion request body"
   [model-id prompt-str opts]
+  (println opts)
   (let [messages (into (or (:history opts) []) (make-messages prompt-str (:attachments opts)))
         stream-options (get opts :stream-options {:include_usage true})
-        stop-val (:stop opts)]
+        stop-val (:stop opts)
+        tool-calls-values (when-let [schema (:schema opts)]
+                              {:tools [(function-schema->openai-tool-spec (:schema opts))]
+                               :tool_choice "auto"})]
+    (println "TOOL CALLS" tool-calls-values)
     (cond-> {:model model-id
              :messages messages
              :stream true
@@ -216,12 +230,8 @@
       (:presence-penalty opts)   (assoc :presence_penalty (:presence-penalty opts))
       (:response-format opts)    (assoc :response_format (:response-format opts))
       (:seed opts)               (assoc :seed (:seed opts))
-      (:tools opts)              (assoc :tools (:tools opts))
-      (:tool-choice opts)        (assoc :tool_choice (:tool-choice opts))
-      (:functions opts)          (assoc :functions (:functions opts))
-      (:function-call opts)      (assoc :function_call (:function-call opts))
-      (:logit-bias opts)         (assoc :logit_bias (:logit-bias opts))
-      stop-val                  (assoc :stop (if (string? stop-val) [stop-val] stop-val)))))
+      tool-calls-values          (merge tool-calls-values)
+      stop-val                   (assoc :stop (if (string? stop-val) [stop-val] stop-val)))))
 
 (defn make-openai-request
   "Make a streaming request to OpenAI API with immediate processing"
@@ -242,6 +252,7 @@
                               (.connectTimeout (java.time.Duration/ofSeconds (or (:connect-timeout opts) 10)))
                               (.build))
               json-body (json/generate-string request-body)
+              _ (println "JSON" json-body)
               request (-> (java.net.http.HttpRequest/newBuilder)
                           (.uri (java.net.URI/create (or (:api-endpoint opts) "https://api.openai.com/v1/chat/completions")))
                           (.timeout (java.time.Duration/ofSeconds (or (:request-timeout opts) 30)))

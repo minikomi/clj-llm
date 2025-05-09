@@ -23,7 +23,7 @@
    [:frequency-penalty {:optional true} [:double {:min -2 :max 2}]]
    [:presence-penalty  {:optional true} [:double {:min -2 :max 2}]]
    [:seed              {:optional true} int?]
-   [:logit-bias        {:optional true} [:map-of int? int?]]
+   [:output-schema     {:optional true} :any]
    [:on-complete       {:optional true} fn?]
    [:history           {:optional true} [:sequential [:map
                                                      [:role [:enum :user :assistant :system]]
@@ -34,7 +34,14 @@
 (defn- validate-opts [impl model-id opts]
   (let [extra   (proto/-opts-schema impl model-id)
         schema  (mu/merge base-opts-schema extra)]
-    (m/decode schema opts (mt/default-value-transformer))))
+    (try
+      (m/assert schema opts)
+      (assoc (m/decode schema opts (mt/default-value-transformer))
+             :schema
+             (when (:schema opts)
+               (m/schema (:schema opts))))
+      (catch Exception e
+        (-> e ex-data :data :explain me/humanize)))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Internal helpers
@@ -49,31 +56,16 @@
 ;; Public API – always-streaming
 ;; ──────────────────────────────────────────────────────────────
 
-(def base-opts-schema
-  [:map
-   [:api-key           {:optional true} string?]
-   [:temperature       {:optional true} [:double {:min 0 :max 2}]]
-   [:top-p             {:optional true} [:double {:min 0 :max 1}]]
-   [:max-tokens        {:optional true} pos-int?]
-   [:stop              {:optional true} string?]
-   [:frequency-penalty {:optional true} [:double {:min -2 :max 2}]]
-   [:presence-penalty  {:optional true} [:double {:min -2 :max 2}]]
-   [:seed              {:optional true} int?]
-   [:logit-bias        {:optional true} [:map-of int? int?]]
-   [:on-complete       {:optional true} fn?]
-   [:history           {:optional true} [:sequential [:map
-                                                     [:role [:enum :user :assistant :system]]
-                                                     [:content string?]]]]])
-
-
 (defn prompt
   "Execute a prompt against an LLM model and return a structured response."
   [model-id prompt-str & {:as opts}]
+  (println "initial" opts)
   (let [[backend-id model-name] (split-model-key model-id)
         impl (reg/get-backend backend-id)
         on-complete-fn (:on-complete opts)
         validated-opts (validate-opts impl model-id
                                      (apply dissoc opts (conj reserved-keys :on-complete)))
+        _ (println "validated" validated-opts)
         {:keys [channel metadata]} (proto/-stream impl model-name prompt-str validated-opts)
         text-promise (promise)
         consumed? (atom false)
@@ -176,41 +168,33 @@
 ;; Function Helpers
 ;; ──────────────────────────────────────────────────────────────
 
-(defn call-function-with-llm
+#_(defn call-function-with-llm
   ([f model-id content]
    (call-function-with-llm f model-id content {}))
   ([f model-id content {:keys [validate? llm-opts]
                         :or {validate? true llm-opts {}}}]
-   (let [f-meta (sch/f->meta f)
-         f-name (or (-> f-meta :name str) "unnamed-function")
-         full-f-schema (sch/get-schema-from-malli-function-registry f)
+   (let [full-f-schema (sch/get-schema-from-malli-function-registry f)
          f-input-schema (-> full-f-schema m/form second second)
          tool (sch/instrumented-function->tool-spec f)
          response (prompt model-id content (merge {:tools [tool], :tool-choice "auto"} llm-opts))
-         tool-calls @(:tool-calls response)
-         matching-call (first (filter #(= (get-in % [:function :name]) (str f-name)) tool-calls))]
-     (when-not matching-call
-       (throw (ex-info "LLM did not call expected function"
-                       {:expected f-name, :calls-made (mapv #(get-in % [:function :name]) tool-calls)})))
+         structured-output @(:structured-output response)]
+     (when validate?
+       (let [validation-result (m/validate f-input-schema structured-output)]
+         (when-not validation-result
+           (throw (ex-info "Function arguments did not match schema"
+                           {:schema f-input-schema
+                            :args structured-output
+                            :errors (m/explain f-input-schema structured-output)})))))
+     (f structured-output))))
 
-     (let [args-map (get-in matching-call [:function :arguments])]
-       (when validate?
-         (let [validation-result (m/validate f-input-schema args-map)]
-           (when-not validation-result
-             (throw (ex-info "Function arguments did not match schema"
-                             {:schema f-input-schema
-                              :args args-map
-                              :errors (m/explain f-input-schema args-map)})))))
-       (f args-map)))))
-
-(defn with-functions
+#_(defn with-functions
   "Create an LLM interface with access to multiple functions.
    Returns a function that takes a prompt and executes the appropriate function."
   [& functions]
   (let [tools (mapv sch/instrumented-function->tool-spec functions)]
     (fn [content & {:keys [model-id] :or {model-id :openai/gpt-4.1-mini}}]
       (let [response (prompt model-id
-                                content
+                             content
                                 {:tools tools
                                  :tool-choice "auto"})
             tool-calls @(:tool-calls response)]

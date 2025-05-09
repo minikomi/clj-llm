@@ -3,47 +3,51 @@
             [co.poyo.clj-llm.registry :as reg]
             [co.poyo.clj-llm.backends.openai :as openai]
             [co.poyo.clj-llm.schema :as sch]
-            [co.poyo.clj-llm.stream :as stream]
-            [clojure.core.async :as async :refer [chan go go-loop <! >! close! <!]]
-            [malli.core :as m]
-            [malli.util :as mu]
-            [malli.transform :as mt]
-            [cheshire.core :as json])
-  (:import [java.util UUID])
+            [malli.core :as m])
   )
 
 
 (comment
   ;; register backend
-  (openai/register-backend!)
+  (do (openai/register-backend!)
+      )
 
   ;; text, blocking
   @(:text (llm/prompt :openai/gpt-4.1-nano "hi there"))
+  @(:text (llm/prompt :anthropic/claude-3-7-sonnet-20250219
+                      "hi there"
+                      ))
 
   ;; usage, blocking
   @(:usage (llm/prompt :openai/gpt-4.1-nano "hi there"))
 
   ;; tool calls, using malli schema
   (def weather-schema
-    [:map
-     [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
-     [:unit {:description "Temperature unit (celsius or fahrenheit)"
-             :optional false}
-      [:enum "celsius" "fahrenheit"]]])
+    [:and
+     {:name "weather-fn"
+      :description "gets the weather for a given location"}
+     [:map
+      [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
+      [:unit {:description "Temperature unit (celsius or fahrenheit)"
+              :optional false}
+       [:enum "celsius" "fahrenheit"]]]])
 
-  (def weather-tool
-    (sch/function-schema->openai-tool-spec
-     "get_weather"
-     "Get the current weather in a location"
-     weather-schema))
+ (m/form (m/schema weather-schema))
+
+ (m/type [:map
+      [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
+      [:unit {:description "Temperature unit (celsius or fahrenheit)"
+              :optional false}
+       [:enum "celsius" "fahrenheit"]]])
+
 
   (m/validate
    weather-schema
    @(:structured-output
-     (llm/prompt :openai/gpt-4.1-mini
+     (llm/prompt :openai/gpt-4.1-nano
                  "What's the weather like where The Eifel Tower is?"
-                 :tools [weather-tool]
-                 :tool-choice "auto")))
+                 {:schema weather-schema}))
+   )
 
   ;; attachments
   @(:text (llm/prompt :openai/gpt-4.1-nano

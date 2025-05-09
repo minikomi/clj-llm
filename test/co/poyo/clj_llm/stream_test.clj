@@ -212,6 +212,7 @@
 
       (is (= {:large "data"} @result)))))
 
+
 ;; Integration test that simulates real-world usage
 
 (deftest test-sse-integration
