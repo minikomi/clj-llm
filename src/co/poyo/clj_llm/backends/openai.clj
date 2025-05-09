@@ -5,7 +5,6 @@
             [clojure.core.async :as async :refer [chan go <! >! close!]]
             [clojure.string :as str]
             [cheshire.core :as json]
-            [babashka.http-client :as http]
             [malli.core :as m]
             [malli.registry :as mr]
             [malli.instrument :as mi]
@@ -240,6 +239,7 @@
                 (conj acc processed-attachment)))
          base-content
          attachments)]
+    (prn full-content)
     [{:role "user"
       :content full-content}]))
 
