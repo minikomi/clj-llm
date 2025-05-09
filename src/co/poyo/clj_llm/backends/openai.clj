@@ -1,17 +1,12 @@
 (ns co.poyo.clj-llm.backends.openai
   (:require [co.poyo.clj-llm.protocol :as proto]
-            [co.poyo.clj-llm.stream :refer [process-sse extract-sse-data]]
+            [co.poyo.clj-llm.stream :refer [process-sse]]
             [co.poyo.clj-llm.registry :as reg]
             [clojure.core.async :as async :refer [chan go <! >! close!]]
             [clojure.string :as str]
-            [cheshire.core :as json]
-            [malli.core :as m]
-            [malli.registry :as mr]
-            [malli.instrument :as mi]
-            [malli.util :as mu]
-            )
-  (:import [java.nio.charset StandardCharsets]
-           [java.io InputStream InputStreamReader BufferedReader]))
+            [cheshire.core :as json])
+  (:import [java.io InputStream InputStreamReader BufferedReader]
+           [java.nio.charset StandardCharsets]))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI specific option schema
@@ -87,100 +82,69 @@
                 tool-call))
             merged-tool-calls))))
 
-(def openai-transformer
-  "Transform OpenAI SSE events"
-  (fn [event]
-    (when event
-      (cond
-        (:done event) {:type :done}
-        (:error event) {:type :error, :message (:error event)}
-        :else
-        (let [choices (get event :choices [])
-              first-choice (first choices)
-              delta (get first-choice :delta {})
-              content (get delta :content "")
-              tool-calls (get delta :tool_calls)
-              finish-reason (get first-choice :finish-reason)
-              usage (get event :usage)]
-          (cond
-            ;; Tool calls take priority
-            tool-calls
-            {:type :tool-call, :tool-calls tool-calls, :raw-event event}
+(defn- openai-transformer
+  "Transform OpenAI event data into a structured format"
+  [event-data]
+  (when event-data
+    (cond
+      (:done event-data) {:type :done}
+      (:error event-data) {:type :error, :message (:error event-data)}
+      :else
+      (let [choices (get event-data :choices [])
+            first-choice (first choices)
+            delta (get first-choice :delta {})
+            content (get delta :content)
+            tool-calls (get delta :tool_calls)
+            finish-reason (get first-choice :finish_reason)
+            usage (get event-data :usage)]
+        (cond
+          ;; Tool calls take priority
+          tool-calls
+          {:type :tool-call, :tool-calls tool-calls, :raw-event event-data}
 
-            (not (= 0 (count content)))
-            {:type :content, :content content}
+          ;; Check for content - must check if key exists, not just value
+          (contains? delta :content)
+          {:type :content, :content (or content "")}
 
-            finish-reason
-            {:type :finish, :reason finish-reason}
+          finish-reason
+          {:type :finish, :reason finish-reason}
 
-            usage
-            {:type :usage, :usage usage}
+          usage
+          {:type :usage, :usage usage}
 
-            :else
-            {:type :other, :data event}))))))
-
-(defn extract-tool-calls
-  "Extract tool calls from an OpenAI event"
-  [raw-event]
-  (get-in raw-event [:choices 0 :delta :tool_calls]))
-
-(defn update-tool-calls-index
-  "Pure function to update the tool calls index map"
-  [tool-calls-map tool-call]
-  (let [idx (or (:index tool-call) 0)]
-    (update tool-calls-map idx (fnil conj []) tool-call)))
-
-(defn process-openai-event
-  "Pure function to process an OpenAI event and produce updates"
-  [event]
-  (case (:type event)
-    :content {:action :emit-content
-              :content (:content event)}
-    :tool-call {:action :add-tool-call
-                :raw-event (:raw-event event)
-                :tool-calls (extract-tool-calls (:raw-event event))}
-    :usage {:action :update-usage
-            :usage (:usage event)}
-    :finish {:action :set-finish-reason
-             :reason (:reason event)}
-    :other {:action :add-raw-event
-            :data (:data event)}
-    nil))
-
-(defn apply-openai-event
-  "Apply the updates from process-openai-event to the real world"
-  [updates chunks-chan metadata-atom tool-calls-by-index]
-  (when updates
-    (case (:action updates)
-      :emit-content
-      (async/>!! chunks-chan (:content updates))
-
-      :add-tool-call
-      (do
-        (swap! metadata-atom update :tool-calls-events (fnil conj []) (:raw-event updates))
-        (doseq [tool-call (:tool-calls updates)]
-          (swap! tool-calls-by-index update-tool-calls-index tool-call)))
-
-      :update-usage
-      (swap! metadata-atom assoc :usage (:usage updates))
-
-      :set-finish-reason
-      (swap! metadata-atom assoc :finish-reason (:reason updates))
-
-      :add-raw-event
-      (swap! metadata-atom update :raw-events conj (:data updates))
-
-      nil)))
+          :else
+          {:type :other, :data event-data})))))
 
 (defn create-openai-stream-config
-  "Creates a testable configuration for OpenAI stream processing"
+  "Creates a configuration for OpenAI stream processing"
   [chunks-chan metadata-atom]
   (let [tool-calls-by-index (atom {})]
-    {:extract-fn extract-sse-data
-     :transform-fn openai-transformer
+    {:transform-fn openai-transformer
      :on-content (fn [event]
-                   (let [updates (process-openai-event event)]
-                     (apply-openai-event updates chunks-chan metadata-atom tool-calls-by-index)))
+                   (case (:type event)
+                     :content
+                     (async/>!! chunks-chan (:content event))
+
+                     :tool-call
+                     (do
+                       (swap! metadata-atom update :tool-calls-events (fnil conj []) (:raw-event event))
+                       (doseq [tool-call (:tool-calls event)]
+                         (swap! tool-calls-by-index
+                                assoc
+                                (or (:index tool-call) 0)
+                                tool-call)))
+
+                     :usage
+                     (swap! metadata-atom assoc :usage (:usage event))
+
+                     :finish
+                     (swap! metadata-atom assoc :finish-reason (:reason event))
+
+                     :other
+                     (swap! metadata-atom update :raw-events (fnil conj []) (:data event))
+
+                     ;; Default case
+                     nil))
      :on-error (fn [error-msg]
                  (swap! metadata-atom assoc :error error-msg)
                  (close! chunks-chan))
@@ -189,15 +153,14 @@
                                              (:tool-calls-events @metadata-atom))]
                   (when (seq normalized-tool-calls)
                     (let [tool-calls-json (json/generate-string
-                                           {:tool_calls normalized-tool-calls}
-                                           {:pretty true})]
+                                          {:tool_calls normalized-tool-calls}
+                                          {:pretty true})]
                       (async/>!! chunks-chan tool-calls-json))))
                 (close! chunks-chan))}))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI API Requests
 ;; ──────────────────────────────────────────────────────────────
-
 
 (defn- file-to-data-url
   "Convert file content to a data URL"
@@ -210,9 +173,12 @@
                        (str/ends-with? file-path ".gif") "image/gif"
                        (str/ends-with? file-path ".webp") "image/webp"
                        :else "application/octet-stream")
-        bytes (clojure.java.io/input-stream file)
+        bytes (with-open [is (clojure.java.io/input-stream file)]
+                (let [buf (byte-array (.length file))]
+                  (.read is buf)
+                  buf))
         encoded (java.util.Base64/getEncoder)
-        base64-data (.encodeToString encoded (byte-array bytes))]
+        base64-data (.encodeToString encoded bytes)]
     (str "data:" content-type ";base64," base64-data)))
 
 (defn- process-attachment
@@ -221,9 +187,9 @@
   (cond
     ;; image
     (= :image (:type attachment))
-    {:type :image_url
+    {:type "image_url"
      :image_url {:url (or (:url attachment)
-                     (file-to-data-url (:path attachment)))}}
+                         (file-to-data-url (:path attachment)))}}
 
     :else
     (throw (ex-info "Unsupported attachment type" {:attachment attachment}))))
@@ -235,8 +201,8 @@
         full-content
         (reduce
          (fn [acc attachment]
-              (let [processed-attachment (process-attachment attachment)]
-                (conj acc processed-attachment)))
+           (let [processed-attachment (process-attachment attachment)]
+             (conj acc processed-attachment)))
          base-content
          attachments)]
     [{:role "user"
@@ -340,7 +306,10 @@
           result))))
 
   (-stream [this model-id prompt-str opts]
-    (make-openai-request model-id prompt-str opts))
+    (let [actual-model-id (if (keyword? model-id)
+                           (name model-id)  ;; Use just the name part if it's a keyword
+                           (str model-id))] ;; Otherwise convert to string
+      (make-openai-request actual-model-id prompt-str opts)))
 
   (-opts-schema [this model-id]
     openai-opts-schema)
