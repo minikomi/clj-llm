@@ -12,7 +12,6 @@
            java.net.http.HttpClient$Version
            java.net.http.HttpRequest
            java.net.http.HttpResponse
-           java.util.Base64
            ))
 
 ;; ==========================================
@@ -159,19 +158,16 @@
   (testing "creates basic text message correctly"
     (let [prompt "Hello, world!"
           result (#'openai/make-messages prompt [])]
-      (is (= 1 (count result)))
-      (is (= "user" (-> result first :role)))
-      (is (= [{:type "text" :text "Hello, world!"}] (-> result first :content)))))
+      (is (= [{:role "user"
+                :content [{:type "text" :text "Hello, world!"}]}]
+             result))))
 
   (testing "includes image attachments correctly"
     (with-redefs [openai/file-to-data-url (fn [_] "data:image/png;base64,test123")]
       (let [prompt "Describe this image"
             attachments [{:type :image :path "/fake/path.png"}]
             result (#'openai/make-messages prompt attachments)]
-        (is (= 1 (count result)))
-        (is (= "user" (-> result first :role)))
-        (is (= 2 (count (-> result first :content))))
-        (is (= {:type "text" :text "Describe this image"} (-> result first :content first)))
-        (is (= {:type "image_url"
-                :image_url {:url "data:image/png;base64,test123"}}
-               (-> result first :content second)))))))
+        (is (= [{:type "text" :text "Describe this image"}
+                {:type "image_url"
+                 :image_url {:url "data:image/png;base64,test123"}}]
+               (-> result first :content)))))))
