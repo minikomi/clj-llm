@@ -59,7 +59,9 @@
                     (.append sb (String. buffer 0 bytes-read "UTF-8"))
                     (let [content (.toString sb)
                           idx (str/last-index-of content "\n\n")]
-                      (when (pos? idx)
+                      (when (and
+                             (not (nil? idx))
+                             (pos? idx))
                         (let [events-part (subs content 0 (+ idx 2))
                               remainder (subs content (+ idx 2))]
                           (doseq [event (str/split events-part #"(\r\n|\n){2}")]
