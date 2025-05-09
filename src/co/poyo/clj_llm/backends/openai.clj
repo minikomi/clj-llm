@@ -239,7 +239,6 @@
                 (conj acc processed-attachment)))
          base-content
          attachments)]
-    (prn full-content)
     [{:role "user"
       :content full-content}]))
 

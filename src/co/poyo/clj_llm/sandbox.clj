@@ -49,12 +49,11 @@
   @(:text (llm/prompt :openai/gpt-4.1-nano
                       "what is this picture of?"
                       {:attachments  [{:type :image
-                                       :url "https://images.vexels.com/media/users/3/128011/isolated/lists/527067b3541bd657cae7ce720cc3d301-hand-drawn-sitting-cat.png"}]})
-          )
+                                       :url "https://images.vexels.com/media/users/3/128011/isolated/lists/527067b3541bd657cae7ce720cc3d301-hand-drawn-sitting-cat.png"}]}))
 
   ;; lazy seq for chunks
-  (doseq [ch (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there"))]
-    (println ch))
+  (doseq [[i c] (map-indexed (fn [a b] [a b]) (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there")))]
+    (clojure.pprint/cl-format true "~a: ~x\n" i (pr-str c)))
 
   ;; easier function calling using instrumented functions
   (do
