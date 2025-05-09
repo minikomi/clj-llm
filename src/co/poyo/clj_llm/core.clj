@@ -3,7 +3,7 @@
    [co.poyo.clj-llm.registry :as reg]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.schema :as sch]
-   [clojure.core.async :as a :refer [<!!]]
+   [clojure.core.async :as a :refer [<!! chan go-loop <! >! close!]]
    [malli.core :as m]
    [malli.util :as mu]
    [malli.error :as me]
@@ -23,9 +23,13 @@
    [:frequency-penalty {:optional true} [:double {:min -2 :max 2}]]
    [:presence-penalty  {:optional true} [:double {:min -2 :max 2}]]
    [:seed              {:optional true} int?]
-   [:logit-bias        {:optional true} [:map-of int? int?]]])
+   [:logit-bias        {:optional true} [:map-of int? int?]]
+   [:on-complete       {:optional true} fn?]
+   [:history           {:optional true} [:sequential [:map
+                                                     [:role [:enum :user :assistant :system]]
+                                                     [:content string?]]]]])
 
-(def ^:private reserved-keys #{:schema :raw? :history})
+(def ^:private reserved-keys #{:on-complete})
 
 (defn- validate-opts [impl model-id opts]
   (let [extra   (proto/-opts-schema impl model-id)
@@ -45,104 +49,128 @@
 ;; Public API – always-streaming
 ;; ──────────────────────────────────────────────────────────────
 
+(def base-opts-schema
+  [:map
+   [:api-key           {:optional true} string?]
+   [:temperature       {:optional true} [:double {:min 0 :max 2}]]
+   [:top-p             {:optional true} [:double {:min 0 :max 1}]]
+   [:max-tokens        {:optional true} pos-int?]
+   [:stop              {:optional true} string?]
+   [:frequency-penalty {:optional true} [:double {:min -2 :max 2}]]
+   [:presence-penalty  {:optional true} [:double {:min -2 :max 2}]]
+   [:seed              {:optional true} int?]
+   [:logit-bias        {:optional true} [:map-of int? int?]]
+   [:on-complete       {:optional true} fn?]
+   [:history           {:optional true} [:sequential [:map
+                                                     [:role [:enum :user :assistant :system]]
+                                                     [:content string?]]]]])
+
+
 (defn prompt
-  "Execute a prompt against an LLM model and return a structured response.
-
-   Returns a map:
-   {:chunks    <lazy-seq of raw strings>
-    :text      <deref-able — delivers full string after chunks consumed>
-    :usage     <delay — blocks until text delivered, returns usage map>
-    :json      <delay — blocks until text delivered, returns raw JSON>
-    :tool-calls <delay — blocks until text delivered, returns tool calls in EDN>}
-
-   Realising `:text`, `:usage`, `:json`, or `:tool-calls` forces consumption
-   of the stream only *once*; `:chunks` can be consumed incrementally for live streaming."
+  "Execute a prompt against an LLM model and return a structured response."
   [model-id prompt-str & {:as opts}]
   (let [[backend-id model-name] (split-model-key model-id)
         impl (reg/get-backend backend-id)
-
-        ;; Validate options against schema
+        on-complete-fn (:on-complete opts)
         validated-opts (validate-opts impl model-id
-                                      (apply dissoc opts reserved-keys))
-
-        ;; Get the streaming response
+                                     (apply dissoc opts (conj reserved-keys :on-complete)))
         {:keys [channel metadata]} (proto/-stream impl model-name prompt-str validated-opts)
-
-        ;; Create a promise for the full text
         text-promise (promise)
-
-        ;; Create an atom to track whether we've consumed the stream
         consumed? (atom false)
+        collected-chunks (atom [])
 
-        ;; Function to ensure we only consume the stream once
+        out-channel (chan 100)
+
+        _ (go-loop []
+            (if-let [chunk (<! channel)]
+              (do
+                (swap! collected-chunks conj chunk)
+                (>! out-channel chunk)
+                (recur))
+              (do
+                (let [full-text (apply str @collected-chunks)]
+                  (deliver text-promise full-text)
+                  (reset! consumed? true))
+                (close! out-channel))))
+
+        chunks-fn (fn chunks-fn []
+                    (if-let [chunk (<!! out-channel)]
+                      (do
+
+                        (cons chunk (lazy-seq (chunks-fn))))
+                      nil))
+
+        chunks-seq (lazy-seq (chunks-fn))
+
         ensure-consumed (fn []
                           (when (compare-and-set! consumed? false true)
-                            (let [full-text (loop [result ""]
-                                              (if-let [chunk (<!! channel)]
-                                                (recur (str result chunk))
-                                                result))]
+                            ;; Consume the remaining chunks if any
+                            (let [remaining-chunks (doall (take-while identity chunks-seq))
+                                  ;; Add the remaining chunks to our collection
+                                  _ (swap! collected-chunks into remaining-chunks)
+                                  ;; Deliver the full text
+                                  full-text (apply str @collected-chunks)]
                               (deliver text-promise full-text)))
                           @text-promise)
 
-        ;; Create a lazy sequence of chunks using a named function
-        chunks-fn (fn chunks-fn []
-                    (when-not @consumed?
-                      (if-let [chunk (<!! channel)]
-                        (cons chunk (chunks-fn))
-                        (do
-                          (deliver text-promise "")
-                          (reset! consumed? true)
-                          nil))))
-        chunks-seq (lazy-seq (chunks-fn))
-
-        ;; Create a deref-able text value that forces consumption
+        ;; Rest of the code remains the same
         text-deref (reify
                      clojure.lang.IDeref
                      (deref [_] (ensure-consumed)))
-
-        ;; Create delays for usage, raw JSON, and tool calls
         usage-delay (delay
                       (ensure-consumed)
                       (proto/-get-usage impl model-name metadata))
-
         json-delay (delay
                      (ensure-consumed)
                      (proto/-get-raw-json impl model-name metadata))
-
         tool-calls-delay (delay
                            (ensure-consumed)
                            (proto/-get-tool-calls impl model-name metadata))
-
         structured-output-delay (delay
                                   (ensure-consumed)
                                   (-> (proto/-get-tool-calls impl model-name metadata)
                                       first
                                       (get-in [:function :arguments])))
         ]
-
-    ;; Return the structured response
-    {:chunks chunks-seq
-     :text text-deref
-     :usage usage-delay
-     :json json-delay
-     :tool-calls tool-calls-delay
-     :structured-output structured-output-delay
-     }))
+    (let [response-map {:chunks chunks-seq
+                        :text text-deref
+                        :usage usage-delay
+                        :json json-delay
+                        :tool-calls tool-calls-delay
+                        :structured-output structured-output-delay
+                        :consumed? consumed?}]
+      (when on-complete-fn
+        (add-watch consumed? :on-complete
+          (fn [_ _ _ new-state]
+            (when new-state
+              (future (on-complete-fn response-map))
+              (remove-watch consumed? :on-complete)))))
+      response-map)))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper
 ;; ──────────────────────────────────────────────────────────────
 
 (defn conversation [model]
-  (let [history (atom [])]
-    {:prompt (fn [q & [opts]]
-               (swap! history conj {:role :user :content q})
-               (let [resp (prompt model q (assoc opts :history @history))]
-                 (future (swap! history conj
+  (let [history (atom [])
+        on-complete-fn (fn [resp]
+                         (swap! history conj
                                 {:role :assistant
-                                 :content (deref (:text resp))}))
+                                 :content @(:text resp)}))]
+    {:prompt (fn [content & [opts]]
+               (let [prev-on-complete (:on-complete opts)
+                     internal-opts {:history @history
+                                    :on-complete (do
+                                                   (swap! history conj {:role :user :content content})
+                                                   on-complete-fn
+                                                   (when prev-on-complete
+                                                     (fn [resp]
+                                                       (prev-on-complete resp))))}
+                     resp (prompt model content
+                                 (merge opts internal-opts))]
                  resp))
-     :history history}))
+     :history history
+     :clear (fn [] (reset! history []))}))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Function Helpers
@@ -165,22 +193,15 @@
        (throw (ex-info "LLM did not call expected function"
                        {:expected f-name, :calls-made (mapv #(get-in % [:function :name]) tool-calls)})))
 
-     (println "mathcing call" matching-call)
      (let [args-map (get-in matching-call [:function :arguments])]
        (when validate?
-         (println "VALIDATE"
-                  full-f-schema
-                    f-input-schema
-                    args-map)
          (let [validation-result (m/validate f-input-schema args-map)]
            (when-not validation-result
              (throw (ex-info "Function arguments did not match schema"
                              {:schema f-input-schema
                               :args args-map
                               :errors (m/explain f-input-schema args-map)})))))
-       (f args-map)
-
-       ))))
+       (f args-map)))))
 
 (defn with-functions
   "Create an LLM interface with access to multiple functions.

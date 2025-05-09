@@ -4,15 +4,15 @@
             [co.poyo.clj-llm.registry :as reg]
             [clojure.core.async :as async :refer [chan go <! >! close!]]
             [clojure.string :as str]
-            [org.httpkit.client :as http]
             [cheshire.core :as json]
+            [babashka.http-client :as http]
             [malli.core :as m]
             [malli.registry :as mr]
             [malli.instrument :as mi]
             [malli.util :as mu]
             )
-  )
-
+  (:import [java.nio.charset StandardCharsets]
+           [java.io InputStream InputStreamReader BufferedReader]))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI specific option schema
@@ -108,7 +108,7 @@
             tool-calls
             {:type :tool-call, :tool-calls tool-calls, :raw-event event}
 
-            (not (str/blank? content))
+            (not (= 0 (count content)))
             {:type :content, :content content}
 
             finish-reason
@@ -120,67 +120,80 @@
             :else
             {:type :other, :data event}))))))
 
-(defn process-openai-stream
-  "Process an OpenAI SSE stream with a channel for chunks and a metadata atom"
-  [input-stream metadata-atom]
-  (let [chunks-chan (chan)
-        tool-calls-by-index (atom {})]
+(defn extract-tool-calls
+  "Extract tool calls from an OpenAI event"
+  [raw-event]
+  (get-in raw-event [:choices 0 :delta :tool_calls]))
 
-    ;; Process the stream
-    (process-sse input-stream
-                 {:extract-fn extract-sse-data
-                  :transform-fn openai-transformer
-                  :on-content (fn [result]
-                                (case (:type result)
-                                  :content
-                                  (async/>!! chunks-chan (:content result))
+(defn update-tool-calls-index
+  "Pure function to update the tool calls index map"
+  [tool-calls-map tool-call]
+  (let [idx (or (:index tool-call) 0)]
+    (update tool-calls-map idx (fnil conj []) tool-call)))
 
-                                  :tool-call
-                                  (let [raw-event (:raw-event result)
-                                        tool-calls (get-in raw-event [:choices 0 :delta :tool_calls])]
+(defn process-openai-event
+  "Pure function to process an OpenAI event and produce updates"
+  [event]
+  (case (:type event)
+    :content {:action :emit-content
+              :content (:content event)}
+    :tool-call {:action :add-tool-call
+                :raw-event (:raw-event event)
+                :tool-calls (extract-tool-calls (:raw-event event))}
+    :usage {:action :update-usage
+            :usage (:usage event)}
+    :finish {:action :set-finish-reason
+             :reason (:reason event)}
+    :other {:action :add-raw-event
+            :data (:data event)}
+    nil))
 
-                                    ;; Store the raw event for metadata
-                                    (swap! metadata-atom update :tool-calls-events
-                                           (fnil conj []) raw-event)
+(defn apply-openai-event
+  "Apply the updates from process-openai-event to the real world"
+  [updates chunks-chan metadata-atom tool-calls-by-index]
+  (when updates
+    (case (:action updates)
+      :emit-content
+      (async/>!! chunks-chan (:content updates))
 
-                                    ;; Update the tool-calls-by-index atom for each tool call fragment
-                                    (doseq [tool-call tool-calls]
-                                      (let [idx (or (:index tool-call) 0)]
-                                        (swap! tool-calls-by-index update idx
-                                               (fnil conj []) tool-call))))
+      :add-tool-call
+      (do
+        (swap! metadata-atom update :tool-calls-events (fnil conj []) (:raw-event updates))
+        (doseq [tool-call (:tool-calls updates)]
+          (swap! tool-calls-by-index update-tool-calls-index tool-call)))
 
-                                  :usage
-                                  (swap! metadata-atom assoc :usage (:usage result))
+      :update-usage
+      (swap! metadata-atom assoc :usage (:usage updates))
 
-                                  :finish
-                                  (swap! metadata-atom assoc :finish-reason (:reason result))
+      :set-finish-reason
+      (swap! metadata-atom assoc :finish-reason (:reason updates))
 
-                                  :other
-                                  (swap! metadata-atom update :raw-events conj (:data result))
+      :add-raw-event
+      (swap! metadata-atom update :raw-events conj (:data updates))
 
-                                  nil))
+      nil)))
 
-                  :on-error (fn [error-msg]
-                              (swap! metadata-atom assoc :error error-msg)
-                              (close! chunks-chan))
-
-                  :on-done (fn []
-                             ;; Now that we're done, add the consolidated tool calls to the text
-                             (let [normalized-tool-calls (normalize-tool-calls
-                                                          (:tool-calls-events @metadata-atom))]
-
-                               ;; Add the tool calls as JSON to the text channel
-                               (when (seq normalized-tool-calls)
-                                 (let [tool-calls-json (json/generate-string
-                                                        {:tool_calls normalized-tool-calls}
-                                                        {:pretty true})]
-                                   (async/>!! chunks-chan tool-calls-json))))
-
-                             ;; Close the channel when done
-                             (close! chunks-chan))})
-    chunks-chan))
-
-
+(defn create-openai-stream-config
+  "Creates a testable configuration for OpenAI stream processing"
+  [chunks-chan metadata-atom]
+  (let [tool-calls-by-index (atom {})]
+    {:extract-fn extract-sse-data
+     :transform-fn openai-transformer
+     :on-content (fn [event]
+                   (let [updates (process-openai-event event)]
+                     (apply-openai-event updates chunks-chan metadata-atom tool-calls-by-index)))
+     :on-error (fn [error-msg]
+                 (swap! metadata-atom assoc :error error-msg)
+                 (close! chunks-chan))
+     :on-done (fn []
+                (let [normalized-tool-calls (normalize-tool-calls
+                                             (:tool-calls-events @metadata-atom))]
+                  (when (seq normalized-tool-calls)
+                    (let [tool-calls-json (json/generate-string
+                                           {:tool_calls normalized-tool-calls}
+                                           {:pretty true})]
+                      (async/>!! chunks-chan tool-calls-json))))
+                (close! chunks-chan))}))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; OpenAI API Requests
@@ -214,8 +227,7 @@
                      (file-to-data-url (:path attachment)))}}
 
     :else
-    (throw (ex-info "Unsupported attachment type" {:attachment attachment}))
-    ))
+    (throw (ex-info "Unsupported attachment type" {:attachment attachment}))))
 
 (defn- make-messages
   "Convert prompt string to messages format"
@@ -239,10 +251,8 @@
 (defn- build-request-body
   "Build OpenAI chat completion request body"
   [model-id prompt-str opts]
-  (let [messages (make-messages prompt-str (:attachments opts))
-        stream-options (get opts :stream-options {:include_usage true})
-        ]
-    (println messages)
+  (let [messages (into (or (:history opts) []) (make-messages prompt-str (:attachments opts)))
+        stream-options (get opts :stream-options {:include_usage true})]
     (cond-> {:model model-id
              :messages messages
              :stream true
@@ -262,28 +272,59 @@
       (:logit-bias opts)        (assoc :logit_bias (:logit-bias opts))
       (:stop opts)              (assoc :stop [(:stop opts)]))))
 
-(require '[clojure.pprint :refer [pprint]])
-
-(defn- make-openai-request
-  "Make a streaming request to OpenAI API"
+(defn make-openai-request
+  "Make a streaming request to OpenAI API with immediate processing"
   [model-id prompt-str opts]
   (let [api-key (get-api-key opts)
         request-body (build-request-body model-id prompt-str opts)
         metadata-atom (atom {:raw-events []})
-        response @(http/request
-                   {:method :post
-                    :url "https://api.openai.com/v1/chat/completions"
-                    :headers {"Content-Type" "application/json"
-                              "Authorization" (str "Bearer " api-key)}
-                    :body (json/generate-string request-body)
-                    :as :stream})
-        {:keys [status body error]} response]
+        chunks-chan (chan)]
 
-    (when (or error (not= status 200))
-      (throw (ex-info "OpenAI API request failed"
-                      {:status status :error error :model-id model-id :response response})))
+    ;; Process in a separate thread to avoid blocking
+    (future
+      (try
+        (let [http-client (-> (java.net.http.HttpClient/newBuilder)
+                              (.version java.net.http.HttpClient$Version/HTTP_2)
+                              (.connectTimeout (java.time.Duration/ofSeconds
+                                               (or (:connect-timeout opts) 10)))
+                              (.build))
 
-    {:channel (process-openai-stream body metadata-atom)
+              json-body (json/generate-string request-body)
+
+              request (-> (java.net.http.HttpRequest/newBuilder)
+                          (.uri (java.net.URI/create
+                                (or (:api-endpoint opts) "https://api.openai.com/v1/chat/completions")))
+                          (.timeout (java.time.Duration/ofSeconds
+                                    (or (:request-timeout opts) 30)))
+                          (.header "Content-Type" "application/json")
+                          (.header "Authorization" (str "Bearer " api-key))
+                          (.POST (java.net.http.HttpRequest$BodyPublishers/ofString json-body))
+                          (.build))]
+
+          (let [response (.send http-client
+                                request
+                                (java.net.http.HttpResponse$BodyHandlers/ofInputStream))]
+
+            ;; Handle error response
+            (if (not= 200 (.statusCode response))
+              (do
+                (swap! metadata-atom assoc :error
+                       (ex-info "OpenAI API request failed"
+                               {:status (.statusCode response)
+                                :model-id model-id}))
+                (close! chunks-chan))
+
+              ;; Process the input stream
+              (let [input-stream (.body response)]
+                (process-sse input-stream
+                           (create-openai-stream-config chunks-chan metadata-atom))))))
+
+        (catch Exception e
+          (.printStackTrace e)
+          (swap! metadata-atom assoc :error e)
+          (close! chunks-chan))))
+
+    {:channel chunks-chan
      :metadata metadata-atom}))
 
 ;; ──────────────────────────────────────────────────────────────
