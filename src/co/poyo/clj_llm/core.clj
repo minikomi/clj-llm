@@ -115,20 +115,14 @@
         json-delay (delay
                      (ensure-consumed)
                      (proto/-get-raw-json impl model-name metadata))
-        tool-calls-delay (delay
-                           (ensure-consumed)
-                           (proto/-get-tool-calls impl model-name metadata))
         structured-output-delay (delay
                                   (ensure-consumed)
-                                  (-> (proto/-get-tool-calls impl model-name metadata)
-                                      first
-                                      (get-in [:function :arguments])))
+                                  (proto/-get-structured-output impl model-name metadata))
         ]
     (let [response-map {:chunks chunks-seq
                         :text text-deref
                         :usage usage-delay
                         :json json-delay
-                        :tool-calls tool-calls-delay
                         :structured-output structured-output-delay
                         :consumed? consumed?}]
       (when on-complete-fn
@@ -168,15 +162,15 @@
 ;; Function Helpers
 ;; ──────────────────────────────────────────────────────────────
 
-#_(defn call-function-with-llm
+(defn call-function-with-llm
   ([f model-id content]
    (call-function-with-llm f model-id content {}))
   ([f model-id content {:keys [validate? llm-opts]
                         :or {validate? true llm-opts {}}}]
    (let [full-f-schema (sch/get-schema-from-malli-function-registry f)
          f-input-schema (-> full-f-schema m/form second second)
-         tool (sch/instrumented-function->tool-spec f)
-         response (prompt model-id content (merge {:tools [tool], :tool-choice "auto"} llm-opts))
+         schema (sch/instrumented-function->malli-schema f)
+         response (prompt model-id content (merge {:schema schema} llm-opts))
          structured-output @(:structured-output response)]
      (when validate?
        (let [validation-result (m/validate f-input-schema structured-output)]
@@ -186,31 +180,3 @@
                             :args structured-output
                             :errors (m/explain f-input-schema structured-output)})))))
      (f structured-output))))
-
-#_(defn with-functions
-  "Create an LLM interface with access to multiple functions.
-   Returns a function that takes a prompt and executes the appropriate function."
-  [& functions]
-  (let [tools (mapv sch/instrumented-function->tool-spec functions)]
-    (fn [content & {:keys [model-id] :or {model-id :openai/gpt-4.1-mini}}]
-      (let [response (prompt model-id
-                             content
-                                {:tools tools
-                                 :tool-choice "auto"})
-            tool-calls @(:tool-calls response)]
-
-        (when-not (seq tool-calls)
-          (throw (ex-info "LLM did not make any tool calls"
-                         {:response @(:text response)})))
-
-        (let [call (first tool-calls)
-              fn-name (get-in call [:function :name])
-              args (get-in call [:function :arguments])
-              matching-fn (first (filter #(= (str (-> % meta :name)) fn-name)
-                                       functions))]
-
-          (if matching-fn
-            ((if (var? matching-fn) @matching-fn matching-fn) args)
-            (throw (ex-info "No matching function found"
-                           {:function-called fn-name
-                            :available-functions (map #(-> % meta :name) functions)}))))))))

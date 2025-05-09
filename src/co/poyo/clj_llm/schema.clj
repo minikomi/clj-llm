@@ -104,7 +104,7 @@
         fn-name-sym (-> f-meta :name)]
     (m/deref (get-in (m/function-schemas) [fn-namespace-sym fn-name-sym :schema]))))
 
-(defn instrumented-function->json-schema
+(defn instrumented-function->malli-schema
   [f]
   (let [f-meta (f->meta f)
         f-name (or (-> f-meta :name str) "unnamed-function")
@@ -120,5 +120,4 @@
                      (= :cat (first input-cat-schema))
                      (= 2 (count input-cat-schema)))
         (throw (ex-info "Input schema structure not [:cat [:map ...]]" {:fn f-name :schema full-f-schema})))
-      (malli->json-schema
-       (second input-cat-schema)))))
+       (second input-cat-schema))))

@@ -4,11 +4,10 @@
             [co.poyo.clj-llm.backends.openai :as openai]
             [co.poyo.clj-llm.schema :as sch]
             [malli.core :as m])
+    (:import [java.util UUID])
   )
 
 
-(comment
-  ;; register backend
   (do (openai/register-backend!)
       )
 
@@ -46,8 +45,7 @@
    @(:structured-output
      (llm/prompt :openai/gpt-4.1-nano
                  "What's the weather like where The Eifel Tower is?"
-                 {:schema weather-schema}))
-   )
+                 {:schema weather-schema}))_)
 
   ;; attachments
   @(:text (llm/prompt :openai/gpt-4.1-nano
@@ -82,15 +80,19 @@
          [:from :string]
          [:to :string]
          [:amount :int]]]
-       [:status {:description "Transaction status"} :string]]]
-     )
+       [:status {:description "Transaction status"} :string]]])
+
+    @(:structured-output
+      (llm/prompt
+       :openai/gpt-4.1-nano
+       "Transfer $50 from my savings account to my checking account"
+       {:schema (sch/instrumented-function->malli-schema transfer-money)}))
 
     ;; call function with natural language
     (llm/call-function-with-llm
      transfer-money
      :openai/gpt-4.1-nano
      "Transfer $50 from my savings account to my checking account")
-
     )
 
 
