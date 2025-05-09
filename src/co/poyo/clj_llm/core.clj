@@ -117,8 +117,8 @@
                      (proto/-get-raw-json impl model-name metadata))
         structured-output-delay (delay
                                   (ensure-consumed)
-                                  (proto/-get-structured-output impl model-name metadata))
-        ]
+                                  (proto/-get-structured-output impl model-name metadata))]
+
     (let [response-map {:chunks chunks-seq
                         :text text-deref
                         :usage usage-delay
