@@ -9,7 +9,6 @@
             [malli.util :as mu]
             [malli.transform :as mt]
             [cheshire.core :as json])
-
   (:import [java.util UUID])
   )
 
@@ -53,7 +52,7 @@
   (do
 
 
-    (defn transfer-money3
+    (defn transfer-money
       {:malli/schema transfer-money-schema}
       [{:keys [from to amount]}]
       {:transaction-id (UUID/randomUUID)
@@ -62,7 +61,7 @@
                  :amount amount}
        :status "completed"})
     (m/=>
-     transfer-money3
+     transfer-money
      [:->
       [:map [:from :string] [:to :string] [:amount :int]]
       [:map
@@ -78,7 +77,7 @@
     (malli.instrument/collect!)
 
     (llm/call-function-with-llm
-     transfer-money3
+     transfer-money
      :openai/gpt-4.1-nano
      "Transfer $50 from my savings account to my checking account")
 
