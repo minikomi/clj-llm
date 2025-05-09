@@ -16,5 +16,5 @@
     "Get token usage statistics from the metadata atom")
   (-get-raw-json [this model-id metadata-atom]
     "Get the raw JSON response from the metadata atom")
-  (-get-tool-calls [this model-id metadata-atom]
-    "Get tool calls in a normalized EDN format from the metadata atom"))
+  (-get-structured-output [this model-id metadata-atom]
+    "Get the structured output from the metadata atom"))
