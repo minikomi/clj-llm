@@ -14,11 +14,16 @@
 
 
 (comment
+  ;; register backend
   (openai/register-backend!)
-  (malli.instrument/instrument!)
+
+  ;; text, blocking
   @(:text (llm/prompt :openai/gpt-4.1-nano "hi there"))
 
+  ;; usage, blocking
+  @(:usage (llm/prompt :openai/gpt-4.1-nano "hi there"))
 
+  ;; tool calls, using malli schema
   (def weather-schema
     [:map
      [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
@@ -40,26 +45,29 @@
                  :tools [weather-tool]
                  :tool-choice "auto")))
 
-  @(:text (llm/prompt :openai/gpt-4.1-mini
+  ;; attachments
+  @(:text (llm/prompt :openai/gpt-4.1-nano
                       "what is this picture of?"
                       {:attachments  [{:type :image
-                                       :url "https://images.vexels.com/media/users/3/128011/isolated/lists/527067b3541bd657cae7ce720cc3d301-hand-drawn-sitting-cat.png"
-                                       }]}))
+                                       :url "https://images.vexels.com/media/users/3/128011/isolated/lists/527067b3541bd657cae7ce720cc3d301-hand-drawn-sitting-cat.png"}]})
+          )
 
-  (reverse (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there")))
+  ;; lazy seq for chunks
+  (doseq [ch (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there"))]
+    (println ch))
 
-
+  ;; easier function calling using instrumented functions
   (do
 
-
-    (defn transfer-money
-      {:malli/schema transfer-money-schema}
-      [{:keys [from to amount]}]
+    ;; define function
+    (defn transfer-money [{:keys [from to amount]}]
       {:transaction-id (UUID/randomUUID)
        :details {:from from
                  :to to
                  :amount amount}
        :status "completed"})
+
+    ;; instrument with malli schema
     (m/=>
      transfer-money
      [:->
@@ -74,8 +82,7 @@
        [:status {:description "Transaction status"} :string]]]
      )
 
-    (malli.instrument/collect!)
-
+    ;; call function with natural language
     (llm/call-function-with-llm
      transfer-money
      :openai/gpt-4.1-nano
