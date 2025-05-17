@@ -3,7 +3,8 @@
    [co.poyo.clj-llm.registry :as reg]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.schema :as sch]
-   [clojure.core.async :as a :refer [<!! chan go-loop <! >! close!]]
+   [co.poyo.clj-llm.sse :as sse]
+    [cheshire.core :as json]
    [malli.core :as m]
    [malli.util :as mu]
    [malli.error :as me]
@@ -52,86 +53,70 @@
     (throw (ex-info "Model id must be a qualified keyword" {:value kw})))
   [(keyword (namespace kw)) (name kw)])
 
+(defn- collect-tool-calls [evs]
+  (->> evs
+       (mapcat #(get-in % [:choices 0 :delta :tool_calls]))
+       (reduce (fn [m {:keys [index id function]}]
+                 (update m index
+                         (fn [{:keys [id name args]}]
+                           {:id   (or id id)
+                            :name (or name (:name function))
+                            :args (str (or args "") (:arguments function))})))
+               {})
+       (mapv (fn [[i {:keys [id name args]}]]
+               {:index i
+                :id id
+                :name name
+                :arguments (json/parse-string args true)}))))
+
+(defn- collect-tool-calls
+  "Return vector [{:index i :id … :name … :args-edn {...}} …] once stream done."
+  [events]
+  (->> events
+       (mapcat #(get-in % [:choices 0 :delta :tool_calls]))
+       (reduce
+         (fn [m {:keys [index id function]}]
+           (update m index
+                   (fn [{:keys [id name json-str]}]
+                     {:id       (or id id)
+                      :name     (or name (:name function))
+                      :json-str (str (or json-str "") (:arguments function))})))
+         {})
+       (mapv (fn [[i {:keys [id name json-str]}]]
+               {:index i
+                :id id
+                :name name
+                :args-edn (cheshire.core/parse-string json-str true)}))))
+
 ;; ──────────────────────────────────────────────────────────────
 ;; Public API – always-streaming
 ;; ──────────────────────────────────────────────────────────────
 
 (defn prompt
-  "Execute a prompt against an LLM model and return a structured response."
-  [model-id prompt-str & {:as opts}]
-  (println "initial" opts)
-  (let [[backend-id model-name] (split-model-key model-id)
-        impl (reg/get-backend backend-id)
-        on-complete-fn (:on-complete opts)
-        validated-opts (validate-opts impl model-id
-                                     (apply dissoc opts (conj reserved-keys :on-complete)))
-        _ (println "validated" validated-opts)
-        {:keys [channel metadata]} (proto/-stream impl model-name prompt-str validated-opts)
-        text-promise (promise)
-        consumed? (atom false)
-        collected-chunks (atom [])
+  ([model prompt-str] (prompt model prompt-str {}))
+  ([model prompt-str opts]
+   (let [[bk-key model-id] (split-model-key model)
+         backend (or (reg/fetch-backend bk-key)
+                     (throw (ex-info "backend not registered" {:backend bk-key})))
+         {:keys [stream _ metadata]}
+         (proto/-raw-stream backend model-id prompt-str opts)
+         events   (sse/stream->events stream)
+         done?    (atom false)
+         realize  #(do (doseq [_ events]) (reset! done? true))]
 
-        out-channel (chan 100)
-
-        _ (go-loop []
-            (if-let [chunk (<! channel)]
-              (do
-                (swap! collected-chunks conj chunk)
-                (>! out-channel chunk)
-                (recur))
-              (do
-                (let [full-text (apply str @collected-chunks)]
-                  (deliver text-promise full-text)
-                  (reset! consumed? true))
-                (close! out-channel))))
-
-        chunks-fn (fn chunks-fn []
-                    (if-let [chunk (<!! out-channel)]
-                      (do
-
-                        (cons chunk (lazy-seq (chunks-fn))))
-                      nil))
-
-        chunks-seq (lazy-seq (chunks-fn))
-
-        ensure-consumed (fn []
-                          (when (compare-and-set! consumed? false true)
-                            ;; Consume the remaining chunks if any
-                            (let [remaining-chunks (doall (take-while identity chunks-seq))
-                                  ;; Add the remaining chunks to our collection
-                                  _ (swap! collected-chunks into remaining-chunks)
-                                  ;; Deliver the full text
-                                  full-text (apply str @collected-chunks)]
-                              (deliver text-promise full-text)))
-                          @text-promise)
-
-        ;; Rest of the code remains the same
-        text-deref (reify
-                     clojure.lang.IDeref
-                     (deref [_] (ensure-consumed)))
-        usage-delay (delay
-                      (ensure-consumed)
-                      (proto/-get-usage impl model-name metadata))
-        json-delay (delay
-                     (ensure-consumed)
-                     (proto/-get-raw-json impl model-name metadata))
-        structured-output-delay (delay
-                                  (ensure-consumed)
-                                  (proto/-get-structured-output impl model-name metadata))]
-
-    (let [response-map {:chunks chunks-seq
-                        :text text-deref
-                        :usage usage-delay
-                        :json json-delay
-                        :structured-output structured-output-delay
-                        :consumed? consumed?}]
-      (when on-complete-fn
-        (add-watch consumed? :on-complete
-          (fn [_ _ _ new-state]
-            (when new-state
-              (future (on-complete-fn response-map))
-              (remove-watch consumed? :on-complete)))))
-      response-map)))
+     {:chunks events
+     :text   (delay (realize)
+                    (apply str (keep #(get-in % [:choices 0 :delta :content]) events)))
+     :usage  (delay (realize) (some :usage (reverse events)))
+     :json   (delay (realize) (vec events))
+     :tool-calls (delay (realize) (collect-tool-calls events))
+     :structured-output
+      (delay
+  (realize)
+  (if-let [sch (:schema opts)]
+     (-> (collect-tool-calls events) first :arguments)
+    (throw (ex-info "No :schema supplied" {}))))
+     :consumed? done?})))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper

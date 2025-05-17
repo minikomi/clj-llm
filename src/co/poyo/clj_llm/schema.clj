@@ -1,13 +1,9 @@
 (ns co.poyo.clj-llm.schema
   (:require [malli.core :as m]
-            [malli.error :as me]
+            [clojure.repl]
             [clojure.string :as str]))
 
 (declare malli->json-schema)
-
-(defn- get-schema-description [schema]
-  (let [compiled-schema (try (m/schema schema) (catch Exception _ nil))]
-    (get (m/properties compiled-schema) :description "")))
 
 (defn- extract-properties [map-schema]
   (let [compiled-map-schema (if (m/schema? map-schema) map-schema (m/schema map-schema))
@@ -75,10 +71,7 @@
         (let [pattern (first (m/children compiled-schema))]
           (assoc base-schema :type "string" :pattern (str pattern)))
 
-        ;; Basic support for :maybe T -> maps to T but non-required (handled in extract-properties)
         :maybe (malli->json-schema (m/form (first (m/children compiled-schema))))
-
-        ;; Could add more type handlers here (:and, :or, :ref, :map-of, etc.)
 
         (assoc base-schema :type "object")))))
 
@@ -86,7 +79,6 @@
 ;; sometimes we have this kind of abstract function
 ;; (meta f)
 ;; #:malli.instrument{:original #function[co.poyo.clj-llm.sandbox/transfer-money]}
-
 (defn f->meta [f]
   (let [str-f (str (or (:malli.instrument/original (meta f)) f))]
          (-> str-f
@@ -108,7 +100,6 @@
   [f]
   (let [f-meta (f->meta f)
         f-name (or (-> f-meta :name str) "unnamed-function")
-        f-doc (or (:doc f-meta) "")
         full-f-schema (get-schema-from-malli-function-registry f)]
     (when-not full-f-schema
         (throw (ex-info "No schema found via m/=> registry" {:fn f-name})))
