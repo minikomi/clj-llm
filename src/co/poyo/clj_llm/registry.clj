@@ -1,14 +1,9 @@
-(ns co.poyo.clj-llm.registry
-  (:require [co.poyo.clj-llm.protocol :as proto]))
+(ns co.poyo.clj-llm.registry)
 
-(def backends (atom {}))
+(def ^:private backends (atom {}))
 
-(defn register-backend!
-  "Register an implementation that satisfies `Backend`. Called by plugins."
-  [backend-key impl]
-  (swap! backends assoc backend-key impl))
+(defn register-backend! [k backend]
+  (swap! backends assoc k backend))
 
-(defn get-backend
-  "Get the implementation for a backend key."
-  [backend-key]
-  (get @backends backend-key))
+(defn fetch-backend [k]
+  (@backends k))

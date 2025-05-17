@@ -7,9 +7,8 @@
     (:import [java.util UUID])
   )
 
-
-  (do (openai/register-backend!)
-      )
+(comment
+  (openai/register-backend!)
 
   ;; text, blocking
   @(:text (llm/prompt :openai/gpt-4.1-nano "hi there"))
@@ -31,21 +30,22 @@
               :optional false}
        [:enum "celsius" "fahrenheit"]]]])
 
- (m/form (m/schema weather-schema))
+  (m/form (m/schema weather-schema))
 
- (m/type [:map
-      [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
-      [:unit {:description "Temperature unit (celsius or fahrenheit)"
-              :optional false}
-       [:enum "celsius" "fahrenheit"]]])
+  (m/type [:map
+           [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
+           [:unit {:description "Temperature unit (celsius or fahrenheit)"
+                   :optional false}
+            [:enum "celsius" "fahrenheit"]]])
 
 
   (m/validate
    weather-schema
-   @(:structured-output
+   (:structured-output
      (llm/prompt :openai/gpt-4.1-nano
                  "What's the weather like where The Eifel Tower is?"
-                 {:schema weather-schema}))_)
+                 {:schema weather-schema})
+   )
 
   ;; attachments
   @(:text (llm/prompt :openai/gpt-4.1-nano
@@ -54,7 +54,9 @@
                                        :url "https://images.vexels.com/media/users/3/128011/isolated/lists/527067b3541bd657cae7ce720cc3d301-hand-drawn-sitting-cat.png"}]}))
 
   ;; lazy seq for chunks
-  (doseq [[i c] (map-indexed (fn [a b] [a b]) (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there")))]
+  (seq (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there"))
+
+  (doseq [[i c] (map-indexed vector (:chunks (llm/prompt :openai/gpt-4.1-nano "hi there")))]
     (clojure.pprint/cl-format true "~a: ~x\n" i (pr-str c)))
 
   ;; easier function calling using instrumented functions
@@ -96,5 +98,5 @@
     )
 
 
-  (m/function-schemas)
+  (m/function-schemas))
   )
