@@ -4,7 +4,8 @@
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.schema :as sch]
    [co.poyo.clj-llm.sse :as sse]
-    [cheshire.core :as json]
+   [cheshire.core :as json]
+   [promesa.core :as p]
    [malli.core :as m]
    [malli.util :as mu]
    [malli.error :as me]
@@ -99,24 +100,43 @@
          backend (or (reg/fetch-backend bk-key)
                      (throw (ex-info "backend not registered" {:backend bk-key})))
          {:keys [stream _ metadata]}
-         (proto/-raw-stream backend model-id prompt-str opts)
-         events   (sse/stream->events stream)
-         done?    (atom false)
-         realize  #(do (doseq [_ events]) (reset! done? true))]
+         (proto/-raw-stream backend model-id prompt-str (dissoc opts :on-complete))) ; on-complete handled separately
+         events-channel (sse/stream->events stream)
+         all-events-p   (p/into [] events-channel)
+         on-complete-fn (:on-complete opts)]
 
-     {:chunks events
-     :text   (delay (realize)
-                    (apply str (keep #(get-in % [:choices 0 :delta :content]) events)))
-     :usage  (delay (realize) (some :usage (reverse events)))
-     :json   (delay (realize) (vec events))
-     :tool-calls (delay (realize) (collect-tool-calls events))
-     :structured-output
-      (delay
-  (realize)
-  (if-let [sch (:schema opts)]
-     (-> (collect-tool-calls events) first :arguments)
-    (throw (ex-info "No :schema supplied" {}))))
-     :consumed? done?})))
+     (let [text-p (p/let [all-events all-events-p]
+                    (apply str (keep #(get-in % [:choices 0 :delta :content]) all-events)))
+           usage-p (p/let [all-events all-events-p]
+                     (some :usage (reverse all-events)))
+           tool-calls-p (p/let [all-events all-events-p]
+                          (collect-tool-calls all-events))
+           structured-output-p (p/let [tc tool-calls-p
+                                       s (:schema opts)]
+                                 (if s
+                                   (-> tc first :arguments)
+                                   ;; Allow nil if no schema, consistent with potential absence of tool calls
+                                   nil))]
+
+       (when on-complete-fn
+         (p/let [text text-p
+                 usage usage-p
+                 json all-events-p ; all-events-p is already the promise for all events
+                 tool-calls tool-calls-p
+                 structured-output structured-output-p]
+           (on-complete-fn {:chunks events-channel ; Pass the channel itself
+                            :text text
+                            :usage usage
+                            :json json
+                            :tool-calls tool-calls
+                            :structured-output structured-output})))
+
+       {:chunks events-channel
+        :text   text-p
+        :usage  usage-p
+        :json   all-events-p
+        :tool-calls tool-calls-p
+        :structured-output structured-output-p}))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper
@@ -125,21 +145,24 @@
 (defn conversation [model]
   (let [history (atom [])
         on-complete-fn (fn [resp]
-                         (swap! history conj
-                                {:role :assistant
-                                 :content @(:text resp)}))]
+                         (let [assistant-message (cond-> {:role :assistant}
+                                                   (:text resp) (assoc :content (:text resp))
+                                                   (:tool-calls resp) (assoc :tool-calls (:tool-calls resp)))]
+                           (when (or (:content assistant-message) (:tool-calls assistant-message))
+                             (swap! history conj assistant-message))))]
     {:prompt (fn [content & [opts]]
-               (let [prev-on-complete (:on-complete opts)
-                     internal-opts {:history @history
-                                    :on-complete (do
-                                                   (swap! history conj {:role :user :content content})
-                                                   on-complete-fn
-                                                   (when prev-on-complete
-                                                     (fn [resp]
-                                                       (prev-on-complete resp))))}
-                     resp (prompt model content
-                                 (merge opts internal-opts))]
-                 resp))
+               (let [user-message {:role :user :content content}
+                     history-for-api @history ; Capture history *before* adding the new user message
+                     _ (swap! history conj user-message) ; Add user message to local history
+                     ;; Prepare options for the prompt call
+                     prompt-opts (merge opts
+                                        {:history history-for-api ; Pass history *before* current user message for the API call
+                                         :on-complete (fn [resp]
+                                                        ;; on-complete now receives a map of resolved values
+                                                        (on-complete-fn resp) ; Updates history with assistant's response
+                                                        (when-let [prev-on-complete (:on-complete opts)]
+                                                          (prev-on-complete resp)))})]
+                 (prompt model content prompt-opts)))
      :history history
      :clear (fn [] (reset! history []))}))
 
@@ -155,13 +178,15 @@
    (let [full-f-schema (sch/get-schema-from-malli-function-registry f)
          f-input-schema (-> full-f-schema m/form second second)
          schema (sch/instrumented-function->malli-schema f)
-         response (prompt model-id content (merge {:schema schema} llm-opts))
-         structured-output @(:structured-output response)]
-     (when validate?
-       (let [validation-result (m/validate f-input-schema structured-output)]
-         (when-not validation-result
-           (throw (ex-info "Function arguments did not match schema"
-                           {:schema f-input-schema
-                            :args structured-output
-                            :errors (m/explain f-input-schema structured-output)})))))
-     (f structured-output))))
+         response (prompt model-id content (merge {:schema schema} llm-opts))]
+     ;; We need to dereference the promise for structured-output
+     (p/let [structured-output (:structured-output response)]
+       (if validate?
+         (let [validation-result (m/validate f-input-schema structured-output)]
+           (if validation-result
+             (f structured-output)
+             (throw (ex-info "Function arguments did not match schema"
+                             {:schema f-input-schema
+                              :args structured-output
+                              :errors (m/explain f-input-schema structured-output)}))))
+         (f structured-output))))))
