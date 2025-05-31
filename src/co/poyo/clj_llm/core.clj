@@ -4,7 +4,8 @@
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.schema :as sch]
    [co.poyo.clj-llm.sse :as sse]
-    [cheshire.core :as json]
+   [cheshire.core :as json]
+   [clojure.core.async :as async :refer [<!! close!]]
    [malli.core :as m]
    [malli.util :as mu]
    [malli.error :as me]
@@ -53,21 +54,24 @@
     (throw (ex-info "Model id must be a qualified keyword" {:value kw})))
   [(keyword (namespace kw)) (name kw)])
 
-(defn- collect-tool-calls [evs]
-  (->> evs
-       (mapcat #(get-in % [:choices 0 :delta :tool_calls]))
-       (reduce (fn [m {:keys [index id function]}]
-                 (update m index
-                         (fn [{:keys [id name args]}]
-                           {:id   (or id id)
-                            :name (or name (:name function))
-                            :args (str (or args "") (:arguments function))})))
-               {})
-       (mapv (fn [[i {:keys [id name args]}]]
-               {:index i
-                :id id
-                :name name
-                :arguments (json/parse-string args true)}))))
+(defn- collect-events-from-channel
+  "Consume all events from channel and return vector"
+  [channel]
+  (loop [events []]
+    (if-let [event (<!! channel)]
+      (recur (conj events event))
+      events)))
+
+(defn- collect-content-from-channel
+  "Consume channel and concatenate content chunks"
+  [channel]
+  (loop [acc []]
+    (if-let [event (<!! channel)]
+      (if-let [content (get-in event [:choices 0 :delta :content])]
+        (recur (conj acc content))
+        (recur acc))
+      (apply str acc))))
+
 
 (defn- collect-tool-calls
   "Return vector [{:index i :id … :name … :args-edn {...}} …] once stream done."
@@ -97,26 +101,39 @@
   ([model prompt-str opts]
    (let [[bk-key model-id] (split-model-key model)
          backend (or (reg/fetch-backend bk-key)
-                     (throw (ex-info "backend not registered" {:backend bk-key})))
-         {:keys [stream _ metadata]}
+                    (throw (ex-info "backend not registered" {:backend bk-key})))
+         {:keys [channel metadata]}
          (proto/-raw-stream backend model-id prompt-str opts)
-         events   (sse/stream->events stream)
-         done?    (atom false)
-         realize  #(do (doseq [_ events]) (reset! done? true))]
 
-     {:chunks events
-     :text   (delay (realize)
-                    (apply str (keep #(get-in % [:choices 0 :delta :content]) events)))
-     :usage  (delay (realize) (some :usage (reverse events)))
-     :json   (delay (realize) (vec events))
-     :tool-calls (delay (realize) (collect-tool-calls events))
-     :structured-output
+         ;; Create shared state for collected events
+         events-atom (atom nil)
+         realize-fn (fn []
+                     (when (nil? @events-atom)
+                       (reset! events-atom (collect-events-from-channel channel)))
+                     @events-atom)]
+
+     {:chunks channel ; Return channel directly for streaming
+
+      :text (delay
+             (let [events (realize-fn)]
+               (apply str (keep #(get-in % [:choices 0 :delta :content]) events))))
+
+      :usage (delay
+              (let [events (realize-fn)]
+                (some :usage (reverse events))))
+
+      :json (delay
+             (vec (realize-fn)))
+
+      :tool-calls (delay
+                   (collect-tool-calls (realize-fn)))
+
+      :structured-output
       (delay
-  (realize)
-  (if-let [sch (:schema opts)]
-     (-> (collect-tool-calls events) first :arguments)
-    (throw (ex-info "No :schema supplied" {}))))
-     :consumed? done?})))
+        (let [events (realize-fn)]
+          (if-let [sch (:schema opts)]
+            (-> (collect-tool-calls events) first :arguments)
+            (throw (ex-info "No :schema supplied" {})))))})))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper
