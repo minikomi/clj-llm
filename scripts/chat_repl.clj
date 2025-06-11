@@ -23,10 +23,21 @@
             (do
               (println "Exiting conversation.")
               (System/exit 0))
-            (do
-              (doseq [chunk (:chunks ((:prompt conv) input))]
-                (print chunk)
-                (flush))
+            (let [chunks-chan (:chunks ((:prompt conv) input))]
+                (go
+                    (try
+                    (loop []
+                        (let [chunk (<! chunks-chan)]
+                        (if chunk
+                            (do
+                            (print chunk)
+                            (flush)
+                            (recur))
+                            (do
+                            (println)
+                            (println "End of response.")))))
+                    (catch Exception e
+                        (println "Error during conversation:" e))))
               (println)
               (recur))))))))
 

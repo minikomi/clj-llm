@@ -1,47 +1,28 @@
 (ns co.poyo.clj-llm.sse
   (:require [cheshire.core :as json]
-            [clojure.string :as str]
-            [clojure.core.async :as async :refer [>!! close! chan]])
-  (:import (java.io BufferedReader InputStreamReader)))
+            [clojure.string  :as str]
+            [clojure.java.io :as io]
+            [clojure.core.async :as a :refer [chan go >! close!]]))
 
-(defn process-sse-stream
-  "Process SSE input stream and put parsed events onto channel.
-   Returns channel immediately, processes stream in background.
-   Optional config: {:transform-fn fn :on-error fn :on-done fn}"
-  ([^java.io.InputStream input-stream]
-   (process-sse-stream input-stream {}))
-  ([^java.io.InputStream input-stream config]
-   (let [channel (chan)
-         {:keys [transform-fn on-error on-done]} config
-         rdr (BufferedReader. (InputStreamReader. input-stream))]
-     (future
-       (try
-         (loop []
-           (when-let [line (.readLine rdr)]
-             (let [trimmed (str/trim line)]
-               (cond
-                 ;; Skip blank lines or non-data lines
-                 (or (str/blank? trimmed)
-                     (not (str/starts-with? trimmed "data: ")))
-                 (recur)
+;; ——— line-level reader ———————————————————————————
+(defn input-stream->line-chan
+  "Emit CR/LF terminated lines from `is` into an async channel.
+   Buffer = 64 to keep latency low."
+  ^clojure.core.async.impl.channels.ManyToManyChannel
+  [^java.io.InputStream is]
+  (let [out (chan 64)
+        rdr (io/reader is)]
+    (go (loop []
+          (if-let [l (.readLine rdr)]
+            (do (>! out l) (recur))
+            (do (.close rdr) (close! out)))))
+    out))
 
-                 ;; "[DONE]" indicates end of stream
-                 (= (subs trimmed 6) "[DONE]")
-                 (do
-                   (when on-done (on-done))
-                   (close! channel))
+(defn sse-done? [^String line] (= line "data: [DONE]"))
 
-                 ;; Process data event
-                 :else
-                 (let [payload (subs trimmed 6)
-                       parsed (json/parse-string payload true)
-                       event (if transform-fn (transform-fn parsed) parsed)]
-                   (>!! channel event)
-                   (recur))))))
-         (catch Exception e
-           (when on-error (on-error (.getMessage e)))
-           (close! channel))
-         (finally
-           (try (.close rdr) (catch Exception _))
-           (try (.close input-stream) (catch Exception _)))))
-     channel)))
+;; ——— reusable transducer ————————————————————————
+(def remove-non-data (filter #(str/starts-with? % "data: ")))
+(def stop-at-done    (take-while #(not (sse-done? %))))
+(def parse-json      (map #(json/parse-string (subs % 6) true)))
+
+(def sse->json-xf (comp remove-non-data stop-at-done parse-json))
