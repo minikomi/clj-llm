@@ -1,16 +1,27 @@
 (ns co.poyo.clj-llm.backends.openai
-  (:require [org.httpkit.client :as http]
-            [cheshire.core :as json]
-            [clojure.string :as str]
-            [malli.core :as m]
+  (:require [cheshire.core           :as json]
+            [clojure.core.async      :as async :refer [chan pipeline close!]]
+            [co.poyo.clj-llm.net     :as net]          ;; ← new wrapper
+            [co.poyo.clj-llm.sse     :as sse]
             [co.poyo.clj-llm.protocol :as proto]
             [co.poyo.clj-llm.schema   :as sch]
-            [co.poyo.clj-llm.registry :as reg])
-  (:import (java.util Base64)
-           (java.io BufferedReader InputStreamReader)
-           ))
+            [co.poyo.clj-llm.registry :as reg]
+            [malli.core :as m]
+            [clojure.string :as str])
+  (:import (java.util Base64)))
 
-;; ────────── helpers ──────────
+(def ^:private ^:const api-url "https://api.openai.com/v1/chat/completions")
+(def ^:private ^:const env-api-key-name "OPENAI_API_KEY")
+
+;; ─────────── API Key Handling ──────────
+
+(defn get-api-key [opts]
+  (or (:api-key opts)
+      (System/getenv env-api-key-name)
+      (throw (ex-info "API key not provided" {:opts opts}))))
+
+;; ────────── schema opts ──────────
+
 (def openai-opts-schema
   [:map
    [:response-format {:optional true} [:enum "text" "json"]]
@@ -21,10 +32,8 @@
       [:path {:optional true} string?]
       [:data {:optional true} any?]]]]])
 
-(defn get-api-key [opts]
-  (or (:api-key opts)
-      (System/getenv "OPENAI_API_KEY")
-      (throw (ex-info "OPENAI_API_KEY missing" {}))))
+
+;; ────────── message processing ──────────
 
 (defn file->data-url [p]
   (let [mime (cond
@@ -75,32 +84,64 @@
       (:stop opts)               (assoc :stop
                                         (let [s (:stop opts)]
                                           (if (string? s) [s] s))))))
-;; ────────── backend ──────────
+
+;; ───────── SSE Processing ──────────
+
+(defn ^:private filter-choices-or-usage           ;; keep both deltas and usage
+  []
+  (filter #(or (:choices %) (:usage %))))
+
+(defn ^:private openai-json->events []            ;; canonical event maps
+  (mapcat
+   (fn [m]
+     (if-let [u (:usage m)]
+       [{:type :usage
+         :prompt     (:prompt_tokens u)
+         :completion (:completion_tokens u)
+         :total      (:total_tokens u)}]
+
+       (let [delta (get-in m [:choices 0 :delta])]
+         (cond-> []
+           (:content delta)
+           (conj {:type :content :content (:content delta)})
+
+           (:tool_calls delta)
+           (into (map (fn [{:keys [index id function]}]
+                        {:type :tool-call-delta
+                         :index index
+                         :id    id
+                         :name  (:name function)
+                         :arguments (:arguments function)}))
+                 (:tool_calls delta))))))))
+
+;; ────────── Backend Registration ──────────
+
+;; Usage
+
+
 (defrecord OpenAIBackend []
   proto/LLMBackend
   (-raw-stream [_ model prompt opts]
-    (let [api  (get-api-key opts)
-          body (json/encode (build-body model prompt opts))
-          {:keys [status body error] :as resp}
-          @(http/request {:method :post
-                          :url "https://api.openai.com/v1/chat/completions"
-                          :headers {"Authorization" (str "Bearer " api)
-                                    "Content-Type"  "application/json"
-                                    "Accept"        "text/event-stream"}
-                          :body body
-                          :as :stream})
-          _ (when (not= 200 status)
-              (throw (ex-info "HTTP error" {:status status
-                                            :body (apply str
-                                                         (line-seq (BufferedReader.
-                                                                    (InputStreamReader. body)))
-                                                         )
+    (let [api-key (or (:api-key opts) (System/getenv "OPENAI_API_KEY"))
+          headers {"Authorization" (str "Bearer " api-key)
+                   "Content-Type"  "application/json"
+                   "Accept"        "text/event-stream"}
+          body-str (json/encode (build-body model prompt opts))
+          out-ch   (chan 64)]
+      (net/post-stream
+       api-url headers body-str
+       (fn [{:keys [status body error]}]
+         (when error (throw error))
+         (if (= 200 status)
+           (pipeline 32
+                     out-ch
+                     (comp sse/sse->json-xf
+                           (filter-choices-or-usage)
+                           (openai-json->events))
+                     (sse/input-stream->line-chan body))
+           (throw (ex-info "HTTP error" {:status status})))))
+      {:channel out-ch})))
 
-                                            })))
-          meta* (atom {})]
-      {:stream body :close #(.close body) :metadata meta*}))
-  (-opts-schema [_ _]
-    openai-opts-schema))
-
-(defn register-backend! []
+;; ——— register for user code ——————————————
+(defn register []
   (reg/register-backend! :openai (->OpenAIBackend)))

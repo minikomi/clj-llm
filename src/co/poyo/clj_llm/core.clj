@@ -100,10 +100,8 @@
   ([model prompt-str] (prompt model prompt-str {}))
   ([model prompt-str opts]
    (let [[bk-key model-id] (split-model-key model)
-         backend (or (reg/fetch-backend bk-key)
-                    (throw (ex-info "backend not registered" {:backend bk-key})))
-         {:keys [channel metadata]}
-         (proto/-raw-stream backend model-id prompt-str opts)
+         backend (or (reg/fetch-backend bk-key) (throw (ex-info "backend not registered" {:backend bk-key})))
+         {:keys [channel metadata]} (proto/-raw-stream backend model-id prompt-str opts)
 
          ;; Create shared state for collected events
          events-atom (atom nil)
