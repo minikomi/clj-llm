@@ -24,21 +24,19 @@
               (println "Exiting conversation.")
               (System/exit 0))
             (let [chunks-chan (:chunks ((:prompt conv) input))]
-                (go
-                    (try
-                    (loop []
-                        (let [chunk (<! chunks-chan)]
-                        (if chunk
-                            (do
-                            (print chunk)
-                            (flush)
-                            (recur))
-                            (do
-                            (println)
-                            (println "End of response.")))))
-                    (catch Exception e
-                        (println "Error during conversation:" e))))
-              (println)
+
+              (try
+                (loop []
+                  (let [chunk (<! chunks-chan)]
+                    (when (:content chunk)
+                      (do
+                        (print (-> chunk :content))
+                        (flush)
+                        (recur)))))
+                (catch Exception e
+                  (println "Error during conversation:" e)))
+              (print "\n\n")
+              (flush)
               (recur))))))))
 
 (when (= *file* (System/getProperty "babashka.file"))

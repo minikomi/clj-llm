@@ -143,5 +143,5 @@
       {:channel out-ch})))
 
 ;; ——— register for user code ——————————————
-(defn register []
+(defn register-backend! []
   (reg/register-backend! :openai (->OpenAIBackend)))
