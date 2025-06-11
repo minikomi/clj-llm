@@ -4,25 +4,26 @@ A flexible, async-first Clojure library for interacting with Large Language Mode
 
 ## Features
 
-- **Streaming-first design**: Every request returns chunked responses for responsive UIs
-- **Lazy sequences for chunks**: Process response chunks as they arrive with Clojure's sequence abstractions
-- **First-class Malli schema support**: Structured outputs using Malli schemas
-- **Function calling with schema validation**: Call functions directly from natural language with automatic schema validation
-- **Backend agnostic**: Designed for multiple LLM backends
+- **Streaming-first design**: Real-time chunked responses using core.async channels
+- **Multiple output formats**: Access raw events, concatenated text, structured data, or tool calls
+- **First-class Malli schema support**: Structured outputs with automatic schema validation
+- **Function calling**: Call functions directly from natural language with schema validation
+- **Backend agnostic**: Currently supports OpenAI and Anthropic, easily extensible
 - **Babashka compatible**: Works in both Clojure and Babashka environments
-- **Usage tracking**: Access token usage data for cost management
-- **Conversation helpers**: Easily maintain conversational context
+- **Usage tracking**: Built-in token usage monitoring for cost management
+- **Conversation helpers**: Maintain conversational context with automatic history management
+- **File attachments**: Support for image attachments (OpenAI)
 
 ## Installation
 
-```clojure
+#+end_srcclojure
 {:deps {co.poyo/clj-llm {:git/url "https://github.com/yourusername/clj-llm"
                          :sha "current-sha-goes-here"}}}
-```
+#+begin_src
 
 ## Quick Start
 
-```clojure
+#+end_srcclojure
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
@@ -30,114 +31,195 @@ A flexible, async-first Clojure library for interacting with Large Language Mode
 (openai/register-backend!)
 
 ;; Simple text completion
-@(:text (llm/prompt :openai/gpt-4.1-nano "Hello, world!"))
+@(:text (llm/prompt :openai/gpt-4o "Hello, world!"))
 
 ;; Stream chunks as they arrive
-(doseq [chunk (:chunks (llm/prompt :openai/gpt-4.1-nano "Count to 10"))]
-  (print chunk)
-  (flush))
-```
+(let [response (llm/prompt :openai/gpt-4o "Count to 10")]
+  (loop []
+    (when-let [chunk (clojure.core.async/<!! (:chunks response))]
+      (when (= :content (:type chunk))
+        (print (:content chunk))
+        (flush))
+      (recur))))
+#+begin_src
+
+## Response Format
+
+Every `prompt` call returns a map with multiple ways to access the response:
+
+#+end_srcclojure
+(let [response (llm/prompt :openai/gpt-4o "Hello!")]
+  {:chunks        (:chunks response)        ; core.async channel of events
+   :json          @(:json response)         ; raw event vector (delays until complete)
+   :text          @(:text response)         ; concatenated content string
+   :usage         @(:usage response)        ; token usage stats
+   :tool-calls    @(:tool-calls response)   ; parsed tool calls
+   :structured-output @(:structured-output response)}) ; first tool call args
+#+begin_src
 
 ## Structured Output with Malli
 
 Use Malli schemas to get structured, validated responses:
 
-```clojure
+#+end_srcclojure
 (def weather-schema
-  [:and
-   {:name "weather-fn"
-    :description "gets the weather for a given location"}
-   [:map
-    [:location {:description "The city name"} :string]
-    [:unit {:description "Temperature unit"}
-     [:enum "celsius" "fahrenheit"]]]])
+  [:map
+   {:name "get_weather"
+    :description "Get weather information for a location"}
+   [:location {:description "The city name"} :string]
+   [:unit {:description "Temperature unit"} [:enum "celsius" "fahrenheit"]]])
 
 ;; Get structured output
 @(:structured-output
-  (llm/prompt :openai/gpt-4.1-nano
-              "What's the weather like in Paris?"
-              {:schema weather-schema}))
+  (llm/prompt :openai/gpt-4o
+              "What's the weather like in Paris in Celsius?"
+              {:schema weather-schema
+               :validate-output? true}))
 ;; => {:location "Paris", :unit "celsius"}
-```
+#+begin_src
 
 ## Function Calling with Malli Instrumentation
 
-Call functions directly using LLM with automatic schema validation:
+Call functions directly using LLM with automatic validation:
 
-```clojure
-;; Define and instrument a function with Malli
+#+end_srcclojure
+(require '[malli.core :as m])
+
+;; Define and instrument a function
 (defn transfer-money [{:keys [from to amount]}]
   {:transaction-id (java.util.UUID/randomUUID)
    :details {:from from, :to to, :amount amount}
    :status "completed"})
 
-(m/=>
- transfer-money
- [:->
-  [:map [:from :string] [:to :string] [:amount :int]]
-  [:map
-   [:transaction-id :uuid]
-   [:details [:map [:from :string] [:to :string] [:amount :int]]]
-   [:status :string]]])
+(m/=> transfer-money
+  [:=> [:cat [:map
+              [:from :string]
+              [:to :string]
+              [:amount :int]]]
+       [:map
+        [:transaction-id :uuid]
+        [:details [:map [:from :string] [:to :string] [:amount :int]]]
+        [:status :string]]])
 
 ;; Call function with natural language
 (llm/call-function-with-llm
  transfer-money
- :openai/gpt-4.1-nano
+ :openai/gpt-4o
  "Transfer $50 from my savings account to my checking account")
-```
+#+begin_src
 
 ## Conversations
 
-Maintain conversational context:
+Maintain conversational context automatically:
 
-```clojure
-(def conv (llm/conversation :openai/gpt-4.1-nano))
+#+end_srcclojure
+(def conv (llm/conversation :openai/gpt-4o))
 
 ;; First message
-((:prompt conv) "Who was the first person on the moon?")
+@(:text ((:prompt conv) "Who was the first person on the moon?"))
 
-;; Follow-up question with automatic context handling
-((:prompt conv) "When did this happen?")
+;; Follow-up question with automatic context
+@(:text ((:prompt conv) "When did this happen?"))
+
+;; Access conversation history
+@(:history conv)
 
 ;; Clear conversation history
 ((:clear conv))
-```
+#+begin_src
 
-## Usage Data
+## File Attachments
 
-Track token usage:
+Attach images to your prompts (OpenAI):
 
-```clojure
-@(:usage (llm/prompt :openai/gpt-4.1-nano "Hello, world!"))
-;; => {:prompt_tokens 7, :completion_tokens 9, :total_tokens 16}
-```
+#+end_srcclojure
+(llm/prompt :openai/gpt-4o
+            "What's in this image?"
+            {:attachments [{:type :image
+                           :path "/path/to/image.png"}]})
+#+begin_src
+
+## Usage Tracking
+
+Monitor token consumption:
+
+#+end_srcclojure
+@(:usage (llm/prompt :openai/gpt-4o "Hello, world!"))
+;; => {:prompt 10, :completion 5, :total 15}
+#+begin_src
+
+## Backend Configuration
+
+### OpenAI
+
+#+end_srcclojure
+(require '[co.poyo.clj-llm.backends.openai :as openai])
+(openai/register-backend!)
+
+;; Use with API key from environment (OPENAI_API_KEY) or pass directly
+(llm/prompt :openai/gpt-4o "Hello!" {:api-key "your-key-here"})
+#+begin_src
+
+### Anthropic
+
+#+end_srcclojure
+(require '[co.poyo.clj-llm.backends.anthropic :as anthropic])
+(anthropic/register-backend!)
+
+;; Use with API key from environment (ANTHROPIC_API_KEY)
+(llm/prompt :anthropic/claude-3-sonnet "Hello!")
+#+begin_src
 
 ## Babashka Compatibility
 
-clj-llm works seamlessly in both Clojure and Babashka environments. The included `chat_repl.clj` script shows how to create a simple CLI chat interface:
+Works seamlessly in Babashka. Check the `scripts/` directory for examples:
 
-```bash
-$ bb chat_repl.clj openai/gpt-4.1-nano
-```
+#+end_srcbash
+$ bb scripts/chat_repl.clj :openai/gpt-4o
+#+begin_src
 
-## Extending with New Backends
+## Advanced Options
 
-Create your own backend implementation by implementing the `LLMBackend` protocol:
+#+end_srcclojure
+(llm/prompt :openai/gpt-4o "Write a story"
+            {:temperature 0.8
+             :max-tokens 500
+             :top-p 0.9
+             :frequency-penalty 0.1
+             :presence-penalty 0.1
+             :stop ["THE END"]
+             :seed 42
+             :history [{:role :system :content "You are a creative writer"}]})
+#+begin_src
 
-```clojure
+## Creating Custom Backends
+
+Implement the `LLMBackend` protocol:
+
+#+end_srcclojure
+(require '[co.poyo.clj-llm.protocol :as proto]
+         '[co.poyo.clj-llm.registry :as reg])
+
 (defrecord MyBackend []
   proto/LLMBackend
-  (-prompt [this model-id prompt-str opts] ...)
-  (-stream [this model-id prompt-str opts] ...)
-  (-opts-schema [this model-id] ...)
-  (-get-usage [this model-id metadata-atom] ...)
-  (-get-structured-output [this model-id metadata-atom] ...)
-  (-get-raw-json [this model-id metadata-atom] ...))
+  (-raw-stream [this model-id prompt-str opts]
+    ;; Return {:channel async-channel-of-events}
+    )
+  (-opts-schema [this model-id]
+    ;; Return Malli schema for backend-specific options
+    ))
 
 ;; Register your backend
 (reg/register-backend! :my-backend (->MyBackend))
-```
+#+begin_src
+
+## Event Types
+
+The streaming channel emits events with these types:
+
+- `:content` - Text content chunks: `{:type :content :content "text"}`
+- `:usage` - Token usage: `{:type :usage :prompt 10 :completion 5 :total 15}`
+- `:tool-call-delta` - Tool call chunks: `{:type :tool-call-delta :index 0 :id "call_123" :name "function_name" :arguments "{partial"}`
 
 ## License
 
