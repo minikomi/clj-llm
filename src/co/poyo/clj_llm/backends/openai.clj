@@ -1,7 +1,7 @@
 (ns co.poyo.clj-llm.backends.openai
   (:require [cheshire.core           :as json]
             [clojure.core.async      :as async :refer [chan pipeline close!]]
-            [co.poyo.clj-llm.net     :as net]          ;; ← new wrapper
+            [co.poyo.clj-llm.net     :as net]
             [co.poyo.clj-llm.sse     :as sse]
             [co.poyo.clj-llm.protocol :as proto]
             [co.poyo.clj-llm.schema   :as sch]
@@ -11,14 +11,6 @@
   (:import (java.util Base64)))
 
 (def ^:private ^:const api-url "https://api.openai.com/v1/chat/completions")
-(def ^:private ^:const env-api-key-name "OPENAI_API_KEY")
-
-;; ─────────── API Key Handling ──────────
-
-(defn get-api-key [opts]
-  (or (:api-key opts)
-      (System/getenv env-api-key-name)
-      (throw (ex-info "API key not provided" {:opts opts}))))
 
 ;; ────────── schema opts ──────────
 
@@ -32,102 +24,111 @@
       [:path {:optional true} string?]
       [:data {:optional true} any?]]]]])
 
-
 ;; ────────── message processing ──────────
 
-(defn file->data-url [p]
-  (let [mime (cond
-               (str/ends-with? p ".png")  "image/png"
-               (str/ends-with? p ".jpg")  "image/jpeg"
-               (str/ends-with? p ".jpeg") "image/jpeg"
-               (str/ends-with? p ".gif")  "image/gif"
-               (str/ends-with? p ".webp") "image/webp"
-               :else "application/octet-stream")
-        bytes (slurp p :encoding nil)]
+;; Simplified MIME type lookup
+(def ^:private file-extensions->mime
+  {".png"  "image/png"
+   ".jpg"  "image/jpeg"
+   ".jpeg" "image/jpeg"
+   ".gif"  "image/gif"
+   ".webp" "image/webp"})
+
+(defn- file->data-url [path]
+  (let [ext (some #(when (str/ends-with? path %) %) (keys file-extensions->mime))
+        mime (get file-extensions->mime ext "application/octet-stream")
+        bytes (slurp path :encoding nil)]
     (str "data:" mime ";base64," (.encodeToString (Base64/getEncoder) bytes))))
 
-(defn process-attachment [{:keys [type url path]}]
+(defn- process-attachment [{:keys [type url path]}]
   (case type
     :image {:type "image_url"
             :image_url {:url (or url (file->data-url path))}}
-    (throw (ex-info "unsupported attachment" {}))))
+    (throw (ex-info "Unsupported attachment type" {:type type}))))
 
-(defn make-messages [prompt atts]
+(defn- make-messages [prompt attachments]
   [{:role "user"
     :content (into [{:type "text" :text prompt}]
-                   (map process-attachment atts))}])
+                   (map process-attachment (or attachments [])))}])
 
-(defn schema->tool-spec [schema]
+(defn- schema->tool-spec [schema]
   (let [{:keys [name description]} (m/properties schema)]
     {:type "function"
      :function {:name (or name "function")
                 :description (or description "")
                 :parameters (sch/malli->json-schema schema)}}))
 
-(defn build-body [model prompt {:keys [attachments history schema] :as opts}]
-  (let [msg (make-messages prompt attachments)
-        tools (when schema
-                (let [spec (schema->tool-spec schema)]
-                  {:tools [spec] :tool_choice "required"}))]
+;; Simplified body building with cleaner parameter mapping
+(defn- build-body [model prompt {:keys [attachments history schema] :as opts}]
+  (let [messages (make-messages prompt attachments)
+        tools (when schema {:tools [(schema->tool-spec schema)]
+                           :tool_choice "required"})
+        ;; Parameter mapping - cleaner than multiple cond-> branches
+        param-map {:temperature     :temperature
+                   :top-p           :top_p
+                   :max-tokens      :max_tokens
+                   :frequency-penalty :frequency_penalty
+                   :presence-penalty  :presence_penalty
+                   :response-format   :response_format
+                   :seed              :seed}]
     (cond-> {:model model
              :stream true
              :stream_options {:include_usage true}
-             :messages (into (or history []) msg)}
-      (:temperature opts)        (assoc :temperature (:temperature opts))
-      (:top-p opts)              (assoc :top_p (:top-p opts))
-      (:max-tokens opts)         (assoc :max_tokens (:max-tokens opts))
-      (:frequency-penalty opts)  (assoc :frequency_penalty (:frequency-penalty opts))
-      (:presence-penalty opts)   (assoc :presence_penalty (:presence-penalty opts))
-      (:response-format opts)    (assoc :response_format (:response-format opts))
-      (:seed opts)               (assoc :seed (:seed opts))
-      tools                      (merge tools)
-      (:stop opts)               (assoc :stop
-                                        (let [s (:stop opts)]
-                                          (if (string? s) [s] s))))))
+             :messages (into (or history []) messages)}
+      tools (merge tools)
+      (:stop opts) (assoc :stop (let [s (:stop opts)]
+                                  (if (string? s) [s] s)))
+      ;; Apply parameter mappings
+      true (merge (into {} (for [[k v] param-map
+                                 :when (contains? opts k)]
+                             [v (get opts k)]))))))
 
-;; ───────── SSE Processing ──────────
+;; ───────── SSE Processing - Combined transducer ──────────
 
-(defn ^:private filter-choices-or-usage           ;; keep both deltas and usage
-  []
-  (filter #(or (:choices %) (:usage %))))
+(def ^:private openai-events-xf
+  (comp
+   ;; Filter for relevant data
+   (filter #(or (:choices %) (:usage %)))
+   ;; Transform to canonical events
+   (mapcat
+    (fn [m]
+      (if-let [u (:usage m)]
+        ;; Usage event
+        [{:type :usage
+          :prompt     (:prompt_tokens u)
+          :completion (:completion_tokens u)
+          :total      (:total_tokens u)}]
+        ;; Content/tool call events
+        (let [delta (get-in m [:choices 0 :delta])]
+          (cond-> []
+            (:content delta)
+            (conj {:type :content :content (:content delta)})
 
-(defn ^:private openai-json->events []            ;; canonical event maps
-  (mapcat
-   (fn [m]
-     (if-let [u (:usage m)]
-       [{:type :usage
-         :prompt     (:prompt_tokens u)
-         :completion (:completion_tokens u)
-         :total      (:total_tokens u)}]
+            (:tool_calls delta)
+            (into (map (fn [{:keys [index id function]}]
+                         {:type :tool-call-delta
+                          :index index
+                          :id    id
+                          :name  (:name function)
+                          :arguments (:arguments function)}))
+                  (:tool_calls delta)))))))))
 
-       (let [delta (get-in m [:choices 0 :delta])]
-         (cond-> []
-           (:content delta)
-           (conj {:type :content :content (:content delta)})
-
-           (:tool_calls delta)
-           (into (map (fn [{:keys [index id function]}]
-                        {:type :tool-call-delta
-                         :index index
-                         :id    id
-                         :name  (:name function)
-                         :arguments (:arguments function)}))
-                 (:tool_calls delta))))))))
-
-;; ────────── Backend Registration ──────────
-
-;; Usage
-
+;; ────────── Backend Implementation ──────────
 
 (defrecord OpenAIBackend []
   proto/LLMBackend
+
   (-raw-stream [_ model prompt opts]
-    (let [api-key (or (:api-key opts) (System/getenv "OPENAI_API_KEY"))
+    (let [api-key (or (:api-key opts)
+                      (System/getenv "OPENAI_API_KEY")
+                      (throw (ex-info "OpenAI API key not found"
+                                     {:env-var "OPENAI_API_KEY"})))
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type"  "application/json"
                    "Accept"        "text/event-stream"}
           body-str (json/encode (build-body model prompt opts))
           out-ch   (chan 64)]
+
       (net/post-stream
        api-url headers body-str
        (fn [{:keys [status body error]}]
@@ -135,13 +136,14 @@
          (if (= 200 status)
            (pipeline 32
                      out-ch
-                     (comp sse/sse->json-xf
-                           (filter-choices-or-usage)
-                           (openai-json->events))
+                     (comp sse/sse->json-xf openai-events-xf)
                      (sse/input-stream->line-chan body))
-           (throw (ex-info "HTTP error" {:status status})))))
-      {:channel out-ch})))
+           (throw (ex-info "OpenAI API error" {:status status})))))
+      {:channel out-ch}))
 
-;; ——— register for user code ——————————————
+  (-opts-schema [_ _]
+    openai-opts-schema))
+
+;; ——— Registration ——————————————
 (defn register-backend! []
   (reg/register-backend! :openai (->OpenAIBackend)))

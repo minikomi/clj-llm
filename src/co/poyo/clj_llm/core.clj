@@ -3,7 +3,6 @@
    [co.poyo.clj-llm.registry :as reg]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.schema :as sch]
-   [co.poyo.clj-llm.sse :as sse]
    [cheshire.core :as json]
    [clojure.core.async :as a :refer [<!! mult tap chan go-loop <!]]
    [malli.core :as m]
@@ -27,12 +26,10 @@
    [:seed              {:optional true} int?]
    [:output-schema     {:optional true} :any]
    [:on-complete       {:optional true} fn?]
-   [:validate-output?     {:optional true} boolean?]
+   [:validate-output?  {:optional true} boolean?]
    [:history           {:optional true} [:sequential [:map
                                                       [:role [:enum :user :assistant :system]]
                                                       [:content string?]]]]])
-
-(def ^:private reserved-keys #{:on-complete})
 
 (defn- validate-opts [impl model-id opts]
   (let [extra   (proto/-opts-schema impl model-id)
@@ -50,30 +47,19 @@
 ;; Internal helpers
 ;; ──────────────────────────────────────────────────────────────
 
-(defn- drain! [ch]
-  (loop [acc []]
-    (if-let [v (<!! ch)]
-      (recur (conj acc v))
-      acc)))
-
 (defn- split-model-key [kw]
   (when-not (keyword? kw)
     (throw (ex-info "Model id must be a qualified keyword" {:value kw})))
   [(keyword (namespace kw)) (name kw)])
 
-(defn- collect-events-from-channel [ch]
-  (loop [acc []]
-    (if-let [ev (<!! ch)]
-      (recur (conj acc ev))
-      acc)))                                   ; channel closed
-
-(defn- concat-content [events]                ;; NEW
+;; Event processing helpers - consolidated and reused
+(defn- concat-content [events]
   (apply str (keep #(when (= :content (:type %)) (:content %)) events)))
 
-(defn- last-usage [events]                    ;; NEW
+(defn- last-usage [events]
   (some #(when (= :usage (:type %)) %) (reverse events)))
 
-(defn- collect-tool-calls [events]            ;; REWRITE for :tool-call-delta
+(defn- collect-tool-calls [events]
   (->> events
        (filter #(= :tool-call-delta (:type %)))
        (group-by :index)
@@ -83,7 +69,7 @@
                  {:index idx
                   :id    id
                   :name  name
-                  :args-edn (cheshire.core/parse-string arg-str true)})))))
+                  :args-edn (json/parse-string arg-str true)})))))
 
 ;; ───────── public API ─────────
 (defn prompt
@@ -110,61 +96,41 @@
            (do (swap! events* conj ev) (recur))
            (deliver finished? true)))                  ; upstream closed
 
-       ;; -------- convenience accessors ----------
+       ;; -------- convenience accessors - using shared helpers ----------
        (letfn [(wait-events [] @finished? @events*)]   ; blocks until done
 
-         {:chunks chunks                ; real-time stream
+         {:chunks chunks                               ; real-time stream
           :json   (delay (wait-events))
-          :text   (delay (apply str (keep #(when (= :content (:type %))
-                                             (:content %))
-                                          (wait-events))))
-          :usage  (delay (some #(when (= :usage (:type %)) %) (reverse (wait-events))))
-          :tool-calls
-          (delay
-            (->> (wait-events)
-                 (filter #(= :tool-call-delta (:type %)))
-                 (group-by :index)
-                 (mapv (fn [[i chunks]]
-                         (let [{:keys [id name]} (first chunks)
-                               args-json (apply str (map :arguments chunks))]
-                           {:index i
-                            :id id
-                            :name name
-                            :args-edn (json/parse-string args-json true)})))))
+          :text   (delay (concat-content (wait-events)))
+          :usage  (delay (last-usage (wait-events)))
+          :tool-calls (delay (collect-tool-calls (wait-events)))
           :structured-output
           ;; just the first tool call
           (delay
             (let [events (wait-events)
                   tool-calls (collect-tool-calls events)
                   args-edn (when (seq tool-calls)
-                             (-> tool-calls
-                                 first
-                                 :args-edn))]
+                             (-> tool-calls first :args-edn))]
               (if (:validate-output? opts)
                 (or (m/explain (:schema opts) args-edn) args-edn)
                 args-edn)))})))))
 
 ;; ──────────────────────────────────────────────────────────────
-;; Conversational helper
+;; Conversational helper - simplified callback handling
 ;; ──────────────────────────────────────────────────────────────
 
 (defn conversation [model]
-  (let [history (atom [])
-        on-complete-fn (fn [resp]
-                         (swap! history conj
-                                {:role :assistant
-                                 :content @(:text resp)}))]
+  (let [history (atom [])]
     {:prompt (fn [content & [opts]]
-               (let [prev-on-complete (:on-complete opts)
-                     internal-opts {:history @history
-                                    :on-complete (do
-                                                   (swap! history conj {:role :user :content content})
-                                                   on-complete-fn
-                                                   (when prev-on-complete
-                                                     (fn [resp]
-                                                       (prev-on-complete resp))))}
-                     resp (prompt model content
-                                  (merge opts internal-opts))]
+               (swap! history conj {:role :user :content content})
+               (let [resp (prompt model content (merge opts {:history @history}))
+                     prev-on-complete (:on-complete opts)]
+                 ;; Handle completion callback
+                 (when-let [on-complete-fn (or prev-on-complete identity)]
+                   (future
+                     (let [assistant-msg {:role :assistant :content @(:text resp)}]
+                       (swap! history conj assistant-msg)
+                       (when prev-on-complete (on-complete-fn resp)))))
                  resp))
      :history history
      :clear (fn [] (reset! history []))}))
