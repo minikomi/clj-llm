@@ -74,54 +74,57 @@
 ;; ───────── public API ─────────
 (defn prompt
   ([model prompt-str] (prompt model prompt-str {}))
-  ([model prompt-str opts]
-   ;; 1. obtain backend stream
-   (let [[bk model-id] (split-model-key model)
-         backend       (reg/fetch-backend bk)
-         {:keys [channel]} (proto/-raw-stream backend model-id prompt-str opts)]
+  ([model prompt-str {:keys [schema validate-output?] :as opts}]
+   ;; ---------- backend stream ----------
+   (let [[bk mid] (split-model-key model)
+         backend  (reg/fetch-backend bk)
+         {:keys [channel]} (proto/-raw-stream backend mid prompt-str opts)]
 
-     ;; 2. tee the stream
+     (when (not backend)
+         (throw (ex-info "No backend found for model" {:model model})))
+
+     ;; ---------- wiring ----------
      (let [m         (mult channel)
-           chunks    (chan (a/dropping-buffer 128))                        ; user-facing
-           coll      (chan 128)                       ; accumulator tap
-           events*   (atom [])                        ; live cache
-           finished? (promise)]
+      chunks    (chan (a/dropping-buffer 256))
+      coll      (chan 256)
+      events*   (atom [])
+      done!     (promise)]
 
        (tap m chunks)
        (tap m coll)
-
-       ;; 3. accumulate on a real thread (non-blocking)
+       ;; background processor
        (a/thread
          (loop []
            (if-some [ev (a/<!! coll)]
              (do (swap! events* conj ev) (recur))
-             (deliver finished? true))))             ; coll closed → done
+             (deliver done! true))))
 
-       ;; 4. helpers
-       (defn wait-events [] @finished? @events*)     ; blocks until done
+       ;; ---------- helper fns ----------
+       (defn full-events [] @done! @events*)           ; wait till EOF
+       (defn concat-text [evs] (apply str (keep #(when (= :content (:type %)) (:content %)) evs)))
 
-       ;; 5. return result map
-       {:chunks chunks                               ; real-time events
+       ;; ---------- return map ----------
+       {:chunks chunks
 
-        :json   (delay (wait-events))
+ ;; non-blocking preview
+ :text-live (delay (concat-content @events*))
 
-        :text   (delay (concat-content (wait-events)))
-
-        :usage  (delay (last-usage (wait-events)))
-
-        :tool-calls (delay (collect-tool-calls (wait-events)))
-
-        :structured-output
-        (delay
-          (let [tc (collect-tool-calls (wait-events))
-                args (some-> tc first :args-edn)]
-            (if (:validate-output? opts)
-              (if-let [sch (:schema opts)]
-                (or (m/validate sch args)            ; true/false
-                    (throw (ex-info "schema mismatch"
-                                    {:errors (m/explain sch args)})))
-                (throw (ex-info "No :schema supplied" {})))
-              args)))}))))
+ ;; blocking, waits for EOF
+ :json   (delay (full-events))
+ :text   (delay (concat-content (full-events)))   ; <— was @events*
+ :usage  (delay (last-usage    (full-events)))
+ :tool-calls (delay (collect-tool-calls (full-events)))
+ :structured-output
+ (delay
+   (when-not schema
+     (throw (ex-info "Structured output requested but :schema not supplied" {})))
+   (let [tc   (collect-tool-calls (full-events))
+         args (some-> tc first :args-edn)]
+     (when (nil? args)
+       (throw (ex-info "Model produced no tool call" {})))
+     (if validate-output?
+       (do (m/validate schema args) args)
+       args)))}))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper - simplified callback handling

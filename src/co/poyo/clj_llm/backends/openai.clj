@@ -79,7 +79,7 @@
 (defn- build-body [model prompt {:keys [attachments history schema system-prompt] :as opts}]
   (let [messages (make-messages prompt attachments system-prompt)
         tools (when schema {:tools [(schema->tool-spec schema)]
-                           :tool_choice "required"})
+                            :tool_choice "required"})
         ;; Parameter mapping - cleaner than multiple cond-> branches
         param-map {:temperature     :temperature
                    :top-p           :top_p

@@ -7,6 +7,11 @@
 
 (defn- extract-properties [map-schema]
   (let [compiled-map-schema (if (m/schema? map-schema) map-schema (m/schema map-schema))
+        _ (when (not= :map (m/type compiled-map-schema))
+            (throw (ex-info "Tool-call schema must be a Malli [:map …] schema"
+                            {:expected '[:map ...]
+                             :actual   (m/type compiled-map-schema)
+                             :schema   (m/form compiled-map-schema)})))
         children (m/children compiled-map-schema)
         properties (reduce
                     (fn [acc child]
