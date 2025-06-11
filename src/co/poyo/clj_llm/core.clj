@@ -5,7 +5,7 @@
    [co.poyo.clj-llm.schema :as sch]
    [co.poyo.clj-llm.sse :as sse]
    [cheshire.core :as json]
-   [clojure.core.async :as async :refer [<!! close!]]
+   [clojure.core.async :as a :refer [<!! mult tap chan go-loop <!]]
    [malli.core :as m]
    [malli.util :as mu]
    [malli.error :as me]
@@ -27,6 +27,7 @@
    [:seed              {:optional true} int?]
    [:output-schema     {:optional true} :any]
    [:on-complete       {:optional true} fn?]
+   [:validate-output?     {:optional true} boolean?]
    [:history           {:optional true} [:sequential [:map
                                                      [:role [:enum :user :assistant :system]]
                                                      [:content string?]]]]])
@@ -49,89 +50,110 @@
 ;; Internal helpers
 ;; ──────────────────────────────────────────────────────────────
 
+(defn- drain! [ch]
+  (loop [acc []]
+    (if-let [v (<!! ch)]
+      (recur (conj acc v))
+      acc)))
+
 (defn- split-model-key [kw]
   (when-not (keyword? kw)
     (throw (ex-info "Model id must be a qualified keyword" {:value kw})))
   [(keyword (namespace kw)) (name kw)])
 
-(defn- collect-events-from-channel
-  "Consume all events from channel and return vector"
-  [channel]
-  (loop [events []]
-    (if-let [event (<!! channel)]
-      (recur (conj events event))
-      events)))
-
-(defn- collect-content-from-channel
-  "Consume channel and concatenate content chunks"
-  [channel]
+(defn- collect-events-from-channel [ch]
   (loop [acc []]
-    (if-let [event (<!! channel)]
-      (if-let [content (get-in event [:choices 0 :delta :content])]
-        (recur (conj acc content))
-        (recur acc))
-      (apply str acc))))
+    (if-let [ev (<!! ch)]
+      (recur (conj acc ev))
+      acc)))                                   ; channel closed
 
+(defn- concat-content [events]                ;; NEW
+  (apply str (keep #(when (= :content (:type %)) (:content %)) events)))
 
-(defn- collect-tool-calls
-  "Return vector [{:index i :id … :name … :args-edn {...}} …] once stream done."
-  [events]
+(defn- last-usage [events]                    ;; NEW
+  (some #(when (= :usage (:type %)) %) (reverse events)))
+
+(defn- collect-tool-calls [events]            ;; REWRITE for :tool-call-delta
   (->> events
-       (mapcat #(get-in % [:choices 0 :delta :tool_calls]))
-       (reduce
-         (fn [m {:keys [index id function]}]
-           (update m index
-                   (fn [{:keys [id name json-str]}]
-                     {:id       (or id id)
-                      :name     (or name (:name function))
-                      :json-str (str (or json-str "") (:arguments function))})))
-         {})
-       (mapv (fn [[i {:keys [id name json-str]}]]
-               {:index i
-                :id id
-                :name name
-                :args-edn (cheshire.core/parse-string json-str true)}))))
+       (filter #(= :tool-call-delta (:type %)))
+       (group-by :index)
+       (mapv (fn [[idx chunks]]
+               (let [{:keys [id name]} (first chunks)
+                     arg-str (apply str (map :arguments chunks))]
+                 {:index idx
+                  :id    id
+                  :name  name
+                  :args-edn (cheshire.core/parse-string arg-str true)})))))
 
-;; ──────────────────────────────────────────────────────────────
-;; Public API – always-streaming
-;; ──────────────────────────────────────────────────────────────
-
+;; ───────── public API ─────────
 (defn prompt
   ([model prompt-str] (prompt model prompt-str {}))
   ([model prompt-str opts]
-   (let [[bk-key model-id] (split-model-key model)
-         backend (or (reg/fetch-backend bk-key) (throw (ex-info "backend not registered" {:backend bk-key})))
-         {:keys [channel metadata]} (proto/-raw-stream backend model-id prompt-str opts)
+   ;; fetch backend + channel
+   (let [[bk model-id] (split-model-key model)
+         backend       (reg/fetch-backend bk)
+         {:keys [channel]} (proto/-raw-stream backend model-id prompt-str opts)]
 
-         ;; Create shared state for collected events
-         events-atom (atom nil)
-         realize-fn (fn []
-                     (when (nil? @events-atom)
-                       (reset! events-atom (collect-events-from-channel channel)))
-                     @events-atom)]
+     ;; tee the stream
+     (let [m            (mult channel)
+           chunks       (chan 128)                      ; user-facing
+           tap-acc      (chan (a/sliding-buffer 128))
+           events*      (atom [])                      ; live accumulator
+           finished?    (promise)]
 
-     {:chunks channel ; Return channel directly for streaming
+       (tap m chunks)                                  ; live to caller
+       (tap m tap-acc)                                 ; internal tap
 
-      :text (delay
-             (let [events (realize-fn)]
-               (apply str (keep #(get-in % [:choices 0 :delta :content]) events))))
+       ;; accumulate asynchronously
+       (go-loop []
+         (if-some [ev (<! tap-acc)]
+           (do (swap! events* conj ev) (recur))
+           (deliver finished? true)))                  ; upstream closed
 
-      :usage (delay
-              (let [events (realize-fn)]
-                (some :usage (reverse events))))
+       ;; -------- convenience accessors ----------
+       (letfn [(wait-events [] @finished? @events*)]   ; blocks until done
 
-      :json (delay
-             (vec (realize-fn)))
-
-      :tool-calls (delay
-                   (collect-tool-calls (realize-fn)))
-
-      :structured-output
-      (delay
-        (let [events (realize-fn)]
-          (if-let [sch (:schema opts)]
-            (-> (collect-tool-calls events) first :arguments)
-            (throw (ex-info "No :schema supplied" {})))))})))
+         {:chunks chunks                ; real-time stream
+          :json   (delay (wait-events))
+          :text   (delay (apply str (keep #(when (= :content (:type %))
+                                             (:content %))
+                                          (wait-events))))
+          :usage  (delay (some #(when (= :usage (:type %)) %) (reverse (wait-events))))
+          :tool-calls
+          (delay
+            (->> (wait-events)
+                 (filter #(= :tool-call-delta (:type %)))
+                 (group-by :index)
+                 (mapv (fn [[i chunks]]
+                         (let [{:keys [id name]} (first chunks)
+                               args-json (apply str (map :arguments chunks))]
+                           {:index i
+                            :id id
+                            :name name
+                            :args-edn (json/parse-string args-json true)})))))
+          :structured-output
+          ;; just the first tool call
+            (delay
+                (let [events (wait-events)
+                    tool-calls (collect-tool-calls events)
+                      args-edn (when (seq tool-calls)
+                                (-> tool-calls
+                                    first
+                                    :args-edn))
+                      ]
+                  (when (:validate-output? opts)
+                    (let [schema (:schema opts)]
+                      (when schema
+                        (let [validation-result (m/validate schema args-edn)]
+                          (when-not validation-result
+                            (throw (ex-info "Function arguments did not match schema"
+                                            {:schema schema
+                                             :args args-edn
+                                             :errors (m/explain schema args-edn)}))))))
+                    )
+                    args-edn
+                ))
+          })))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper
