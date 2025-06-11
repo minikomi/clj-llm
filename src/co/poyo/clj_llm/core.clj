@@ -29,8 +29,8 @@
    [:on-complete       {:optional true} fn?]
    [:validate-output?     {:optional true} boolean?]
    [:history           {:optional true} [:sequential [:map
-                                                     [:role [:enum :user :assistant :system]]
-                                                     [:content string?]]]]])
+                                                      [:role [:enum :user :assistant :system]]
+                                                      [:content string?]]]]])
 
 (def ^:private reserved-keys #{:on-complete})
 
@@ -133,27 +133,16 @@
                             :args-edn (json/parse-string args-json true)})))))
           :structured-output
           ;; just the first tool call
-            (delay
-                (let [events (wait-events)
-                    tool-calls (collect-tool-calls events)
-                      args-edn (when (seq tool-calls)
-                                (-> tool-calls
-                                    first
-                                    :args-edn))
-                      ]
-                  (when (:validate-output? opts)
-                    (let [schema (:schema opts)]
-                      (when schema
-                        (let [validation-result (m/validate schema args-edn)]
-                          (when-not validation-result
-                            (throw (ex-info "Function arguments did not match schema"
-                                            {:schema schema
-                                             :args args-edn
-                                             :errors (m/explain schema args-edn)}))))))
-                    )
-                    args-edn
-                ))
-          })))))
+          (delay
+            (let [events (wait-events)
+                  tool-calls (collect-tool-calls events)
+                  args-edn (when (seq tool-calls)
+                             (-> tool-calls
+                                 first
+                                 :args-edn))]
+              (if (:validate-output? opts)
+                (or (m/explain (:schema opts) args-edn) args-edn)
+                args-edn)))})))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper
@@ -175,7 +164,7 @@
                                                      (fn [resp]
                                                        (prev-on-complete resp))))}
                      resp (prompt model content
-                                 (merge opts internal-opts))]
+                                  (merge opts internal-opts))]
                  resp))
      :history history
      :clear (fn [] (reset! history []))}))
