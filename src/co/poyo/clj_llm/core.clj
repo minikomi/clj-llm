@@ -75,45 +75,53 @@
 (defn prompt
   ([model prompt-str] (prompt model prompt-str {}))
   ([model prompt-str opts]
-   ;; fetch backend + channel
+   ;; 1. obtain backend stream
    (let [[bk model-id] (split-model-key model)
          backend       (reg/fetch-backend bk)
          {:keys [channel]} (proto/-raw-stream backend model-id prompt-str opts)]
 
-     ;; tee the stream
-     (let [m            (mult channel)
-           chunks       (chan 128)                      ; user-facing
-           tap-acc      (chan (a/sliding-buffer 128))
-           events*      (atom [])                      ; live accumulator
-           finished?    (promise)]
+     ;; 2. tee the stream
+     (let [m         (mult channel)
+           chunks    (chan (a/dropping-buffer 128))                        ; user-facing
+           coll      (chan 128)                       ; accumulator tap
+           events*   (atom [])                        ; live cache
+           finished? (promise)]
 
-       (tap m chunks)                                  ; live to caller
-       (tap m tap-acc)                                 ; internal tap
+       (tap m chunks)
+       (tap m coll)
 
-       ;; accumulate asynchronously
-       (go-loop []
-         (if-some [ev (<! tap-acc)]
-           (do (swap! events* conj ev) (recur))
-           (deliver finished? true)))                  ; upstream closed
+       ;; 3. accumulate on a real thread (non-blocking)
+       (a/thread
+         (loop []
+           (if-some [ev (a/<!! coll)]
+             (do (swap! events* conj ev) (recur))
+             (deliver finished? true))))             ; coll closed → done
 
-       ;; -------- convenience accessors - using shared helpers ----------
-       (letfn [(wait-events [] @finished? @events*)]   ; blocks until done
+       ;; 4. helpers
+       (defn wait-events [] @finished? @events*)     ; blocks until done
 
-         {:chunks chunks                               ; real-time stream
-          :json   (delay (wait-events))
-          :text   (delay (concat-content (wait-events)))
-          :usage  (delay (last-usage (wait-events)))
-          :tool-calls (delay (collect-tool-calls (wait-events)))
-          :structured-output
-          ;; just the first tool call
-          (delay
-            (let [events (wait-events)
-                  tool-calls (collect-tool-calls events)
-                  args-edn (when (seq tool-calls)
-                             (-> tool-calls first :args-edn))]
-              (if (:validate-output? opts)
-                (or (m/explain (:schema opts) args-edn) args-edn)
-                args-edn)))})))))
+       ;; 5. return result map
+       {:chunks chunks                               ; real-time events
+
+        :json   (delay (wait-events))
+
+        :text   (delay (concat-content (wait-events)))
+
+        :usage  (delay (last-usage (wait-events)))
+
+        :tool-calls (delay (collect-tool-calls (wait-events)))
+
+        :structured-output
+        (delay
+          (let [tc (collect-tool-calls (wait-events))
+                args (some-> tc first :args-edn)]
+            (if (:validate-output? opts)
+              (if-let [sch (:schema opts)]
+                (or (m/validate sch args)            ; true/false
+                    (throw (ex-info "schema mismatch"
+                                    {:errors (m/explain sch args)})))
+                (throw (ex-info "No :schema supplied" {})))
+              args)))}))))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Conversational helper - simplified callback handling

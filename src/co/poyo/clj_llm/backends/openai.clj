@@ -19,10 +19,11 @@
    [:response-format {:optional true} [:enum "text" "json"]]
    [:attachments {:optional true}
     [:sequential
-     [:map [:type keyword?]
+     [:map
+      [:type keyword?]
       [:url  {:optional true} string?]
       [:path {:optional true} string?]
-      [:data {:optional true} any?]]]]])
+      ]]]])
 
 ;; ────────── message processing ──────────
 
@@ -35,21 +36,37 @@
    ".webp" "image/webp"})
 
 (defn- file->data-url [path]
-  (let [ext (some #(when (str/ends-with? path %) %) (keys file-extensions->mime))
+  (let [ext  (some #(when (str/ends-with? path %) %) (keys file-extensions->mime))
         mime (get file-extensions->mime ext "application/octet-stream")
-        bytes (slurp path :encoding nil)]
+        bytes (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get path (make-array String 0)))]
     (str "data:" mime ";base64," (.encodeToString (Base64/getEncoder) bytes))))
 
-(defn- process-attachment [{:keys [type url path]}]
+(defn- data->data-url [{:keys [bytes format width height]}]
+    (let [mime (or (#{"image/png" "image/jpeg" "image/gif" "image/webp"} format)
+                     "application/octet-stream")
+            base64-bytes (.encodeToString (Base64/getEncoder) bytes)]
+        (str "data:" mime ";base64," base64-bytes)))
+
+(defn- process-attachment [{:keys [type url path data]}]
   (case type
     :image {:type "image_url"
-            :image_url {:url (or url (file->data-url path))}}
+            :image_url {:url (cond
+                                    url url
+                                    path (file->data-url path)
+                                    data (data->data-url data))}}
     (throw (ex-info "Unsupported attachment type" {:type type}))))
 
-(defn- make-messages [prompt attachments]
-  [{:role "user"
-    :content (into [{:type "text" :text prompt}]
-                   (map process-attachment (or attachments [])))}])
+(defn- make-messages [prompt attachments system-prompt]
+  (let [content
+        (if (seq attachments)
+          ;; hybrid array: first text, then images
+          (into [{:type "text" :text prompt}]
+                (map process-attachment attachments))
+          ;; simple string when no images
+          prompt)]
+    (cond-> []
+      system-prompt (conj {:role "system" :content system-prompt})
+      true          (conj {:role "user"   :content content}))))
 
 (defn- schema->tool-spec [schema]
   (let [{:keys [name description]} (m/properties schema)]
@@ -59,8 +76,8 @@
                 :parameters (sch/malli->json-schema schema)}}))
 
 ;; Simplified body building with cleaner parameter mapping
-(defn- build-body [model prompt {:keys [attachments history schema] :as opts}]
-  (let [messages (make-messages prompt attachments)
+(defn- build-body [model prompt {:keys [attachments history schema system-prompt] :as opts}]
+  (let [messages (make-messages prompt attachments system-prompt)
         tools (when schema {:tools [(schema->tool-spec schema)]
                            :tool_choice "required"})
         ;; Parameter mapping - cleaner than multiple cond-> branches
