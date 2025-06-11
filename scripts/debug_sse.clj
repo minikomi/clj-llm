@@ -8,7 +8,7 @@
          '[clojure.core.async   :refer [<!!]]
          '[clojure.edn          :as edn])
 
-(openai/register)
+(openai/register-backend!)
 
 (defn usage []
   (println "usage: openai_stream.clj \"your prompt here\"")
