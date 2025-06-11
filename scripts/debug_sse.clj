@@ -19,10 +19,37 @@
   (binding [*out* *err*]
     (println "OPENAI_API_KEY env var is missing") (usage)))
 
-;; ─────────── run ───────────
-(let [{:keys [chunks]} (llm/prompt :openai/gpt-4.1-nano (first *command-line-args*)
-                                    )]
-  (loop []
-    (when-some [ev (<!! chunks)]   ; nil ⇒ channel closed
-      (prn ev) (flush)
-      (recur))))
+;; ─────────── run with structured output ───────────
+;; using malli schema
+
+(defn run-with-structured-output [prompt schema]
+  (let [model-id :openai/gpt-4.1-turbo
+        opts {:schema schema}
+        resp (llm/prompt model-id prompt opts)]
+    (println "Structured output:" (edn/read-string @(:structured-output resp)))))
+
+(require '[malli.core :as m])
+
+
+(def weather-schema
+    [:and
+     {:name "weather-fn"
+      :description "gets the weather for a given location"}
+     [:map
+      [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
+      [:unit {:description "Temperature unit (celsius or fahrenheit)"
+              :optional false}
+       [:enum "celsius" "fahrenheit"]]]])
+
+  (m/form (m/schema weather-schema))
+
+  (m/type [:map
+           [:location {:description "The LARGE containing city name, e.g. Tokyo, San Francisco"} :string]
+           [:unit {:description "Temperature unit (celsius or fahrenheit)"
+                   :optional false}
+            [:enum "celsius" "fahrenheit"]]])
+
+(prn @(:structured-output
+   (llm/prompt :openai/gpt-4.1-nano
+               "What's the weather like where The Eifel Tower is?"
+               {:schema weather-schema :validate-output? true})))
