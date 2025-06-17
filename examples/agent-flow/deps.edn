@@ -1,0 +1,17 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        org.clojure/core.async {:mvn/version "1.8.741"}
+        ;; Use the parent clj-llm as a local dependency
+        co.poyo/clj-llm {:local/root "../.."}
+        ;; Additional deps for agent functionality
+        metosin/malli {:mvn/version "0.17.0"}
+        cheshire/cheshire {:mvn/version "6.0.0"}}
+
+ :aliases
+ {:run {:main-opts ["-m" "agent.main"]}
+  :repl {:extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}}
+         :main-opts ["-m" "nrepl.cmdline"]}
+  :weather {:main-opts ["-m" "agent.examples.weather"]}
+  :research {:main-opts ["-m" "agent.examples.research"]}
+  :chat {:main-opts ["-m" "agent.examples.chat"]}
+  :coder {:main-opts ["-m" "agent.examples.coder"]}}}
