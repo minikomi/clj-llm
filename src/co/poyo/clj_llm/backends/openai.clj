@@ -7,6 +7,7 @@
             [clojure.string :as str]
             [co.poyo.clj-llm.net :as net]
             [co.poyo.clj-llm.sse :as sse]
+            [co.poyo.clj-llm.schema :as schema]
             [co.poyo.clj-llm.protocol :as proto]
             [co.poyo.clj-llm.errors :as errors]))
 
@@ -94,6 +95,14 @@
       ;; Content chunk
       (get-in parsed [:choices 0 :delta :content])
       [{:type :content :content (get-in parsed [:choices 0 :delta :content])}]
+
+      ;; Tool call chunk
+      (get-in parsed [:choices 0 :delta :tool_calls])
+      (let [tool-calls (get-in parsed [:choices 0 :delta :tool_calls])
+            tool-call (first tool-calls)
+            function-args (get-in tool-call [:function :arguments])]
+        (when function-args
+          [{:type :content :content function-args}]))
 
       ;; Usage information (comes at the end for some providers)
       (:usage parsed)
