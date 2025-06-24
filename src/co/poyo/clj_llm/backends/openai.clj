@@ -44,8 +44,12 @@
 
 (defn- build-body
   "Build OpenAI API request body"
-  [model prompt {:keys [schema system-prompt] :as opts}]
-  (let [messages (make-messages prompt system-prompt)
+  [model messages-or-prompt {:keys [schema system-prompt messages] :as opts}]
+  (let [final-messages (if messages
+                         ;; Use provided messages array directly
+                         (mapv format-message messages)
+                         ;; Build from prompt + system prompt
+                         (make-messages messages-or-prompt system-prompt))
         tools (when schema {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
                             :tool_choice "required"})
         ;; Parameter mapping
@@ -59,7 +63,7 @@
     (cond-> {:model model
              :stream true
              :stream_options {:include_usage true}
-             :messages messages}
+             :messages final-messages}
       tools (merge tools)
       (:stop opts) (assoc :stop (let [s (:stop opts)]
                                   (if (string? s) [s] s)))
@@ -159,9 +163,8 @@
         url (str api-base "/chat/completions")
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
-        ;; Convert messages back to prompt for build-body
-        prompt (when (= 1 (count messages)) (:content (first messages)))
-        body (json/generate-string (build-body model prompt opts))]
+        ;; Pass messages directly to build-body
+        body (json/generate-string (build-body model nil (assoc opts :messages messages)))]
 
     ;; Make streaming request
     (net/post-stream
