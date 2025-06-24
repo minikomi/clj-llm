@@ -34,19 +34,39 @@
   [{:keys [role content] :as msg}]
   {:role (name role)
    :content content})
+(defn- make-messages
+  "Create messages array with optional system prompt"
+  [prompt system-prompt]
+  (cond-> []
+    system-prompt (conj {:role "system" :content system-prompt})
+    prompt (conj {:role "user" :content prompt})))
 
-(defn- build-request-body
+(defn- build-body
   "Build OpenAI API request body"
-  [model messages {:keys [temperature max-tokens stop seed] :as opts}]
-  (cond-> {:model model
-           :messages (mapv format-message messages)
-           :stream true}
-    temperature (assoc :temperature temperature)
-    max-tokens (assoc :max_tokens max-tokens)
-    stop (assoc :stop stop)
-    seed (assoc :seed seed)
-    ;; Add structured output via response_format if schema provided
-    (:schema opts) (assoc :response_format {:type "json_object"})))
+  [model prompt {:keys [schema system-prompt] :as opts}]
+  (let [messages (make-messages prompt system-prompt)
+        tools (when schema {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
+                            :tool_choice "required"})
+        ;; Parameter mapping
+        param-map {:temperature     :temperature
+                   :top-p           :top_p
+                   :max-tokens      :max_tokens
+                   :frequency-penalty :frequency_penalty
+                   :presence-penalty  :presence_penalty
+                   :response-format   :response_format
+                   :seed              :seed}]
+    (cond-> {:model model
+             :stream true
+             :stream_options {:include_usage true}
+             :messages messages}
+      tools (merge tools)
+      (:stop opts) (assoc :stop (let [s (:stop opts)]
+                                  (if (string? s) [s] s)))
+      ;; Apply parameter mappings
+      true (merge (into {} (for [[k v] param-map
+                                 :when (contains? opts k)]
+                             [v (get opts k)]))))))
+
 
 ;; ──────────────────────────────────────────────────────────────
 ;; Response Parsing  
@@ -130,7 +150,9 @@
         url (str api-base "/chat/completions")
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
-        body (json/generate-string (build-request-body model messages opts))]
+        ;; Convert messages back to prompt for build-body
+        prompt (when (= 1 (count messages)) (:content (first messages)))
+        body (json/generate-string (build-body model prompt opts))]
 
     ;; Make streaming request
     (net/post-stream
