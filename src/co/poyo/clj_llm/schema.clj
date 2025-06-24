@@ -36,50 +36,57 @@
       properties)))
 
 (defn malli->json-schema
-  [schema]
-  (if-not schema
-    {:type "null"}
-    (let [compiled-schema (m/schema schema)
-          compiled-schema (if (m/properties compiled-schema) (nth (m/form compiled-schema) 2) compiled-schema)
-          schema-type (when compiled-schema (m/type compiled-schema))
-          description (when compiled-schema (get (m/properties compiled-schema) :description ""))
-          base-schema (cond-> {} (not (str/blank? description)) (assoc :description description))]
-      (case schema-type
-        :string (assoc base-schema :type "string")
-        :int (assoc base-schema :type "integer")
-        :double (assoc base-schema :type "number")
-        :boolean (assoc base-schema :type "boolean")
-        :any (assoc base-schema :type "object")
-        :nil (assoc base-schema :type "null")
+  ([schema] (malli->json-schema schema 0))
+  ([schema depth]
+   (if-not schema
+     {:type "null"}
+     (let [compiled-schema (m/schema schema)
+           schema-type (when compiled-schema (m/type compiled-schema))
+           description (when compiled-schema (get (m/properties compiled-schema) :name ""))
+           description (when compiled-schema (get (m/properties compiled-schema) :description ""))
+           base-schema (cond-> {} (not (str/blank? description)) (assoc :description description))]
+       (case schema-type
+         :string (assoc base-schema :type "string")
+         :int (assoc base-schema :type "integer")
+         :double (assoc base-schema :type "number")
+         :boolean (assoc base-schema :type "boolean")
+         :any (assoc base-schema :type "object")
+         :nil (assoc base-schema :type "null")
 
-        (:vector :sequential)
-        (let [items-schema (first (m/children compiled-schema))]
-          (assoc base-schema :type "array" :items (malli->json-schema (m/form items-schema))))
+         (:vector :sequential)
+         (let [items-schema (first (m/children compiled-schema))]
+           (assoc base-schema :type "array" :items (malli->json-schema (m/form items-schema) (inc depth))))
 
-        :tuple
-        (let [item-schemas (m/children compiled-schema)]
-          (assoc base-schema :type "array" :items (mapv #(malli->json-schema (m/form %)) item-schemas)
-                 :minItems (count item-schemas) :maxItems (count item-schemas)))
+         :tuple
+         (let [item-schemas (m/children compiled-schema)]
+           (assoc base-schema :type "array" :items (mapv #(malli->json-schema (m/form %) (inc depth)) item-schemas)
+                  :minItems (count item-schemas) :maxItems (count item-schemas)))
+         :map
+         (let [properties (m/properties compiled-schema)
+               base-map (merge base-schema {:type "object"} (extract-properties compiled-schema))]
+           (if (zero? depth)
+             {:type "function"
+              :function {:name (:name properties "function")
+                         :description (:description properties "")
+                         :parameters base-map}}
+             base-map))
 
-        :map
-        (merge base-schema {:type "object"} (extract-properties compiled-schema))
+         :enum
+         (let [values (m/children compiled-schema)]
+           (assoc base-schema :type (cond (every? string? values) "string" (every? number? values) "number" :else "string")
+                  :enum values))
 
-        :enum
-        (let [values (m/children compiled-schema)]
-          (assoc base-schema :type (cond (every? string? values) "string" (every? number? values) "number" :else "string")
-                 :enum values))
+         (:> :>= :< :<= := :not=)
+         (malli->json-schema (m/form (first (m/children compiled-schema))) (inc depth))
 
-        (:> :>= :< :<= := :not=)
-        (malli->json-schema (m/form (first (m/children compiled-schema))))
+         :re
+         (let [pattern (first (m/children compiled-schema))]
+           (assoc base-schema :type "string" :pattern (str pattern)))
 
-        :re
-        (let [pattern (first (m/children compiled-schema))]
-          (assoc base-schema :type "string" :pattern (str pattern)))
+         :maybe (malli->json-schema (m/form (first (m/children compiled-schema)))
+                                    (inc depth))
 
-        :maybe (malli->json-schema (m/form (first (m/children compiled-schema))))
-
-        (assoc base-schema :type "object")))))
-
+         (assoc base-schema :type "object"))))))
 
 ;; sometimes we have this kind of abstract function
 ;; (meta f)
