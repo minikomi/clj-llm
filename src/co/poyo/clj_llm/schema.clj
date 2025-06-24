@@ -5,6 +5,15 @@
 
 (declare malli->json-schema)
 
+(defn- auto-generate-function-info
+  "Auto-generate function name and description from schema properties"
+  [compiled-schema]
+  (let [children (m/children compiled-schema)
+        field-names (map (comp name first) (filter vector? children))
+        name (str "extract_" (clojure.string/join "_" field-names))
+        description (str "Extract " (clojure.string/join ", " field-names) " from input")]
+    {:name name :description description}))
+
 (defn- extract-properties [map-schema]
   (let [compiled-map-schema (if (m/schema? map-schema) map-schema (m/schema map-schema))
         _ (when (not= :map (m/type compiled-map-schema))
@@ -65,10 +74,13 @@
          (let [properties (m/properties compiled-schema)
                base-map (merge base-schema {:type "object"} (extract-properties compiled-schema))]
            (if (zero? depth)
-             {:type "function"
-              :function {:name (:name properties "function")
-                         :description (:description properties "")
-                         :parameters base-map}}
+             (let [auto-info (auto-generate-function-info compiled-schema)
+                   name (:name properties (:name auto-info))
+                   description (:description properties (:description auto-info))]
+               {:type "function"
+                :function {:name name
+                           :description description
+                           :parameters base-map}})
              base-map))
 
          :enum
