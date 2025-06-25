@@ -2,7 +2,6 @@
   "REPL-friendly commands for testing all features of clj-llm"
   (:require [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.backends.openai :as openai]
-            [co.poyo.clj-llm.backends.anthropic :as anthropic]
             [co.poyo.clj-llm.errors :as errors]
             [clojure.core.async :refer [<!!]]
             [clojure.pprint :as pp]))
@@ -14,27 +13,14 @@
   
   ;; OpenAI backend
   (def openai-backend
-    (openai/backend {:api-key-env "OPENAI_API_KEY"}))
+    (openai/backend))
   
-  ;; Anthropic backend (Claude)
-  (def anthropic-backend
-    (anthropic/backend {:api-key-env "ANTHROPIC_API_KEY"}))
-  
-  ;; OpenRouter backend (access to many models)
-  (def openrouter-backend
-    (openai/openrouter {:api-key-env "OPENROUTER_API_KEY"}))
-  
-  ;; Local model (e.g., Ollama)
-  (def local-backend
-    (openai/local {:api-base "http://localhost:11434/v1"
-                   :default-model "llama2"}))
-
   ;; ==========================================
   ;; BASIC TEXT GENERATION
   ;; ==========================================
   
   ;; Simple text generation
-  (llm/generate openai-backend "What is 2+2?")
+  @(:text (llm/prompt openai-backend "What is 2+2?"))
   
   ;; With temperature control
   (llm/generate openai-backend
@@ -44,13 +30,13 @@
   ;; With specific model
   (llm/generate openai-backend
                 "Explain quantum computing"
-                {:model "gpt-4o"
+                {:model "gpt-4.1-nano"
                  :max-tokens 200})
   
   ;; With system prompt
   (llm/generate openai-backend
-                "How do I make coffee?"
-                {:system-prompt "You are a professional barista with 20 years experience"})
+                "How do I make a flat white?"
+                {:system-prompt "You are a cat pretending to be a professional barista but failing"})
 
   ;; ==========================================
   ;; STRUCTURED OUTPUT WITH MALLI SCHEMAS
@@ -63,9 +49,7 @@
      [:age pos-int?]
      [:occupation :string]])
   
-  (llm/generate openai-backend
-                "Extract: Marie Curie was a 66 year old physicist"
-                {:schema person-schema})
+  (llm/structured openai-backend "Extract: Marie Curie was a 66 year old physicist" person-schema)
   
   ;; Complex nested schema
   (def company-schema

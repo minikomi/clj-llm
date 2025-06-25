@@ -90,131 +90,6 @@
 ;; Public API
 ;; ──────────────────────────────────────────────────────────────
 
-(defn generate
-  "Generate text or structured data from a prompt.
-   
-   Args:
-     provider - LLM provider instance (created via provider-specific backend function)
-     prompt   - String prompt or nil if messages provided in opts
-     opts     - Optional map with:
-       :model          - Override provider's default model
-       :temperature    - Control randomness (0.0-2.0)
-       :max-tokens     - Maximum response length
-       :schema         - Malli schema for structured output
-       :system-prompt  - System message to prepend
-       :messages       - Full messages array (overrides prompt)
-       
-   Returns:
-     String of generated text, or structured data if :schema provided
-     
-   Examples:
-     (generate openai \"Hello\")
-     ;=> \"Hello! How can I help you today?\"
-     
-     (generate openai \"Extract name\" {:schema [:map [:name :string]]})
-     ;=> {:name \"John Doe\"}"
-  ([provider prompt]
-   (generate provider prompt nil))
-  ([provider prompt opts]
-   (try
-     (let [model (or (:model opts) (:default-model provider))
-           messages (build-messages prompt opts)
-           events-chan (proto/request-stream provider model messages opts)
-           chunks (collect-chunks events-chan)
-           text (apply str chunks)]
-       (if (:schema opts)
-         (parse-structured-output text (:schema opts))
-         text))
-     (catch clojure.lang.ExceptionInfo e
-       ;; Re-throw our own errors with additional context
-       (throw (ex-info (ex-message e)
-                       (merge (ex-data e)
-                              {:provider provider
-                               :prompt prompt
-                               :opts opts})
-                       (ex-cause e))))
-     (catch Exception e
-       ;; Wrap unexpected errors
-       (throw (errors/unexpected-error
-               "Unexpected error during generation"
-               {:provider provider
-                :prompt prompt
-                :opts opts}
-               e))))))
-
-(defn stream
-  "Stream text chunks from a prompt.
-   
-   Args:
-     provider - LLM provider instance
-     prompt   - String prompt or nil if messages provided in opts  
-     opts     - Same options as generate
-     
-   Returns:
-     core.async channel yielding text chunks
-     
-   Example:
-     (let [ch (stream openai \"Tell me a story\")]
-       (loop []
-         (when-let [chunk (<!! ch)]
-           (print chunk)
-           (flush)
-           (recur))))"
-  ([provider prompt]
-   (stream provider prompt nil))
-  ([provider prompt opts]
-   (let [model (or (:model opts) (:default-model provider))
-         messages (build-messages prompt opts)
-         events-chan (proto/request-stream provider model messages opts)
-         chunks-chan (chan)]
-
-     ;; Transform events to just text chunks
-     (go-loop []
-       (if-let [event (<! events-chan)]
-         (do
-           (case (:type event)
-             :content (>! chunks-chan (:content event))
-             :error (do
-                      ;; Send error marker to channel
-                      (>! chunks-chan {:error (errors/stream-error
-                                               "Error during streaming"
-                                               :event event)})
-                      (a/close! chunks-chan))
-             :done (a/close! chunks-chan)
-             nil)
-           (recur))
-         (a/close! chunks-chan)))
-
-     chunks-chan)))
-
-(defn events
-  "Get raw events stream from a prompt.
-   
-   Args:
-     provider - LLM provider instance
-     prompt   - String prompt or nil if messages provided in opts
-     opts     - Same options as generate
-     
-   Returns:
-     core.async channel yielding event maps:
-     {:type :content :content \"...\"}
-     {:type :usage :prompt-tokens N :completion-tokens N}
-     {:type :error :error \"...\"}
-     {:type :done}
-     
-   Example:
-     (let [ch (events openai \"Hello\")]
-       (loop []
-         (when-let [event (<!! ch)]
-           (println \"Event:\" (:type event))
-           (recur))))"
-  ([provider prompt]
-   (events provider prompt nil))
-  ([provider prompt opts]
-   (let [model (or (:model opts) (:default-model provider))
-         messages (build-messages prompt opts)]
-     (proto/request-stream provider model messages opts))))
-
 (defn prompt
   "Make a request returning a rich response object.
    
@@ -310,23 +185,99 @@
                  (catch Exception e
                    (deliver structured-promise e)))))]
 
-     ;; Return rich response object
-     (reify
-       clojure.lang.IDeref
-       (deref [_]
-         (let [result @text-promise]
-           (if (instance? Exception result)
-             (throw result)
-             result)))
 
-       clojure.lang.ILookup
-       (valAt [_ k]
-         (case k
-           :text text-promise
-           :chunks text-chunks-chan
-           :events events-chan
-           :usage usage-promise
-           :structured structured-promise
-           nil))
-       (valAt [this k not-found]
-         (or (.valAt this k) not-found))))))
+
+     {
+      ;; streaming
+      :chunks text-chunks-chan
+      :events events-chan
+      ;; blocking
+      :text text-promise
+      :usage usage-promise
+      :structured structured-promise
+      }
+     )))
+
+;; Convinience
+
+(defn generate
+    "Generate text response from the LLM.
+
+     Args:
+         provider - LLM provider instance
+         prompt   - String prompt or nil if messages provided in opts
+         opts     - Options map (see `prompt` for details)
+
+     Returns:
+         Full text response as a string.
+
+     Example:
+         (generate openai \"Tell me a joke\") ;=> \"Why did the chicken cross the road? To get to the other side!\""
+    ([provider prompt-str]
+     (generate provider prompt-str nil))
+    ([provider prompt-str opts]
+     (let [response (prompt provider prompt-str opts)]
+         @(:text response))))
+
+(defn structured
+    "Get structured output from the LLM response.
+
+     Args:
+         provider - LLM provider instance
+         prompt   - String prompt or nil if messages provided in opts
+         opts     - Options map (see `prompt` for details)
+
+     Returns:
+            Parsed structured data as per provided schema.
+
+     Example:
+         (let [data (structured openai \"Extract data\" {:schema [:map [:name :string]]})]
+         @data) ;=> {:name \"John\"}"
+    ([provider prompt-str schema]
+     (structured provider prompt-str nil))
+    ([provider prompt-str schema opts]
+     @(:structured (prompt provider prompt-str (assoc opts :schema schema)))))
+
+(defn events
+  "Get raw events channel for monitoring LLM interactions.
+
+   Args:
+     provider - LLM provider instance
+     prompt   - String prompt or nil if messages provided in opts
+     opts     - Options map (see `prompt` for details)
+
+   Returns:
+     Channel of raw events with type :content, :usage, :error, etc.
+
+   Example:
+     (let [events (events openai \"Hello\")]
+       (go-loop []
+         (when-let [event (<! events)]
+           (println \"Event:\" (:type event))
+           (recur))))"
+  ([provider prompt-str]
+   (events provider prompt-str nil))
+  ([provider prompt-str opts]
+   (:events (prompt provider prompt-str opts))))
+
+(defn stream
+    "Stream text chunks from the LLM.
+
+     Args:
+         provider - LLM provider instance
+         prompt   - String prompt or nil if messages provided in opts
+         opts     - Options map (see `prompt` for details)
+
+     Returns:
+         Channel of text chunks as they are generated.
+
+     Example:
+         (let [chunks (stream openai \"Tell me a story\")]
+         (go-loop []
+             (when-let [chunk (<! chunks)]
+             (print chunk)
+             (recur))))"
+    ([provider prompt-str]
+     (stream provider prompt-str nil))
+    ([provider prompt-str opts]
+     (:chunks (prompt provider prompt-str opts))))

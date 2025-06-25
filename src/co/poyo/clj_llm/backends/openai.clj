@@ -52,6 +52,7 @@
                          (make-messages messages-or-prompt system-prompt))
         tools (when schema {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
                             :tool_choice "required"})
+        _ (prn tools)
         ;; Parameter mapping
         param-map {:temperature     :temperature
                    :top-p           :top_p
