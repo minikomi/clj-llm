@@ -21,6 +21,14 @@
    [cheshire.core :as json]))
 
 ;; ──────────────────────────────────────────────────────────────
+;; Response type
+;; ──────────────────────────────────────────────────────────────
+
+(defrecord Response [chunks events text usage structured]
+  clojure.lang.IDeref
+  (deref [_] @text))
+
+;; ──────────────────────────────────────────────────────────────
 ;; Internal helpers
 ;; ──────────────────────────────────────────────────────────────
 
@@ -87,121 +95,161 @@
               effective-prompt (conj {:role "user" :content effective-prompt})))))
 
 ;; ──────────────────────────────────────────────────────────────
+;; Derrived backends
+;; ──────────────────────────────────────────────────────────────
+
+(defn with-config [backend opts]
+    "Wraps a backend with additional configuration options.
+     
+     This is useful for setting default options like model, temperature, etc.
+     
+     Example:
+         (def my-backend (with-config openai-backend {:model \"gpt-3.5-turbo\" :temperature 0.7}))"
+    (assoc backend :default-opts
+              (merge (:default-opts backend) opts)))
+
+;; ──────────────────────────────────────────────────────────────
+;; Channel utilities
+;; ──────────────────────────────────────────────────────────────
+
+(defn consume!
+  "Consume a channel, applying f to each value. 
+   Returns a channel that closes when consumption is complete.
+   
+   Example:
+     (consume! (llm/stream ai \"Tell a story\") print)"
+  [ch f]
+  (go-loop []
+    (when-let [v (<! ch)]
+      (f v)
+      (recur))))
+
+(defn collect
+  "Collect all values from a channel into a vector.
+   Blocks until the channel is closed.
+   
+   Example:
+     (collect (llm/stream ai \"List items\"))
+     ;=> [\"1. \" \"First item\" \"\\n2. \" \"Second item\"]"
+  [ch]
+  (loop [acc []]
+    (if-let [v (<!! ch)]
+      (recur (conj acc v))
+      acc)))
+
+;; ──────────────────────────────────────────────────────────────
 ;; Public API
 ;; ──────────────────────────────────────────────────────────────
 
 (defn prompt
-  "Make a request returning a rich response object.
-   
-   Args:
-     provider - LLM provider instance
-     prompt   - String prompt or nil if messages provided in opts
-     opts     - Same options as generate
-     
-   Returns:
-     Response map that:
-     - Implements IDeref (deref returns generated text)
-     - Contains promises/channels for different aspects:
-       :text       - Promise of full text response
-       :chunks     - Channel of text chunks  
-       :events     - Channel of raw events
-       :usage      - Promise of token usage stats
-       :structured - Promise of structured data (if schema provided)
-       
-   Example:
-     (def resp (prompt openai \"Hello\"))
-     @resp ;=> \"Hello! How can I help you?\"
-     
-     @(:usage resp) ;=> {:prompt-tokens 10 :completion-tokens 20}"
   ([provider prompt-str]
    (prompt provider prompt-str nil))
   ([provider prompt-str opts]
-   (let [model (or (:model opts) (:default-model provider))
+   (let [opts (merge (:default-opts provider) opts)
+         model (or (:model opts) (:default-model provider))
          messages (build-messages prompt-str opts)
-
-         ;; Create multiple channels tapped from the same source
          source-chan (proto/request-stream provider model messages opts)
-         mult-source (a/mult source-chan)
+         req-start (System/currentTimeMillis)
 
-         ;; Create tapped channels
-         text-chan (chan 1024)
-         chunks-chan (chan 1024)
-         events-chan (chan 1024)
-         usage-chan (chan 1024)
+         ;; Channels with cleanup
+         text-chunks-chan (chan (a/dropping-buffer 1024))
+         events-chan (chan (a/dropping-buffer 1024))
 
-         ;; Tap all channels
-         _ (a/tap mult-source text-chan)
-         _ (a/tap mult-source chunks-chan)
-         _ (a/tap mult-source events-chan)
-         _ (a/tap mult-source usage-chan)
-
-         ;; Create promises for blocking access
+         ;; Promises
          text-promise (promise)
          usage-promise (promise)
          structured-promise (promise)
 
-         ;; Process text channel
+         ;; Timeout for cleanup (optional)
+         timeout-ms (or (:timeout opts) 30000) ; 30 second default
+         timeout-chan (a/timeout timeout-ms)
+
+         ;; Consumer with timeout protection
          _ (go-loop [chunks []]
-             (if-let [event (<! text-chan)]
-               (case (:type event)
-                 :content (recur (conj chunks (:content event)))
-                 :error (deliver text-promise (errors/stream-error
-                                               "LLM request failed"
-                                               :event event))
-                 :done (deliver text-promise (apply str chunks))
-                 (recur chunks))
-               (deliver text-promise "")))
+             (let [[event port] (a/alts! [source-chan timeout-chan])]
+               (cond
+                 ;; Timeout case
+                 (= port timeout-chan)
+                 (do
+                   (println "Stream timed out, cleaning up")
+                   (deliver text-promise (Exception. "Stream timeout"))
+                   (when-not (realized? usage-promise)
+                     (deliver usage-promise nil))
+                   (when-not (realized? structured-promise)
+                     (deliver structured-promise (Exception. "Stream timeout")))
+                   (a/close! text-chunks-chan)
+                   (a/close! events-chan))
 
-         ;; Process usage channel
-         _ (go-loop []
-             (if-let [event (<! usage-chan)]
-               (case (:type event)
-                 :usage (deliver usage-promise event)
-                 (recur))
-               (deliver usage-promise nil)))
+                 ;; Normal event
+                 event
+                 (do
+                   (a/offer! events-chan event)
+                   (case (:type event)
+                     :content (do
+                               (a/offer! text-chunks-chan (:content event))
+                               (recur (conj chunks (:content event))))
+                     :usage (do
+                             (deliver usage-promise (assoc event :clj-llm/model model :clj-llm/req-start req-start :clj-llm/req-end (System/currentTimeMillis) :clj-llm/duration (- (System/currentTimeMillis) req-start)))
+                             (recur chunks))
+                     :error (do
+                             (deliver text-promise (errors/stream-error
+                                                   "LLM request failed" 
+                                                   :event event
+                                                   :request {:model model
+                                                            :messages messages
+                                                            :started-at req-start
+                                                            :provider provider}))
+                             (when-not (realized? usage-promise)
+                               (deliver usage-promise nil))
+                             (when-not (realized? structured-promise)
+                               (deliver structured-promise (Exception. (:error event))))
+                             (a/close! text-chunks-chan)
+                             (a/close! events-chan))
+                     :done (do
+                            (deliver text-promise (apply str chunks))
+                            (when-not (realized? usage-promise)
+                              (deliver usage-promise nil))
+                            (a/close! text-chunks-chan)
+                            (a/close! events-chan))
+                     (recur chunks)))
 
-         ;; Transform chunks channel to just text
-         text-chunks-chan (chan)
-         _ (go-loop []
-             (if-let [event (<! chunks-chan)]
-               (do
-                 (when (= :content (:type event))
-                   (>! text-chunks-chan (:content event)))
-                 (when (= :done (:type event))
-                   (a/close! text-chunks-chan))
-                 (when-not (= :done (:type event))
-                   (recur)))
-               (a/close! text-chunks-chan)))
+                 ;; Source closed without event
+                 :else
+                 (do
+                   (deliver text-promise "")
+                   (when-not (realized? usage-promise)
+                     (deliver usage-promise nil))
+                   (when-not (realized? structured-promise)
+                     (deliver structured-promise (Exception. "Stream closed unexpectedly")))
+                   (a/close! text-chunks-chan)
+                   (a/close! events-chan)))))
 
-         ;; Handle structured output if schema provided
-         _ (when (:schema opts)
+         ;; Structured output with timeout protection
+         _ (if (:schema opts)
              (future
                (try
-                 (let [text @text-promise]
-                   (if (instance? Exception text)
-                     (deliver structured-promise text)
+                 (let [text (deref text-promise timeout-ms ::timeout)]
+                   (if (= text ::timeout)
+                     (deliver structured-promise (Exception. "Text promise timeout"))
                      (deliver structured-promise
-                              (parse-structured-output text (:schema opts)))))
+                              (if (instance? Exception text)
+                                text
+                                (parse-structured-output text (:schema opts))))))
                  (catch Exception e
-                   (deliver structured-promise e)))))]
+                   (deliver structured-promise e))))
+             (deliver structured-promise
+                      (Exception. "Structured output requested but no schema provided")))]
 
-
-
-     {
-      ;; streaming
-      :chunks text-chunks-chan
-      :events events-chan
-      ;; blocking
-      :text text-promise
-      :usage usage-promise
-      :structured structured-promise
-      }
-     )))
+     (->Response text-chunks-chan
+                 events-chan
+                 text-promise
+                 usage-promise
+                 structured-promise))))
 
 ;; Convinience
 
 (defn generate
-    "Generate text response from the LLM.
+  "Generate response from the LLM.
 
      Args:
          provider - LLM provider instance
@@ -209,15 +257,33 @@
          opts     - Options map (see `prompt` for details)
 
      Returns:
-         Full text response as a string.
+         Text response or, when schema present, structured data.
 
      Example:
          (generate openai \"Tell me a joke\") ;=> \"Why did the chicken cross the road? To get to the other side!\""
-    ([provider prompt-str]
-     (generate provider prompt-str nil))
-    ([provider prompt-str opts]
-     (let [response (prompt provider prompt-str opts)]
-         @(:text response))))
+  ([provider prompt-str]
+   (generate provider prompt-str nil))
+  ([provider prompt-str opts]
+   (let [response (prompt provider prompt-str opts)
+         timeout-ms (or (:timeout opts) 
+                       (:timeout (:default-opts provider)) 
+                       30000)
+         result-promise (if (or (:schema opts) (:schema (:default-opts provider)))
+                         (:structured response)
+                         (:text response))
+         result (deref result-promise timeout-ms ::timeout)]
+     (cond
+       (= result ::timeout)
+       (throw (errors/timeout-error 
+               (str "LLM request timed out after " timeout-ms "ms")
+               timeout-ms
+               {:provider provider :prompt prompt-str :opts opts}))
+       
+       (instance? Exception result)
+       (throw result)
+       
+       :else
+       result))))
 
 (defn structured
     "Get structured output from the LLM response.
@@ -234,7 +300,7 @@
          (let [data (structured openai \"Extract data\" {:schema [:map [:name :string]]})]
          @data) ;=> {:name \"John\"}"
     ([provider prompt-str schema]
-     (structured provider prompt-str nil))
+     (structured provider prompt-str schema nil))
     ([provider prompt-str schema opts]
      @(:structured (prompt provider prompt-str (assoc opts :schema schema)))))
 
@@ -281,3 +347,40 @@
      (stream provider prompt-str nil))
     ([provider prompt-str opts]
      (:chunks (prompt provider prompt-str opts))))
+
+(defn conversation
+  "Create a stateful conversation with the LLM.
+  
+   Args:
+     provider - LLM provider instance
+     opts - Options map with optional :system-prompt
+     
+   Returns:
+     Map with :prompt function, :messages atom, and :clear function
+     
+   Example:
+     (def chat (conversation openai {:system-prompt \"You're a helpful assistant\"}))
+     ((:prompt chat) \"Hello!\")  ;=> \"Hi! How can I help you?\"
+     ((:prompt chat) \"What's 2+2?\") ;=> \"2+2 equals 4\"
+     @(:messages chat) ;=> [{:role :system ...} {:role :user ...} ...]
+     ((:clear chat)) ;=> resets conversation"
+  [provider & {:keys [system-prompt] :as opts}]
+  (let [messages (atom (if system-prompt
+                        [{:role :system :content system-prompt}]
+                        []))]
+    {:prompt (fn 
+               ([text]
+                (swap! messages conj {:role :user :content text})
+                (let [response (generate provider nil {:messages @messages})]
+                  (swap! messages conj {:role :assistant :content response})
+                  response))
+               ([text opts]
+                (swap! messages conj {:role :user :content text})
+                (let [response (generate provider nil 
+                                       (assoc opts :messages @messages))]
+                  (swap! messages conj {:role :assistant :content response})
+                  response)))
+     :messages messages
+     :clear #(reset! messages (if system-prompt
+                               [{:role :system :content system-prompt}]
+                               []))}))

@@ -46,10 +46,16 @@
   (def person-schema
     [:map
      [:name :string]
-     [:age pos-int?]
+     [:age :int]
      [:occupation :string]])
   
-  (llm/structured openai-backend "Extract: Marie Curie was a 66 year old physicist" person-schema)
+  (llm/structured openai-backend
+                  "Extract: Marie Curie was a 66 year old physicist"
+                  person-schema)
+
+  (def person-extractor (llm/with-config openai-backend {:schema person-schema :temperature 0.1}))
+
+  (llm/generate person-extractor "Extract: Albert Einstein was a 76 year old physicist")
   
   ;; Complex nested schema
   (def company-schema
@@ -59,7 +65,7 @@
      [:employees [:vector [:map
                            [:name :string]
                            [:role :string]
-                           [:salary pos-int?]]]]
+                           [:salary :int]]]]
      [:locations [:vector :string]]])
   
   (llm/generate openai-backend
@@ -71,7 +77,7 @@
   ;; ==========================================
   
   ;; Basic streaming
-  (let [chunks (llm/stream openai-backend "Tell me a story about a robot")]
+  (let [chunks (:events (llm/prompt-debug openai-backend "Tell me a story about a robot, 100 sentences." {:model :gpt-4.1-nano}))]
     (loop []
       (when-let [chunk (<!! chunks)]
         (print chunk)
@@ -80,6 +86,7 @@
   
   ;; Stream with error handling
   (let [chunks (llm/stream openai-backend "Invalid model test" {:model "fake-model"})]
+    (println chunks)
     (loop []
       (when-let [chunk (<!! chunks)]
         (if (map? chunk)

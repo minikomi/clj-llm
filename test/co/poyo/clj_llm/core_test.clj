@@ -77,7 +77,11 @@
       (is (= "Response text" @resp))
       ;; Test promise access
       (is (= "Response text" @(:text resp)))
-      (is (= {:type :usage :prompt-tokens 10 :completion-tokens 20} @(:usage resp))))))
+      ;; Usage includes enriched metadata but contains original fields
+      (let [usage @(:usage resp)]
+        (is (= :usage (:type usage)))
+        (is (= 10 (:prompt-tokens usage)))
+        (is (= 20 (:completion-tokens usage)))))))
 
 (deftest test-message-building
   (testing "Messages from prompt and system prompt"
