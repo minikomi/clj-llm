@@ -1,14 +1,11 @@
 #!/usr/bin/env bb
 
 (ns chat-repl
-  (:require [babashka.classpath :as cp]))
+  (:require [co.poyo.clj-llm.core :as llm]
+            [co.poyo.clj-llm.backends.openai :as openai]
+            [clojure.core.async :refer [<!!]]))
 
-;; Add the source directory to classpath
-(cp/add-classpath "src")
 
-(require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai]
-         '[clojure.core.async :refer [<!!]])
 
 (defn print-streaming-response
   "Print response chunks as they arrive"
@@ -96,6 +93,4 @@
               (println "\n")
               (recur))))))))
 
-;; For Babashka script execution
-(when (= *file* (System/getProperty "babashka.file"))
-  (apply -main *command-line-args*))
+(apply -main *command-line-args*)

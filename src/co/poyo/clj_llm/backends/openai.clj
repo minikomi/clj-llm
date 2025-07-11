@@ -15,15 +15,10 @@
 ;; Configuration
 ;; ──────────────────────────────────────────────────────────────
 
-(def ^:private openai-models
-  "Set of available OpenAI models"
-  #{"gpt-4o" "gpt-4o-mini" "gpt-4-turbo" "gpt-4" "gpt-3.5-turbo"
-    "o1-preview" "o1-mini" "o3-mini"})
-
 (def ^:private default-config
   {:api-key-env "OPENAI_API_KEY"
    :api-base "https://api.openai.com/v1"
-   :default-model "gpt-4o-mini"
+   :default-model "gpt-4.1-mini"
    :timeout-ms 60000})
 
 ;; ──────────────────────────────────────────────────────────────
@@ -52,7 +47,6 @@
                          (make-messages messages-or-prompt system-prompt))
         tools (when schema {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
                             :tool_choice "required"})
-        _ (prn tools)
         ;; Parameter mapping
         param-map {:temperature     :temperature
                    :top-p           :top_p
