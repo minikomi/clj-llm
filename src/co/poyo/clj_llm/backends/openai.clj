@@ -146,10 +146,9 @@
       {:type :error
        :error (str "HTTP " (:status response) ": " (:body response))
        :status (:status response)
-       :exception (errors/network-error
+       :exception (errors/error
                    (str "Failed to parse error response: " (.getMessage e))
-                   {:response response}
-                   :cause e)})))
+                   {:response response})})))
 
 (defn- create-event-stream
   "Create event stream from HTTP response"
@@ -182,7 +181,7 @@
                  (>! events-chan {:type :done})
                  (close! events-chan)))))
          ;; Error response
-         (do
+         (go-loop []
            (>! events-chan (handle-error-response response))
            (close! events-chan)))))
 
@@ -215,8 +214,24 @@
    Returns:
      Backend instance for use with generate/stream/prompt functions
      
-   Example:
-     (def openai (backend {:api-key-env \"OPENAI_API_KEY\"}))"
+   Examples:
+     ;; OpenAI
+     (def openai (backend {:api-key-env \"OPENAI_API_KEY\"}))
+     
+     ;; OpenRouter
+     (def router (backend {:api-key-env \"OPENROUTER_API_KEY\"
+                          :api-base \"https://openrouter.ai/api/v1\"
+                          :default-model \"openai/gpt-4o-mini\"}))
+     
+     ;; Together.ai
+     (def together (backend {:api-key-env \"TOGETHER_API_KEY\"
+                            :api-base \"https://api.together.xyz/v1\"
+                            :default-model \"meta-llama/Llama-3-70b-chat-hf\"}))
+     
+     ;; Local (Ollama, LM Studio, etc)
+     (def local (backend {:api-base \"http://localhost:8080\"
+                         :api-key \"not-needed\"
+                         :default-model \"llama2\"}))"
   ([] (backend default-config))
   ([{:keys [api-key api-key-env] :as config}]
    (let [resolved-key (or api-key
@@ -231,54 +246,3 @@
      ;; Create backend
      (map->OpenAIBackend
       (assoc final-config :api-key resolved-key)))))
-
-;; ──────────────────────────────────────────────────────────────
-;; Convenience Constructors
-;; ──────────────────────────────────────────────────────────────
-
-(defn openrouter
-  "Create an OpenRouter backend instance.
-   
-   OpenRouter provides access to many models through a unified API.
-   
-   Args:
-     config - Same as backend, but uses OpenRouter defaults
-     
-   Example:
-     (def router (openrouter {:api-key-env \"OPENROUTER_API_KEY\"}))"
-  [config]
-  (backend (merge {:api-base "https://openrouter.ai/api/v1"
-                   :default-model "openai/gpt-4o-mini"}
-                  config)))
-
-(defn together
-  "Create a Together.ai backend instance.
-   
-   Together provides fast inference for open source models.
-   
-   Args:
-     config - Same as backend, but uses Together defaults
-     
-   Example:
-     (def tog (together {:api-key-env \"TOGETHER_API_KEY\"}))"
-  [config]
-  (backend (merge {:api-base "https://api.together.xyz/v1"
-                   :default-model "meta-llama/Llama-3-70b-chat-hf"}
-                  config)))
-
-(defn local
-  "Create a backend for local OpenAI-compatible servers.
-   
-   Works with LM Studio, Ollama, llama.cpp server, etc.
-   
-   Args:
-     config - Same as backend, but for local servers
-     
-   Example:
-     (def local-llm (local {:api-base \"http://localhost:8080\"
-                           :default-model \"llama2\"}))"
-  [config]
-  (backend (merge {:api-base "http://localhost:8080"
-                   :api-key "not-needed" ;; Most local servers don't need auth
-                   :default-model "llama2"}
-                  config)))

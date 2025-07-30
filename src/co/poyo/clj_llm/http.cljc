@@ -1,14 +1,37 @@
 (ns co.poyo.clj-llm.http
-  "Cross-platform HTTP utility that works in both JVM Clojure and Babashka.
-   Uses reader conditionals to load the appropriate dependencies and implementations."
-  (:refer-clojure :exclude [get])
-  #?(:clj (:require [org.httpkit.client :as http-client])
-     :bb (:require [babashka.http-client :as http-client])))
+  "Cross-platform HTTP streaming for Clojure and Babashka.
+   
+   Note: Babashka's http-client doesn't support true async streaming,
+   so responses will be buffered before the stream is available."
+  #?(:clj (:require [org.httpkit.client :as client])
+     :bb (:require [babashka.http-client :as client])))
 
-(defn request
-  "Platform agnostic request function that works in both JVM Clojure and Babashka.
-   It uses reader conditionals to load the appropriate HTTP client."
-  [opts]
-  #?(:clj (let [response @(http-client/request opts)]
-            response)
-     :bb (http-client/request opts)))
+(defn post-stream 
+  "POST with streaming response. Calls callback with {:status :body :error}.
+   The :body will be an InputStream for successful responses.
+   
+   Note: In Babashka, the entire response is buffered before streaming begins."
+  [url headers body callback]
+  (let [opts {:url url
+              :method :post
+              :headers headers
+              :body body
+              :as :stream
+              :timeout 30000}]
+    #?(:clj 
+       ;; http-kit needs async? true for true streaming
+       (client/request (assoc opts :async? true)
+         (fn [resp]
+           (callback {:status (:status resp)
+                      :body (:body resp)
+                      :error (:error resp)})))
+       :bb
+       ;; babashka.http-client is synchronous - the response is buffered
+       ;; but we still get an InputStream to read from
+       (try
+         (let [resp (client/request opts)]
+           (callback {:status (:status resp)
+                      :body (:body resp)
+                      :error (:error resp)}))
+         (catch Exception e
+           (callback {:status 0 :body nil :error e}))))))
