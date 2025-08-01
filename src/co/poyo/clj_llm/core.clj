@@ -93,28 +93,10 @@
          usage-promise (promise)
          structured-promise (promise)
 
-         ;; Timeout for cleanup (optional)
-         timeout-ms (or (:timeout opts) 30000) ; 30 second default
-         timeout-chan (a/timeout timeout-ms)
-
-         ;; Consumer with timeout protection
+         ;; Consumer loop
          _ (go-loop [chunks []]
-             (let [[event port] (a/alts! [source-chan timeout-chan])]
-               (cond
-                 ;; Timeout case
-                 (= port timeout-chan)
-                 (do
-                   (println "Stream timed out, cleaning up")
-                   (deliver text-promise (Exception. "Stream timeout"))
-                   (when-not (realized? usage-promise)
-                     (deliver usage-promise nil))
-                   (when-not (realized? structured-promise)
-                     (deliver structured-promise (Exception. "Stream timeout")))
-                   (a/close! text-chunks-chan)
-                   (a/close! events-chan))
-
-                 ;; Normal event
-                 event
+             (if-let [event (<! source-chan)]
+               ;; Process event
                  (do
                    (a/offer! events-chan event)
                    (case (:type event)
@@ -125,7 +107,7 @@
                              (deliver usage-promise (assoc event :clj-llm/model model :clj-llm/req-start req-start :clj-llm/req-end (System/currentTimeMillis) :clj-llm/duration (- (System/currentTimeMillis) req-start)))
                              (recur chunks))
                      :error (do
-                             (deliver text-promise (errors/stream-error
+                             (deliver text-promise (errors/error
                                                    "LLM request failed" 
                                                    {:event event
                                                     :request {:model model
@@ -145,33 +127,25 @@
                             (a/close! text-chunks-chan)
                             (a/close! events-chan))
                      (recur chunks)))
+               ;; Source closed
+               (do
+                 (deliver text-promise (apply str chunks))
+                 (when-not (realized? usage-promise)
+                   (deliver usage-promise nil))
+                 (a/close! text-chunks-chan)
+                 (a/close! events-chan))))
 
-                 ;; Source closed without event
-                 :else
-                 (do
-                   (deliver text-promise "")
-                   (when-not (realized? usage-promise)
-                     (deliver usage-promise nil))
-                   (when-not (realized? structured-promise)
-                     (deliver structured-promise (Exception. "Stream closed unexpectedly")))
-                   (a/close! text-chunks-chan)
-                   (a/close! events-chan)))))
-
-         ;; Structured output with timeout protection
-         _ (if (:schema opts)
+         ;; Structured output processing
+         _ (when (:schema opts)
              (future
                (try
-                 (let [text (deref text-promise timeout-ms ::timeout)]
-                   (if (= text ::timeout)
-                     (deliver structured-promise (Exception. "Text promise timeout"))
-                     (deliver structured-promise
-                              (if (instance? Exception text)
-                                text
-                                (parse-structured-output text (:schema opts))))))
+                 (let [text @text-promise]
+                   (deliver structured-promise
+                            (if (instance? Exception text)
+                              text
+                              (parse-structured-output text (:schema opts)))))
                  (catch Exception e
-                   (deliver structured-promise e))))
-             (deliver structured-promise
-                      (Exception. "Structured output requested but no schema provided")))]
+                   (deliver structured-promise e)))))]
 
      (->Response text-chunks-chan
                  events-chan
@@ -179,7 +153,7 @@
                  usage-promise
                  structured-promise))))
 
-;; Convinience
+;; Convenience
 
 (defn generate
   "Generate response from the LLM.
