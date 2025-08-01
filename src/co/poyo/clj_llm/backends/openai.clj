@@ -39,33 +39,20 @@
 
 (defn- build-body
   "Build OpenAI API request body"
-  [model messages-or-prompt {:keys [schema system-prompt messages] :as opts}]
-  (let [final-messages (if messages
-                         ;; Use provided messages array directly
-                         (mapv format-message messages)
-                         ;; Build from prompt + system prompt
-                         (make-messages messages-or-prompt system-prompt))
-        tools (when schema {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
-                            :tool_choice "required"})
-        ;; Parameter mapping
-        param-map {:temperature     :temperature
-                   :top-p           :top_p
-                   :max-tokens      :max_tokens
-                   :frequency-penalty :frequency_penalty
-                   :presence-penalty  :presence_penalty
-                   :response-format   :response_format
-                   :seed              :seed}]
-    (cond-> {:model model
-             :stream true
-             :stream_options {:include_usage true}
-             :messages final-messages}
-      tools (merge tools)
-      (:stop opts) (assoc :stop (let [s (:stop opts)]
-                                  (if (string? s) [s] s)))
-      ;; Apply parameter mappings
-      true (merge (into {} (for [[k v] param-map
-                                 :when (contains? opts k)]
-                             [v (get opts k)]))))))
+  [model messages {:keys [schema system-prompt] :as opts}]
+  (let [final-messages (mapv format-message messages)
+        schema-config (when schema
+                        {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
+                         :tool_choice "required"})]
+    (merge {:model model
+            :stream true
+            :stream_options {:include_usage true}
+            :messages final-messages}
+           schema-config
+           ;; Pass through OpenAI parameters directly
+           (select-keys opts [:temperature :top_p :max_tokens 
+                             :frequency_penalty :presence_penalty
+                             :response_format :seed :stop]))))
 
 
 ;; ──────────────────────────────────────────────────────────────
@@ -84,7 +71,7 @@
 
 (defn- chunk->events
   "Convert OpenAI chunk to our event format"
-  [chunk]
+  [chunk opts]
   (when-let [parsed (parse-chunk chunk)]
     (cond
       ;; Error in chunk
@@ -99,9 +86,13 @@
       (get-in parsed [:choices 0 :delta :tool_calls])
       (let [tool-calls (get-in parsed [:choices 0 :delta :tool_calls])
             tool-call (first tool-calls)
-            function-args (get-in tool-call [:function :arguments])]
-        (when function-args
-          [{:type :content :content function-args}]))
+            has-args? (get-in tool-call [:function :arguments])]
+        (cond
+          ;; Schema mode: emit function arguments as content
+          (and (:schema opts) has-args?)
+          [{:type :content :content (get-in tool-call [:function :arguments])}]
+          
+          :else nil))
 
       ;; Usage information (comes at the end for some providers)
       (:usage parsed)
@@ -135,7 +126,7 @@
                    body-str))
           status (:status response)
           ;; Create proper error based on status and response
-          error (errors/parse-http-error "openai" status body {:url (:url response)})]
+          error (errors/parse-http-error "openai" status body)]
       {:type :error
        :error (.getMessage error)
        :status status
@@ -157,8 +148,8 @@
         url (str api-base "/chat/completions")
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
-        ;; Pass messages directly to build-body
-        body (json/generate-string (build-body model nil (assoc opts :messages messages)))]
+        ;; Build request body with messages
+        body (json/generate-string (build-body model messages opts))]
 
     ;; Make streaming request
     (net/post-stream
@@ -168,13 +159,15 @@
      (fn [response]
        (if (= 200 (:status response))
          ;; Success - set up SSE streaming
-         (let [sse-chan (sse/parse-sse (:body response))]
+         (let [sse-chan (sse/parse-sse (:body response))
+               ]
            (go-loop []
              (if-let [chunk (<! sse-chan)]
                (do
                  ;; Convert chunk to events
-                 (doseq [event (chunk->events chunk)]
-                   (>! events-chan event))
+                 (doseq [event (chunk->events chunk opts)]
+                   (when event
+                     (>! events-chan event)))
                  (recur))
                ;; Stream ended
                (do
@@ -191,9 +184,9 @@
 ;; Backend Implementation
 ;; ──────────────────────────────────────────────────────────────
 
-(defrecord OpenAIBackend [api-base api-key default-model timeout-ms]
+(defrecord OpenAIBackend [api-base api-key default-model default-opts timeout-ms]
   proto/LLMProvider
-  (request-stream [this model messages opts]
+  (request-stream [_ model messages opts]
     (create-event-stream api-base api-key model messages opts)))
 
 ;; ──────────────────────────────────────────────────────────────
@@ -241,8 +234,13 @@
 
      ;; Validate API key
      (when-not resolved-key
-       (throw (errors/invalid-api-key "openai")))
+       (throw (errors/error "Missing API key" 
+                           {:provider "openai"
+                            :api-key-env api-key-env})))
 
-     ;; Create backend
-     (map->OpenAIBackend
-      (assoc final-config :api-key resolved-key)))))
+     ;; Create backend record
+     (->OpenAIBackend (:api-base final-config)
+                      resolved-key
+                      (:default-model final-config)
+                      (:default-opts final-config)
+                      (:timeout-ms final-config)))))
