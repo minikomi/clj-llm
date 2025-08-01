@@ -30,12 +30,6 @@
   [{:keys [role content] :as msg}]
   {:role (name role)
    :content content})
-(defn- make-messages
-  "Create messages array with optional system prompt"
-  [prompt system-prompt]
-  (cond-> []
-    system-prompt (conj {:role "system" :content system-prompt})
-    prompt (conj {:role "user" :content prompt})))
 
 (defn- build-body
   "Build OpenAI API request body"
@@ -101,11 +95,7 @@
         :completion-tokens (get-in parsed [:usage :completion_tokens])
         :total-tokens (get-in parsed [:usage :total_tokens])}]
 
-      ;; Finish reason
-      (get-in parsed [:choices 0 :finish_reason])
-      [] ;; We'll send :done when stream closes
-
-      :else [])))
+      :else nil)))
 
 ;; ──────────────────────────────────────────────────────────────
 ;; HTTP & Streaming
@@ -159,8 +149,7 @@
      (fn [response]
        (if (= 200 (:status response))
          ;; Success - set up SSE streaming
-         (let [sse-chan (sse/parse-sse (:body response))
-               ]
+         (let [sse-chan (sse/parse-sse (:body response))]
            (go-loop []
              (if-let [chunk (<! sse-chan)]
                (do
@@ -174,8 +163,8 @@
                  (>! events-chan {:type :done})
                  (close! events-chan)))))
          ;; Error response
-         (go-loop []
-           (>! events-chan (handle-error-response response))
+         (do
+           (a/put! events-chan (handle-error-response response))
            (close! events-chan)))))
 
     events-chan))

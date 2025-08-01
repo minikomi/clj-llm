@@ -2,9 +2,7 @@
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         org.clojure/core.async {:mvn/version "1.8.741"}
         cheshire/cheshire {:mvn/version "6.0.0"}
-        metosin/malli {:mvn/version "0.17.0"}
-        http-kit/http-kit {:mvn/version "2.9.0-beta1"}
-        }
+        metosin/malli {:mvn/version "0.17.0"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}

@@ -14,7 +14,7 @@
         description (str "Extract " (clojure.string/join ", " field-names) " from input")]
     {:name name :description description}))
 
-(defn- extract-properties [map-schema]
+(defn- extract-properties [map-schema depth]
   (let [compiled-map-schema (if (m/schema? map-schema) map-schema (m/schema map-schema))
         _ (when (not= :map (m/type compiled-map-schema))
             (throw (ex-info "Schema must be a Malli [:map …] schema"
@@ -33,7 +33,7 @@
                               required? (not (:optional props false))]
                           (-> acc
                               (assoc-in [:properties prop-name]
-                                        (cond-> (malli->json-schema schema-val)
+                                        (cond-> (malli->json-schema schema-val (inc depth))
                                                 (contains? props :description)
                                                 (assoc :description (:description props))))
                               (cond-> required? (update :required conj prop-name))))
@@ -61,6 +61,7 @@
          :boolean (assoc base-schema :type "boolean")
          :any (assoc base-schema :type "object")
          :nil (assoc base-schema :type "null")
+         :uuid (assoc base-schema :type "string" :pattern "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
          (:vector :sequential)
          (let [items-schema (first (m/children compiled-schema))]
@@ -72,7 +73,7 @@
                   :minItems (count item-schemas) :maxItems (count item-schemas)))
          :map
          (let [properties (m/properties compiled-schema)
-               base-map (merge base-schema {:type "object"} (extract-properties compiled-schema))]
+               base-map (merge base-schema {:type "object"} (extract-properties compiled-schema depth))]
            (if (zero? depth)
              (let [auto-info (auto-generate-function-info compiled-schema)
                    name (:name properties (:name auto-info))

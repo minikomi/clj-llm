@@ -49,13 +49,9 @@
      [:age :int]
      [:occupation :string]])
   
-  (llm/structured openai-backend
-                  "Extract: Marie Curie was a 66 year old physicist"
-                  person-schema)
-
-  (def person-extractor (llm/with-config openai-backend {:schema person-schema :temperature 0.1}))
-
-  (llm/generate person-extractor "Extract: Albert Einstein was a 76 year old physicist")
+  (llm/generate openai-backend
+                "Extract: Marie Curie was a 66 year old physicist"
+                {:schema person-schema})
   
   ;; Complex nested schema
   (def company-schema
@@ -77,7 +73,7 @@
   ;; ==========================================
   
   ;; Basic streaming
-  (let [chunks (:events (llm/prompt-debug openai-backend "Tell me a story about a robot, 100 sentences." {:model :gpt-4.1-nano}))]
+  (let [chunks (llm/stream openai-backend "Tell me a story about a robot." {:model "gpt-4.1-mini"})]
     (loop []
       (when-let [chunk (<!! chunks)]
         (print chunk)
@@ -170,22 +166,22 @@
     (let [bad-backend (openai/backend {:api-key "invalid-key"})]
       (llm/generate bad-backend "test"))
     (catch Exception e
-      (println "Error type:" (errors/error-type e))
       (println "Retryable?" (errors/retryable? e))
-      (println "Message:" (errors/format-error e))))
+      (println "Message:" (.getMessage e))
+      (println "Data:" (ex-data e))))
   
   ;; Test invalid model
   (try
     (llm/generate openai-backend "test" {:model "fake-model"})
     (catch Exception e
-      (println "Error type:" (errors/error-type e))
+      (println "Message:" (.getMessage e))
       (pp/pprint (ex-data e))))
   
   ;; Test network timeout (if backend supports it)
   (try
     (llm/generate openai-backend "test" {:timeout-ms 1})
     (catch Exception e
-      (println "Timeout error:" (errors/error-type e))))
+      (println "Timeout error:" (.getMessage e))))
 
   ;; ==========================================
   ;; BACKEND COMPARISON
@@ -198,13 +194,10 @@
   (println "OpenAI:")
   (println (llm/generate openai-backend test-prompt))
   
-  ;; Anthropic (if available)
-  (println "\nAnthropic:")
-  (println (llm/generate anthropic-backend test-prompt))
-  
-  ;; OpenRouter (if available)
-  (println "\nOpenRouter:")
-  (println (llm/generate openrouter-backend test-prompt {:model "anthropic/claude-3-haiku"}))
+  ;; To test with other backends, create them first:
+  ;; (def anthropic-backend (anthropic/backend))
+  ;; (println "\nAnthropic:")
+  ;; (println (llm/generate anthropic-backend test-prompt))
 
   ;; ==========================================
   ;; PERFORMANCE TESTING
@@ -270,7 +263,7 @@
       (let [result (llm/generate backend text {:schema schema})]
         {:success true :result result})
       (catch Exception e
-        {:success false :error (ex-message e) :type (errors/error-type e)})))
+        {:success false :error (ex-message e) :data (ex-data e)})))
   
   ;; Test schema validation
   (test-schema-extraction

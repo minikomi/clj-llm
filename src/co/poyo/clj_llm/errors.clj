@@ -28,7 +28,3 @@
            {:status status 
             :body body
             :retry-after (get-in body [:error :retry_after])})))
-
-;; Legacy function names for compatibility
-(def invalid-api-key (partial error "Invalid API key"))
-(def stream-error error)
