@@ -73,9 +73,7 @@
     (let [provider (mock-provider [{:type :content :content "Response text"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 20}])
           resp (llm/prompt provider "test")]
-      ;; Test IDeref
-      (is (= "Response text" @resp))
-      ;; Test promise access
+      ;; Test promise access directly (no IDeref anymore)
       (is (= "Response text" @(:text resp)))
       ;; Usage includes enriched metadata but contains original fields
       (let [usage @(:usage resp)]

@@ -50,15 +50,18 @@ Add to your `deps.edn`:
 
 # See error handling
 ./scripts/error_handling.clj
+
+# Test streaming
+./scripts/test_streaming.clj
 ```
 
 ## API Overview
 
 ### Core Functions
 
-- **`generate`** - Simple blocking text generation
+- **`generate`** - Simple blocking text generation or structured data extraction
 - **`stream`** - Get text chunks as they arrive
-- **`events`** - Access raw events (content, usage, errors)
+- **`events`** - Access raw events (content, usage, errors, done)
 - **`prompt`** - Full response object for advanced use cases
 
 ### Creating Backends
@@ -68,11 +71,19 @@ Add to your `deps.edn`:
 (def openai (openai/backend {:api-key-env "OPENAI_API_KEY"}))
 
 ;; OpenRouter (access to many models)
-(def router (openai/openrouter {:api-key-env "OPENROUTER_API_KEY"}))
+(def router (openai/backend {:api-key-env "OPENROUTER_API_KEY"
+                            :api-base "https://openrouter.ai/api/v1"
+                            :default-model "openai/gpt-4o-mini"}))
+
+;; Together.ai
+(def together (openai/backend {:api-key-env "TOGETHER_API_KEY"
+                              :api-base "https://api.together.xyz/v1"
+                              :default-model "meta-llama/Llama-3-70b-chat-hf"}))
 
 ;; Local models (Ollama, LM Studio, etc)
-(def local (openai/local {:api-base "http://localhost:11434/v1"
-                          :default-model "llama2"}))
+(def local (openai/backend {:api-base "http://localhost:11434/v1"
+                           :api-key "not-needed"
+                           :default-model "llama2"}))
 ```
 
 ## Examples
@@ -196,8 +207,8 @@ clj-llm provides comprehensive error handling with categorized errors and helpfu
 (let [chunks (llm/stream ai "Test")]
   (loop []
     (when-let [chunk (<!! chunks)]
-      (if (map? chunk)
-        (println "Error:" (:error chunk))
+      (if (instance? Throwable chunk)
+        (println "Error:" (errors/format-error chunk))
         (print chunk))
       (recur))))
 ```
@@ -241,6 +252,26 @@ clj-llm provides comprehensive error handling with categorized errors and helpfu
     
     ;; Default
     (throw e)))
+```
+
+## Project Structure
+
+```
+clj-llm/
+├── src/co/poyo/clj_llm/
+│   ├── core.clj              # Main API implementation
+│   ├── protocol.clj          # LLMProvider protocol
+│   ├── backends/
+│   │   ├── openai.clj        # OpenAI-compatible backend
+│   │   └── anthropic.clj     # Anthropic backend (placeholder)
+│   ├── errors.clj            # Error handling utilities
+│   ├── schema.clj            # Malli to JSON schema conversion
+│   ├── net.cljc              # Cross-platform HTTP client
+│   └── sse.clj               # Server-Sent Events parsing
+├── test/                     # Test files
+├── scripts/                  # Example scripts
+├── examples/                 # Usage examples
+└── doc/                      # Additional documentation
 ```
 
 ## Design Philosophy

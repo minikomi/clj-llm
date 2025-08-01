@@ -200,25 +200,26 @@
    (let [response (prompt provider prompt-str opts)
          timeout-ms (or (:timeout opts) 
                        (:timeout (:default-opts provider)) 
-                       30000)
-         result-promise (if (or (:schema opts) (:schema (:default-opts provider)))
-                         (:structured response)
-                         (:text response))
-         result (deref result-promise timeout-ms ::timeout)]
-     (cond
-       (= result ::timeout)
-       (throw (errors/error 
-               (str "LLM request timed out after " timeout-ms "ms")
-               {:timeout-ms timeout-ms
-                :provider provider 
-                :prompt prompt-str 
-                :opts opts}))
-       
-       (instance? Exception result)
-       (throw result)
-       
-       :else
-       result))))
+                       30000)]
+     
+     (let [result-promise (if (or (:schema opts) (:schema (:default-opts provider)))
+                             (:structured response)
+                             (:text response))
+             result (deref result-promise timeout-ms ::timeout)]
+         (cond
+           (= result ::timeout)
+           (throw (errors/error 
+                   (str "LLM request timed out after " timeout-ms "ms")
+                   {:timeout-ms timeout-ms
+                    :provider provider 
+                    :prompt prompt-str 
+                    :opts opts}))
+           
+           (instance? Exception result)
+           (throw result)
+           
+           :else
+           result)))))
 
 (defn events
   "Get raw events channel for monitoring LLM interactions.
