@@ -82,7 +82,7 @@
 ;; ==========================================
 
 (def ai (openai/backend {:api-key-env "OPENAI_API_KEY"
-                         :default-model "gpt-4.1-mini"}))
+                         :default-model "gpt-4.1-nano"}))
 
 ;; ==========================================
 ;; Example 1: Money Transfer
