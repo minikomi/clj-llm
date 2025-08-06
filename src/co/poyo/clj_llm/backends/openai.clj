@@ -11,9 +11,6 @@
             [co.poyo.clj-llm.protocol :as proto]
             [co.poyo.clj-llm.errors :as errors]))
 
-;; ──────────────────────────────────────────────────────────────
-;; Configuration
-;; ──────────────────────────────────────────────────────────────
 
 (def ^:private default-config
   {:api-key-env "OPENAI_API_KEY"
@@ -21,9 +18,6 @@
    :default-model "gpt-4.1-mini"
    :timeout-ms 60000})
 
-;; ──────────────────────────────────────────────────────────────
-;; Request Building
-;; ──────────────────────────────────────────────────────────────
 
 (defn- format-message
   "Format a single message for OpenAI API"
@@ -31,27 +25,40 @@
   {:role (name role)
    :content content})
 
+(defn- kebab->underscore [k]
+  "Convert kebab-case keyword to underscore for API compatibility"
+  (if (keyword? k)
+    (keyword (str/replace (name k) "-" "_"))
+    k))
+
+(defn- convert-options-for-api
+  "Convert kebab-case options to underscore format for OpenAI API"
+  [opts]
+  (into {}
+    (map (fn [[k v]]
+           [(kebab->underscore k) v])
+         opts)))
+
 (defn- build-body
   "Build OpenAI API request body"
   [model messages {:keys [schema system-prompt] :as opts}]
   (let [final-messages (mapv format-message messages)
         schema-config (when schema
                         {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
-                         :tool_choice "required"})]
+                         :tool_choice "required"})
+        ;; Convert kebab-case to underscores for API
+        api-opts (convert-options-for-api
+                  (select-keys opts [:temperature :top-p :max-tokens 
+                                    :frequency-penalty :presence-penalty
+                                    :response-format :seed :stop]))]
     (merge {:model model
             :stream true
             :stream_options {:include_usage true}
             :messages final-messages}
            schema-config
-           ;; Pass through OpenAI parameters directly
-           (select-keys opts [:temperature :top_p :max_tokens 
-                             :frequency_penalty :presence_penalty
-                             :response_format :seed :stop]))))
+           api-opts)))
 
 
-;; ──────────────────────────────────────────────────────────────
-;; Response Parsing  
-;; ──────────────────────────────────────────────────────────────
 
 (defn- parse-chunk
   "Parse a single SSE chunk from OpenAI stream"
@@ -68,27 +75,22 @@
   [chunk opts]
   (when-let [parsed (parse-chunk chunk)]
     (cond
-      ;; Error in chunk
       (:error parsed)
       [{:type :error :error (:error parsed)}]
 
-      ;; Content chunk
       (get-in parsed [:choices 0 :delta :content])
       [{:type :content :content (get-in parsed [:choices 0 :delta :content])}]
 
-      ;; Tool call chunk
       (get-in parsed [:choices 0 :delta :tool_calls])
       (let [tool-calls (get-in parsed [:choices 0 :delta :tool_calls])
             tool-call (first tool-calls)
             has-args? (get-in tool-call [:function :arguments])]
         (cond
-          ;; Schema mode: emit function arguments as content
           (and (:schema opts) has-args?)
           [{:type :content :content (get-in tool-call [:function :arguments])}]
           
           :else nil))
 
-      ;; Usage information (comes at the end for some providers)
       (:usage parsed)
       [{:type :usage
         :prompt-tokens (get-in parsed [:usage :prompt_tokens])
@@ -97,9 +99,6 @@
 
       :else nil)))
 
-;; ──────────────────────────────────────────────────────────────
-;; HTTP & Streaming
-;; ──────────────────────────────────────────────────────────────
 
 (defn- handle-error-response
   "Parse error response from API and create appropriate error event"
@@ -115,7 +114,6 @@
                    ;; If JSON parsing fails, use the raw string
                    body-str))
           status (:status response)
-          ;; Create proper error based on status and response
           error (errors/parse-http-error "openai" status body)]
       {:type :error
        :error (.getMessage error)
@@ -123,7 +121,6 @@
        :provider-error body
        :exception error})
     (catch Exception e
-      ;; If we can't parse the response, create a generic error
       {:type :error
        :error (str "HTTP " (:status response) ": " (:body response))
        :status (:status response)
@@ -138,98 +135,117 @@
         url (str api-base "/chat/completions")
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
-        ;; Build request body with messages
         body (json/generate-string (build-body model messages opts))]
 
-    ;; Make streaming request
     (net/post-stream
      url
      headers
      body
      (fn [response]
        (if (= 200 (:status response))
-         ;; Success - set up SSE streaming
          (let [sse-chan (sse/parse-sse (:body response))]
            (go-loop []
              (if-let [chunk (<! sse-chan)]
                (do
-                 ;; Convert chunk to events
                  (doseq [event (chunk->events chunk opts)]
                    (when event
                      (>! events-chan event)))
                  (recur))
-               ;; Stream ended
                (do
                  (>! events-chan {:type :done})
                  (close! events-chan)))))
-         ;; Error response
          (do
            (a/put! events-chan (handle-error-response response))
            (close! events-chan)))))
 
     events-chan))
 
-;; ──────────────────────────────────────────────────────────────
-;; Backend Implementation
-;; ──────────────────────────────────────────────────────────────
 
 (defrecord OpenAIBackend [api-base api-key default-model default-opts timeout-ms]
   proto/LLMProvider
   (request-stream [_ model messages opts]
     (create-event-stream api-base api-key model messages opts)))
 
-;; ──────────────────────────────────────────────────────────────
-;; Public API
-;; ──────────────────────────────────────────────────────────────
 
 (defn backend
   "Create an OpenAI backend instance.
    
-   Args:
-     config - Map with:
-       :api-key      - OpenAI API key (required)
-       :api-key-env  - Environment variable name for API key
-       :api-base     - API base URL (default: https://api.openai.com/v1)
-       :default-model - Default model to use (default: gpt-4o-mini)
-       :timeout-ms   - Request timeout in milliseconds
-       
-   Returns:
-     Backend instance for use with generate/stream/prompt functions
+   Multiple arities for convenience:
+     (backend)                    ; Uses OPENAI_API_KEY env var
+     (backend \"gpt-4\")           ; Uses env var with specific model
+     (backend {:model \"gpt-4\"})  ; Shorthand config
+     (backend {:backend {...}     ; Full control
+               :defaults {...}})
+               
+   Full config structure:
+     {:backend {:api-key \"...\"
+                :api-key-env \"OPENAI_API_KEY\"
+                :api-base \"https://api.openai.com/v1\"
+                :default-model \"gpt-4o-mini\"
+                :timeout-ms 60000}
+      :defaults {:temperature 0.7
+                 :max-tokens 1000}}
      
    Examples:
-     ;; OpenAI
-     (def openai (backend {:api-key-env \"OPENAI_API_KEY\"}))
+     ;; Simple
+     (def ai (backend))
+     
+     ;; With model
+     (def ai (backend \"gpt-4\"))
      
      ;; OpenRouter
-     (def router (backend {:api-key-env \"OPENROUTER_API_KEY\"
-                          :api-base \"https://openrouter.ai/api/v1\"
-                          :default-model \"openai/gpt-4o-mini\"}))
+     (def router (backend 
+       {:backend {:api-key-env \"OPENROUTER_API_KEY\"
+                  :api-base \"https://openrouter.ai/api/v1\"
+                  :default-model \"openai/gpt-4o-mini\"}}))
      
-     ;; Together.ai
-     (def together (backend {:api-key-env \"TOGETHER_API_KEY\"
-                            :api-base \"https://api.together.xyz/v1\"
-                            :default-model \"meta-llama/Llama-3-70b-chat-hf\"}))
+   See (describe-options) for available options."
+  ([] 
+   (backend {}))
+  
+  ([config-or-model]
+   (cond
+     ;; String model shorthand
+     (string? config-or-model)
+     (backend {:backend {:default-model config-or-model}})
      
-     ;; Local (Ollama, LM Studio, etc)
-     (def local (backend {:api-base \"http://localhost:8080\"
-                         :api-key \"not-needed\"
-                         :default-model \"llama2\"}))"
-  ([] (backend default-config))
-  ([{:keys [api-key api-key-env] :as config}]
-   (let [resolved-key (or api-key
-                          (when api-key-env
-                            (System/getenv api-key-env)))
-         final-config (merge default-config config)]
+     ;; Empty map - use all defaults
+     (and (map? config-or-model) (empty? config-or-model))
+     (backend {:backend {}})
+     
+     ;; Check if it's a full config with :backend key
+     (contains? config-or-model :backend)
+     (let [{:keys [backend defaults]} config-or-model
+           ;; Merge with defaults FIRST
+           backend-config (merge default-config (or backend {}))
+           resolved-key (or (:api-key backend-config)
+                           (when-let [env (:api-key-env backend-config)]
+                             (System/getenv env)))]
+       
+       ;; Validate API key
+       (when-not resolved-key
+         (throw (errors/error "Missing API key" 
+                             {:provider "openai"
+                              :api-key-env (:api-key-env backend-config)})))
+       
+       ;; Create backend record with defaults
+       (->OpenAIBackend (:api-base backend-config)
+                        resolved-key
+                        (:default-model backend-config)
+                        defaults
+                        (:timeout-ms backend-config)))
+     
+     ;; Shorthand config - wrap in :backend
+     :else
+     (backend {:backend config-or-model}))))
 
-     ;; Validate API key
-     (when-not resolved-key
-       (throw (errors/error "Missing API key" 
-                           {:provider "openai"
-                            :api-key-env api-key-env})))
 
-     ;; Create backend record
-     (->OpenAIBackend (:api-base final-config)
-                      resolved-key
-                      (:default-model final-config)
-                      (:default-opts final-config)
-                      (:timeout-ms final-config)))))
+;; Make backend print nicely in REPL
+(defmethod print-method OpenAIBackend [backend writer]
+  (.write writer 
+    (format "#OpenAI[model: %s, timeout: %dms%s]"
+            (:default-model backend)
+            (:timeout-ms backend)
+            (if (:default-opts backend)
+              (format ", defaults: %s" (pr-str (:default-opts backend)))
+              ""))))
