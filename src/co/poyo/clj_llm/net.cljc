@@ -19,24 +19,22 @@
        (catch Exception e
          (cb {:status 0 :body nil :error e})))
      :clj
-     ;; Use Java HTTP client in a future to avoid blocking
      (a/thread
        (try
          (let [client (-> (HttpClient/newBuilder)
-                         (.version HttpClient$Version/HTTP_2)
-                         (.connectTimeout (Duration/ofSeconds 10))
-                         (.build))
+                          (.version HttpClient$Version/HTTP_2)
+                          (.connectTimeout (Duration/ofSeconds 10))
+                          (.build))
                request-builder (-> (HttpRequest/newBuilder)
-                                  (.uri (URI/create url))
-                                  (.timeout (Duration/ofSeconds 30))
-                                  (.POST (HttpRequest$BodyPublishers/ofString body)))]
-           ;; Add headers
+                                   (.uri (URI/create url))
+                                   (.timeout (Duration/ofSeconds 30))
+                                   (.POST (HttpRequest$BodyPublishers/ofString body)))]
            (doseq [[k v] headers]
              (.header request-builder k v))
 
            (let [response (.send client
-                                (.build request-builder)
-                                (HttpResponse$BodyHandlers/ofInputStream))]
+                                 (.build request-builder)
+                                 (HttpResponse$BodyHandlers/ofInputStream))]
              (cb {:status (.statusCode response)
                   :body (.body response)
                   :error nil})))
