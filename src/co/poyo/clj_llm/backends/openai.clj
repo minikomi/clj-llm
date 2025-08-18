@@ -9,56 +9,46 @@
             [co.poyo.clj-llm.sse :as sse]
             [co.poyo.clj-llm.schema :as schema]
             [co.poyo.clj-llm.protocol :as proto]
-            [co.poyo.clj-llm.errors :as errors]))
-
+            [co.poyo.clj-llm.errors :as errors]
+            [co.poyo.clj-llm.helpers :as helpers]))
 
 (def ^:private default-config
   {:api-key-env "OPENAI_API_KEY"
    :api-base "https://api.openai.com/v1"
-   :default-model "gpt-4.1-mini"
+   :default-model "gpt-5-mini"
    :timeout-ms 60000})
 
-
-(defn- format-message
-  "Format a single message for OpenAI API"
-  [{:keys [role content] :as msg}]
-  {:role (name role)
-   :content content})
-
-(defn- kebab->underscore [k]
-  "Convert kebab-case keyword to underscore for API compatibility"
-  (if (keyword? k)
-    (keyword (str/replace (name k) "-" "_"))
-    k))
+(def api-opts-keys [:temperature
+                    :top-p
+                    :max-tokens
+                    :frequency-penalty
+                    :presence-penalty
+                    :response-format
+                    :seed
+                    :stop])
 
 (defn- convert-options-for-api
   "Convert kebab-case options to underscore format for OpenAI API"
   [opts]
   (into {}
-    (map (fn [[k v]]
-           [(kebab->underscore k) v])
-         opts)))
+        (map (fn [[k v]]
+               [(helpers/kebab->underscore k) v])
+             (select-keys opts api-opts-keys))))
 
 (defn- build-body
   "Build OpenAI API request body"
   [model messages {:keys [schema system-prompt] :as opts}]
-  (let [final-messages (mapv format-message messages)
+  (let [final-messages (mapv (fn [{:keys [role content]} {:role (name role) :content content}]) messages)
         schema-config (when schema
                         {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
                          :tool_choice "required"})
-        ;; Convert kebab-case to underscores for API
-        api-opts (convert-options-for-api
-                  (select-keys opts [:temperature :top-p :max-tokens 
-                                    :frequency-penalty :presence-penalty
-                                    :response-format :seed :stop]))]
+        api-opts (convert-options-for-api opts)]
     (merge {:model model
             :stream true
             :stream_options {:include_usage true}
             :messages final-messages}
            schema-config
            api-opts)))
-
-
 
 (defn- parse-chunk
   "Parse a single SSE chunk from OpenAI stream"
@@ -88,7 +78,7 @@
         (cond
           (and (:schema opts) has-args?)
           [{:type :content :content (get-in tool-call [:function :arguments])}]
-          
+
           :else nil))
 
       (:usage parsed)
@@ -98,7 +88,6 @@
         :total-tokens (get-in parsed [:usage :total_tokens])}]
 
       :else nil)))
-
 
 (defn- handle-error-response
   "Parse error response from API and create appropriate error event"
@@ -160,92 +149,58 @@
 
     events-chan))
 
-
 (defrecord OpenAIBackend [api-base api-key default-model default-opts timeout-ms]
   proto/LLMProvider
   (request-stream [_ model messages opts]
     (create-event-stream api-base api-key model messages opts)))
 
-
 (defn backend
-  "Create an OpenAI backend instance.
-   
-   Multiple arities for convenience:
-     (backend)                    ; Uses OPENAI_API_KEY env var
-     (backend \"gpt-4\")           ; Uses env var with specific model
-     (backend {:model \"gpt-4\"})  ; Shorthand config
-     (backend {:backend {...}     ; Full control
-               :defaults {...}})
-               
-   Full config structure:
-     {:backend {:api-key \"...\"
-                :api-key-env \"OPENAI_API_KEY\"
-                :api-base \"https://api.openai.com/v1\"
-                :default-model \"gpt-4o-mini\"
-                :timeout-ms 60000}
-      :defaults {:temperature 0.7
-                 :max-tokens 1000}}
-     
-   Examples:
-     ;; Simple
-     (def ai (backend))
-     
-     ;; With model
-     (def ai (backend \"gpt-4\"))
-     
-     ;; OpenRouter
-     (def router (backend 
-       {:backend {:api-key-env \"OPENROUTER_API_KEY\"
-                  :api-base \"https://openrouter.ai/api/v1\"
-                  :default-model \"openai/gpt-4o-mini\"}}))
-     
-   See (describe-options) for available options."
-  ([] 
+  "Create an OpenAI backend instance."
+  ([]
    (backend {}))
-  
+
   ([config-or-model]
    (cond
      ;; String model shorthand
      (string? config-or-model)
-     (backend {:backend {:default-model config-or-model}})
-     
+     (backend {:backend {:default-options {:model config-or-model}}})
+
      ;; Empty map - use all defaults
      (and (map? config-or-model) (empty? config-or-model))
      (backend {:backend {}})
-     
+
      ;; Check if it's a full config with :backend key
      (contains? config-or-model :backend)
      (let [{:keys [backend defaults]} config-or-model
            ;; Merge with defaults FIRST
            backend-config (merge default-config (or backend {}))
            resolved-key (or (:api-key backend-config)
-                           (when-let [env (:api-key-env backend-config)]
-                             (System/getenv env)))]
-       
+                            (when-let [env (:api-key-env backend-config)]
+                              (System/getenv env)))]
+
        ;; Validate API key
        (when-not resolved-key
-         (throw (errors/error "Missing API key" 
-                             {:provider "openai"
-                              :api-key-env (:api-key-env backend-config)})))
-       
+         (throw (errors/error "Missing API key"
+                              {:provider "openai"
+                               :api-key-env (:api-key-env backend-config)})))
+
        ;; Create backend record with defaults
        (->OpenAIBackend (:api-base backend-config)
                         resolved-key
                         (:default-model backend-config)
                         defaults
                         (:timeout-ms backend-config)))
-     
+
      ;; Shorthand config - wrap in :backend
      :else
      (backend {:backend config-or-model}))))
 
-
 ;; Make backend print nicely in REPL
 (defmethod print-method OpenAIBackend [backend writer]
-  (.write writer 
-    (format "#OpenAI[model: %s, timeout: %dms%s]"
-            (:default-model backend)
-            (:timeout-ms backend)
-            (if (:default-opts backend)
-              (format ", defaults: %s" (pr-str (:default-opts backend)))
-              ""))))
+  (.write writer
+          (format "#OpenAI[model: %s, timeout: %dms%s]"
+                  (:default-model backend)
+                  (:timeout-ms backend)
+                  (if (:default-opts backend)
+                    (format ", defaults: %s" (pr-str (:default-opts backend)))
+                    ""))))

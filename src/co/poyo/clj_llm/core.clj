@@ -2,14 +2,17 @@
   (:require
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.errors :as errors]
+   [co.poyo.clj-llm.helpers :as helpers]
+
    [clojure.core.async :as a :refer [go-loop <! >! <!! chan]]
+
    [malli.core :as m]
    [malli.error :as me]
    [malli.transform :as mt]
    [malli.generator :as mg]
+
    [cheshire.core :as json]
    [clojure.string :as str]))
-
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Malli Schemas for Configuration and Options
@@ -20,9 +23,7 @@
   [:map {:closed true}
    [:api-key {:optional true} :string]
    [:api-key-env {:optional true :default "OPENAI_API_KEY"} :string]
-   [:api-base {:optional true :default "https://api.openai.com/v1"} :string]
-   [:default-model {:optional true :default "gpt-4o-mini"} :string]
-   [:timeout-ms {:optional true :default 60000} [:int {:min 1000}]]])
+   [:api-base {:optional true :default "https://api.openai.com/v1"} :string]])
 
 (def CallOptionsSchema
   "Schema for LLM call options"
@@ -35,7 +36,7 @@
    [:presence-penalty {:optional true} [:double {:min -2.0 :max 2.0}]]
    [:system-prompt {:optional true} :string]
    [:schema {:optional true} :any]
-   [:messages {:optional true} [:vector [:map [:role :keyword] [:content :string]]]]
+   [:messages-history {:optional true} [:vector [:map [:role :keyword] [:content :string]]]]
    [:timeout {:optional true} [:int {:min 1000}]]
    [:seed {:optional true} :int]
    [:stop {:optional true} [:vector :string]]
@@ -45,17 +46,11 @@
 ;; Options Transformation and Validation
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn- underscore->kebab [k]
-  "Convert underscore keyword to kebab-case"
-  (if (keyword? k)
-    (keyword (str/replace (name k) "_" "-"))
-    k))
-
 (def options-transformer
   "Transformer to convert underscore keywords to kebab-case"
   (mt/transformer
-    {:name :options
-     :decoders {'keyword? underscore->kebab}}))
+   {:name :options
+    :decoders {'keyword? helpers/underscore->kebab}}))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; REPL Exploration Functions
@@ -66,14 +61,14 @@
    Returns a map of option names to their properties."
   []
   (into {}
-    (for [[k props schema] (m/children CallOptionsSchema)]
-      (let [schema-type (m/type schema)
-            properties (when (vector? schema) (m/properties schema))]
-        [k (merge
-            {:optional? (:optional props true)
-             :type schema-type}
-            (when properties
-              {:constraints properties}))]))))
+        (for [[k props schema] (m/children CallOptionsSchema)]
+          (let [schema-type (m/type schema)
+                properties (when (vector? schema) (m/properties schema))]
+            [k (merge
+                {:optional? (:optional props true)
+                 :type schema-type}
+                (when properties
+                  {:constraints properties}))]))))
 
 (defn describe-options
   "Print a formatted description of all available options"
@@ -139,6 +134,9 @@
   clojure.lang.IDeref
   (deref [_] @text))
 
+;; ════════════════════════════════════════════════════════════════════
+;; Helpers
+;; ════════════════════════════════════════════════════════════════════
 
 (defn- parse-structured-output
   "Parse the response as JSON when schema is provided"
@@ -155,39 +153,47 @@
                      :value result
                      :errors (me/humanize (m/explain schema result))}))))
         parsed))
-    (catch clojure.lang.ExceptionInfo e
-      ;; Re-throw our own errors
-      (throw e))
+    (catch clojure.lang.ExceptionInfo e (throw e))
     (catch Exception e
       (throw (errors/error
               "Failed to parse structured output"
               {:input text})))))
 
+(defn- build-opts [provider opts]
+  (let [validated-opts (when opts (validate-options opts))]
+    (merge (:default-opts provider) validated-opts)))
+
 (defn- build-messages
   "Build messages array from prompt and options"
-  [prompt {:keys [system-prompt messages schema] :as opts}]
-  (if messages messages
-      (let [effective-prompt (if (and prompt schema)
-                               (str prompt "\n\nRespond with valid JSON.")
-                               prompt)]
-        (cond-> []
-          system-prompt (conj {:role "system" :content system-prompt})
-          effective-prompt (conj {:role "user" :content effective-prompt})))))
+  [prompt system-prompt]
+  (cond-> []
+    system-prompt (conj)
+    prompt (conj {:role "user" :content prompt})))
 
+;; ════════════════════════════════════════════════════════════════════
+;; Main prompt fn
+;; ════════════════════════════════════════════════════════════════════
 
 (defn prompt
-  ([provider prompt-str]
-   (prompt provider prompt-str nil))
-  ([provider prompt-str opts]
-   (let [;; Validate and coerce options
-         validated-opts (when opts (validate-options opts))
-         opts (merge (:default-opts provider) validated-opts)
-         model (or (:model opts) (:default-model provider))
-         messages (build-messages prompt-str opts)
+  ([provider prompt-input]
+   (prompt provider prompt-input nil))
+  ([provider prompt-input opts]
+   (let [;; input setup
+         opts (build-opts provider opts)
+         model (:model opts)
+         message-history (cond
+                           (:message-history opts) (:message-history opts)
+                           (:system-prompt opts) [{:role "system" :content (:system-prompt opts)}]
+                           :else [])
+         messages (conj message-history (if (str? prompt-input)
+                                          {:role "user" :content prompt-input}
+                                          prompt-input))
+
+         ;; chan setup
          source-chan (proto/request-stream provider model messages opts)
          req-start (System/currentTimeMillis)
 
-         ;; Channels with cleanup
+         ;; chan with cleanup
          text-chunks-chan (chan (a/dropping-buffer 1024))
          events-chan (chan (a/dropping-buffer 1024))
 
@@ -200,41 +206,41 @@
          _ (go-loop [chunks []]
              (if-let [event (<! source-chan)]
                ;; Process event
-                 (do
-                   (a/offer! events-chan event)
-                   (case (:type event)
-                     :content (do
-                               (a/offer! text-chunks-chan (:content event))
-                               (recur (conj chunks (:content event))))
-                     :usage (do
-                             (deliver usage-promise
-                                      (assoc event
-                                             :clj-llm/model model
-                                             :clj-llm/req-start req-start
-                                             :clj-llm/req-end (System/currentTimeMillis)
-                                             :clj-llm/duration (- (System/currentTimeMillis) req-start)))
-                             (recur chunks))
-                     :error (do
-                             (deliver text-promise (errors/error
-                                                   "LLM request failed" 
+               (do
+                 (a/offer! events-chan event)
+                 (case (:type event)
+                   :content (do
+                              (a/offer! text-chunks-chan (:content event))
+                              (recur (conj chunks (:content event))))
+                   :usage (do
+                            (deliver usage-promise
+                                     (assoc event
+                                            :clj-llm/model model
+                                            :clj-llm/req-start req-start
+                                            :clj-llm/req-end (System/currentTimeMillis)
+                                            :clj-llm/duration (- (System/currentTimeMillis) req-start)))
+                            (recur chunks))
+                   :error (do
+                            (deliver text-promise (errors/error
+                                                   "LLM request failed"
                                                    {:event event
                                                     :request {:model model
-                                                             :messages messages
-                                                             :started-at req-start
-                                                             :provider provider}}))
-                             (when-not (realized? usage-promise)
-                               (deliver usage-promise nil))
-                             (when-not (realized? structured-promise)
-                               (deliver structured-promise (Exception. (:error event))))
-                             (a/close! text-chunks-chan)
-                             (a/close! events-chan))
-                     :done (do
-                            (deliver text-promise (apply str chunks))
+                                                              :messages messages
+                                                              :started-at req-start
+                                                              :provider provider}}))
                             (when-not (realized? usage-promise)
                               (deliver usage-promise nil))
+                            (when-not (realized? structured-promise)
+                              (deliver structured-promise (Exception. (:error event))))
                             (a/close! text-chunks-chan)
                             (a/close! events-chan))
-                     (recur chunks)))
+                   :done (do
+                           (deliver text-promise (apply str chunks))
+                           (when-not (realized? usage-promise)
+                             (deliver usage-promise nil))
+                           (a/close! text-chunks-chan)
+                           (a/close! events-chan))
+                   (recur chunks)))
                ;; Source closed
                (do
                  (deliver text-promise (apply str chunks))
@@ -260,90 +266,3 @@
                  text-promise
                  usage-promise
                  structured-promise))))
-
-
-(defn generate
-  "Generate response from the LLM.
-
-     Args:
-         provider - LLM provider instance
-         prompt   - String prompt or nil if messages provided in opts
-         opts     - Options map (see `describe-options` for available options)
-
-     Returns:
-         Text response or, when schema present, structured data.
-
-     Example:
-         (generate openai \"Tell me a joke\") 
-         (generate openai \"Write a poem\" {:temperature 0.9 :max-tokens 100})"
-  ([provider prompt-str]
-   (generate provider prompt-str nil))
-  ([provider prompt-str opts]
-   (let [response (prompt provider prompt-str opts)
-         timeout-ms (or (:timeout opts) 
-                       (:timeout (:default-opts provider)) 
-                       30000)]
-     
-     (let [result-promise (if (or (:schema opts) (:schema (:default-opts provider)))
-                             (:structured response)
-                             (:text response))
-             result (deref result-promise timeout-ms ::timeout)]
-         (cond
-           (= result ::timeout)
-           (throw (errors/error 
-                   (str "LLM request timed out after " timeout-ms "ms")
-                   {:timeout-ms timeout-ms
-                    :provider provider 
-                    :prompt prompt-str 
-                    :opts opts}))
-           
-           (instance? Exception result)
-           (throw result)
-           
-           :else
-           result)))))
-
-(defn events
-  "Get raw events channel for monitoring LLM interactions.
-
-   Args:
-     provider - LLM provider instance
-     prompt   - String prompt or nil if messages provided in opts
-     opts     - Options map (see `prompt` for details)
-
-   Returns:
-     Channel of raw events with type :content, :usage, :error, etc.
-
-   Example:
-     (let [events (events openai \"Hello\")]
-       (go-loop []
-         (when-let [event (<! events)]
-           (handle-event event)
-           (recur))))"
-  ([provider prompt-str]
-   (events provider prompt-str nil))
-  ([provider prompt-str opts]
-   (:events (prompt provider prompt-str opts))))
-
-(defn stream
-    "Stream text chunks from the LLM.
-
-     Args:
-         provider - LLM provider instance
-         prompt   - String prompt or nil if messages provided in opts
-         opts     - Options map (see `prompt` for details)
-
-     Returns:
-         Channel of text chunks as they are generated.
-
-     Example:
-         (let [chunks (stream openai \"Tell me a story\")]
-         (go-loop []
-             (when-let [chunk (<! chunks)]
-             (process-chunk chunk)
-             (recur))))"
-    ([provider prompt-str]
-     (stream provider prompt-str nil))
-    ([provider prompt-str opts]
-     (:chunks (prompt provider prompt-str opts))))
-
