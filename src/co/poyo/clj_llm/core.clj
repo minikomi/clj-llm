@@ -26,108 +26,20 @@
    [:api-base {:optional true :default "https://api.openai.com/v1"} :string]])
 
 (def CallOptionsSchema
-  "Schema for LLM call options"
+  "Schema for Library Specific Call Options"
   [:map {:closed true}
-   [:model {:optional true} :string]
-   [:temperature {:optional true} [:double {:min 0.0 :max 2.0}]]
-   [:max-tokens {:optional true} [:int {:min 1}]]
-   [:top-p {:optional true} [:double {:min 0.0 :max 1.0}]]
-   [:frequency-penalty {:optional true} [:double {:min -2.0 :max 2.0}]]
-   [:presence-penalty {:optional true} [:double {:min -2.0 :max 2.0}]]
+   [:model {:optional true :default "gpt-5-mini"} [:or :string :keyword]]
    [:system-prompt {:optional true} :string]
    [:schema {:optional true} :any]
-   [:messages-history {:optional true} [:vector [:map [:role :keyword] [:content :string]]]]
-   [:timeout {:optional true} [:int {:min 1000}]]
-   [:seed {:optional true} :int]
-   [:stop {:optional true} [:vector :string]]
-   [:response-format {:optional true} [:map [:type :string]]]])
+   [:message-history {:optional true} [:vector [:map [:role :keyword] [:content :string]]]]])
+
+(defn- extract-call-options [opts]
+  (-> opts
+      (m/decode (keys CallOptionsSchema) mt/strip-extra-keys-transformer)
+      (m/validate CallOptionsSchema)))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Options Transformation and Validation
-;; ════════════════════════════════════════════════════════════════════
-
-(def options-transformer
-  "Transformer to convert underscore keywords to kebab-case"
-  (mt/transformer
-   {:name :options
-    :decoders {'keyword? helpers/underscore->kebab}}))
-
-;; ════════════════════════════════════════════════════════════════════
-;; REPL Exploration Functions
-;; ════════════════════════════════════════════════════════════════════
-
-(defn options
-  "Get human-readable documentation for all available options.
-   Returns a map of option names to their properties."
-  []
-  (into {}
-        (for [[k props schema] (m/children CallOptionsSchema)]
-          (let [schema-type (m/type schema)
-                properties (when (vector? schema) (m/properties schema))]
-            [k (merge
-                {:optional? (:optional props true)
-                 :type schema-type}
-                (when properties
-                  {:constraints properties}))]))))
-
-(defn describe-options
-  "Print a formatted description of all available options"
-  []
-  (println "\n═══ Available LLM Call Options ═══\n")
-  (doseq [[k info] (options)]
-    (println (format "  %-20s %s%s"
-                     (str k)
-                     (name (:type info))
-                     (if-let [constraints (:constraints info)]
-                       (format " %s" (pr-str constraints))
-                       ""))))
-  (println "\n═══ Backend Configuration Options ═══\n")
-  (doseq [[k props schema] (m/children BackendConfigSchema)]
-    (println (format "  %-20s %s%s"
-                     (str k)
-                     (if (keyword? schema) (name schema) "custom")
-                     (if-let [default (:default props)]
-                       (format " (default: %s)" default)
-                       ""))))
-  nil)
-
-(defn valid?
-  "Check if options are valid according to the schema.
-   Returns true if valid, false otherwise."
-  [opts]
-  (nil? (m/explain CallOptionsSchema opts)))
-
-(defn explain
-  "Explain why options are invalid. Returns nil if valid,
-   otherwise returns human-readable error messages."
-  [opts]
-  (when-let [explanation (m/explain CallOptionsSchema opts)]
-    (me/humanize explanation)))
-
-(defn coerce
-  "Coerce options to valid format. Fixes underscores to kebab-case
-   and attempts type coercion."
-  [opts]
-  (m/decode CallOptionsSchema opts options-transformer))
-
-(defn validate-options
-  "Validate options and throw helpful exception if invalid"
-  [opts]
-  (let [coerced (coerce opts)]
-    (if-let [explanation (m/explain CallOptionsSchema coerced)]
-      (let [errors (me/humanize explanation)
-            invalid-keys (keys errors)
-            valid-keys (map first (m/children CallOptionsSchema))]
-        (throw (ex-info "Invalid options"
-                        {:errors errors
-                         :invalid-keys invalid-keys
-                         :valid-options valid-keys
-                         :hint (format "Valid options: %s" (pr-str valid-keys))
-                         :see-also "(describe-options) for full documentation"})))
-      coerced)))
-
-;; ════════════════════════════════════════════════════════════════════
-;; Response Record
+;; Response record
 ;; ════════════════════════════════════════════════════════════════════
 
 (defrecord Response [chunks events text usage structured]
@@ -160,8 +72,8 @@
               {:input text})))))
 
 (defn- build-opts [provider opts]
-  (let [validated-opts (when opts (validate-options opts))]
-    (merge (:default-opts provider) validated-opts)))
+  (merge (:default-opts provider)
+         (apply dissoc opts (keys CallOptionsSchema))))
 
 (defn- build-messages
   "Build messages array from prompt and options"
@@ -179,13 +91,15 @@
    (prompt provider prompt-input nil))
   ([provider prompt-input opts]
    (let [;; input setup
-         opts (build-opts provider opts)
-         model (:model opts)
+         {:keys [schema model system-prompt message-history]} (extract-call-options opts)
+         api-opts (apply dissoc opts (keys CallOptionsSchema))
+         ;; optional history
          message-history (cond
-                           (:message-history opts) (:message-history opts)
-                           (:system-prompt opts) [{:role "system" :content (:system-prompt opts)}]
+                           message-history message-history
+                           system-prompt [{:role "system" :content system-prompt}]
                            :else [])
-         messages (conj message-history (if (str? prompt-input)
+         ;; add this time's input
+         messages (conj message-history (if (string? prompt-input)
                                           {:role "user" :content prompt-input}
                                           prompt-input))
 
@@ -250,14 +164,14 @@
                  (a/close! events-chan))))
 
          ;; Structured output processing
-         _ (when (:schema opts)
+         _ (when schema
              (future
                (try
                  (let [text @text-promise]
                    (deliver structured-promise
                             (if (instance? Exception text)
                               text
-                              (parse-structured-output text (:schema opts)))))
+                              (parse-structured-output text schema))))
                  (catch Exception e
                    (deliver structured-promise e)))))]
 
