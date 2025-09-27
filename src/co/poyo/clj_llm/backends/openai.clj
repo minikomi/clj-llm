@@ -32,21 +32,20 @@
   [opts]
   (into {}
         (map (fn [[k v]]
-               [(helpers/kebab->underscore k) v])
+               [(-> k name helpers/kebab->underscore keyword) v])
              (select-keys opts api-opts-keys))))
 
 (defn- build-body
   "Build OpenAI API request body"
-  [model messages {:keys [schema system-prompt] :as opts}]
-  (let [final-messages (mapv (fn [{:keys [role content]} {:role (name role) :content content}]) messages)
-        schema-config (when schema
+  [model messages {:keys [schema] :as opts}]
+  (let [schema-config (when schema
                         {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
                          :tool_choice "required"})
         api-opts (convert-options-for-api opts)]
     (merge {:model model
             :stream true
             :stream_options {:include_usage true}
-            :messages final-messages}
+            :messages messages}
            schema-config
            api-opts)))
 

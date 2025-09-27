@@ -2,7 +2,9 @@
   (:require [clojure.string :as str]))
 
 (defn underscore->kebab [k]
-  "Convert underscore keyword to kebab-case"
-  (if (keyword? k)
-    (keyword (str/replace (name k) "_" "-"))
-    k))
+  "Convert underscore string to kebab-case"
+  (str/replace (name k) "_" "-"))
+
+(defn kebab->underscore [k]
+  "Convert kebab-case string to underscore"
+  (str/replace (name k) "-" "_"))
