@@ -5,12 +5,13 @@
 (println "Testing streaming in" (if (System/getProperty "babashka.version") "Babashka" "Clojure"))
 (println "--------------------")
 
-(def backend (openai/backend {:api-key (System/getenv "OPENAI_API_KEY")}))
+(def provider (openai/->openai {:api-key (System/getenv "OPENAI_API_KEY")}))
 
 (let [start-time (System/currentTimeMillis)
-      chunks (llm/stream backend "give me a long poem please" 
-                        {:model "gpt-4.1-nano"
-                         :temperature 0})]
+      response (llm/prompt provider "give me a long poem please"
+                          {:provider/opts {:model "gpt-4o-mini"
+                                           :temperature 0}})
+      chunks (:chunks response)]
   (println "Stream started at 0ms")
   (loop [chunk-count 0]
     (when-let [chunk (<!! chunks)]

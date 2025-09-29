@@ -3,9 +3,10 @@
 
 (defprotocol LLMProvider
   "Protocol that all LLM providers must implement"
-  (request-stream [this
-                   model
-                   messages
-                   schema
-                   api-opts]
-    "Make a streaming request to the LLM provider"))
+  (request-stream [this messages provider-opts]
+    "Make a streaming request to the LLM provider.
+     
+     Arguments:
+     - this: The provider instance
+     - messages: Vector of message maps with :role and :content
+     - provider-opts: Map of provider-specific options (passed through unchanged)"))

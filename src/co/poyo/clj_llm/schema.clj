@@ -106,13 +106,22 @@
 ;; #:malli.instrument{:original #function[co.poyo.clj-llm.sandbox/transfer-money]}
 (defn f->meta [f]
   (let [str-f (str (or (:malli.instrument/original (meta f)) f))]
-         (-> str-f
-             (clojure.repl/demunge)
-             (clojure.string/replace #"@.*$" "")
-             (clojure.string/replace #"^#'" "")
-             (symbol)
-             (find-var)
-             (meta))))
+    (try
+      (-> str-f
+          (clojure.repl/demunge)
+          (clojure.string/replace #"@.*$" "")
+          (clojure.string/replace #"^#'" "")
+          (symbol)
+          (find-var)
+          (meta))
+      (catch Exception e
+        ;; Fallback for Babashka/SCI environments where find-var might fail
+        (when (System/getProperty "babashka.version")
+          (throw (ex-info "Malli instrumented function extraction not supported in Babashka"
+                          {:function f
+                           :suggestion "Use the malli_schemas_example.clj instead"}
+                          e)))
+        (throw e)))))
 
 (defn get-schema-from-malli-function-registry
   [f]

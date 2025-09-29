@@ -2,7 +2,10 @@
 
 (ns malli-instrumented-example
   "Example of using Malli instrumented functions with clj-llm for structured extraction.
-   
+
+   NOTE: This example requires JVM Clojure and is NOT compatible with Babashka.
+   For Babashka compatibility, use malli_schemas_example.clj instead.
+
    This demonstrates how to:
    1. Define functions with Malli schemas
    2. Extract those schemas for use with LLMs
@@ -85,8 +88,8 @@
 ;; Set up LLM backend
 ;; ==========================================
 
-(def ai (openai/backend {:api-key-env "OPENAI_API_KEY"
-                         :default-model "gpt-4.1-mini"}))
+(def ai (openai/->openai {:api-key-env "OPENAI_API_KEY"
+                          :defaults {:provider/opts {:model "gpt-4o-mini"}}}))
 
 ;; ==========================================
 ;; Example 1: Money Transfer
@@ -102,7 +105,7 @@
   (println "\nExtracted schema from function:")
   (pp/pprint (m/form schema))
   
-  (let [extracted-data (llm/generate ai prompt {:schema schema})]
+  (let [extracted-data @(:structured (llm/prompt ai prompt {:llm/schema schema}))]
     (println "\nExtracted data:")
     (pp/pprint extracted-data)
     
@@ -121,7 +124,7 @@
   
   (println "Input text:" prompt)
   
-  (let [extracted-data (llm/generate ai prompt {:schema schema})]
+  (let [extracted-data @(:structured (llm/prompt ai prompt {:llm/schema schema}))]
     (println "\nExtracted data:")
     (pp/pprint extracted-data)
     
@@ -141,7 +144,7 @@
   (println "Input text:" prompt)
   
   (try
-    (let [extracted-data (llm/generate ai prompt {:schema schema})]
+    (let [extracted-data @(:structured (llm/prompt ai prompt {:llm/schema schema}))]
       (println "\nExtracted data:")
       (pp/pprint extracted-data)
       
