@@ -15,28 +15,55 @@
    [clojure.string :as str]))
 
 ;; ════════════════════════════════════════════════════════════════════
+;; Utilities
+;; ════════════════════════════════════════════════════════════════════
+
+(defn deep-merge
+  "Deep merge maps, recursively merging nested maps"
+  [& maps]
+  (apply merge-with
+         (fn [v1 v2]
+           (if (and (map? v1) (map? v2))
+             (deep-merge v1 v2)
+             v2))
+         maps))
+
+;; ════════════════════════════════════════════════════════════════════
 ;; Malli Schemas for Configuration and Options
 ;; ════════════════════════════════════════════════════════════════════
 
-(def BackendConfigSchema
-  "Schema for backend configuration options"
-  [:map {:closed true}
-   [:api-key {:optional true} :string]
-   [:api-key-env {:optional true :default "OPENAI_API_KEY"} :string]
-   [:api-base {:optional true :default "https://api.openai.com/v1"} :string]])
+(def LibraryOpts
+  "Schema for library-level options (what clj-llm controls)"
+  [:map
+   [:llm/system-prompt {:optional true
+                        :description "System prompt for the AI"} 
+    :string]
+   [:llm/schema {:optional true
+                 :description "Schema for structured responses"}
+    :map]
+   [:llm/message-history {:optional true
+                          :description "Conversation history"}
+    [:vector [:map
+              [:role [:enum :user :assistant :system]]
+              [:content :string]]]]])
 
-(def CallOptionsSchema
-  "Schema for Library Specific Call Options"
-  [:map {:closed true}
-   [:model {:optional true :default "gpt-5-mini"} [:or :string :keyword]]
-   [:system-prompt {:optional true} :string]
-   [:schema {:optional true} :any]
-   [:message-history {:optional true} [:vector [:map [:role :keyword] [:content :string]]]]])
+(def PromptOpts
+  "Schema for combined options passed to prompt function"
+  [:map
+   [:llm/system-prompt {:optional true} :string]
+   [:llm/schema {:optional true} :map]  
+   [:llm/message-history {:optional true} [:vector :map]]
+   [:provider/opts {:optional true
+                    :description "Provider-specific options (passthrough)"}
+    :map]])
 
-(defn- extract-call-options [opts]
+(defn- extract-library-options [opts]
   (-> opts
-      (m/decode (keys CallOptionsSchema) mt/strip-extra-keys-transformer)
-      (m/validate CallOptionsSchema)))
+      (select-keys [:llm/system-prompt :llm/schema :llm/message-history])
+      (as-> lib-opts
+        (when (seq lib-opts)
+          (m/validate LibraryOpts lib-opts)
+          lib-opts))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Response record
@@ -71,16 +98,23 @@
               "Failed to parse structured output"
               {:input text})))))
 
-(defn- build-opts [provider opts]
-  (merge (:default-opts provider)
-         (apply dissoc opts (keys CallOptionsSchema))))
-
 (defn- build-messages
   "Build messages array from prompt and options"
-  [prompt system-prompt]
-  (cond-> []
-    system-prompt (conj)
-    prompt (conj {:role "user" :content prompt})))
+  [prompt system-prompt message-history]
+  (let [base-messages (or message-history [])
+        messages-with-system (if system-prompt
+                               (if (and (seq base-messages) 
+                                       (= :system (:role (first base-messages))))
+                                 ;; Replace existing system message
+                                 (cons {:role :system :content system-prompt} 
+                                       (rest base-messages))
+                                 ;; Add system message at start
+                                 (cons {:role :system :content system-prompt} 
+                                       base-messages))
+                               base-messages)]
+    (if prompt
+      (conj (vec messages-with-system) {:role :user :content prompt})
+      (vec messages-with-system))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Main prompt fn
@@ -90,21 +124,21 @@
   ([provider prompt-input]
    (prompt provider prompt-input nil))
   ([provider prompt-input opts]
-   (let [;; input setup
-         {:keys [schema model system-prompt message-history]} (extract-call-options opts)
-         api-opts (apply dissoc opts (keys CallOptionsSchema))
-         ;; optional history
-         message-history (cond
-                           message-history message-history
-                           system-prompt [{:role "system" :content system-prompt}]
-                           :else [])
-         ;; add this time's input
-         messages (conj message-history (if (string? prompt-input)
-                                          {:role "user" :content prompt-input}
-                                          prompt-input))
+   (let [;; Merge defaults from provider with runtime options
+         final-opts (deep-merge (:defaults provider) opts)
+         
+         ;; Validate and extract library options
+         lib-opts (extract-library-options final-opts)
+         {:llm/keys [system-prompt schema message-history]} lib-opts
+         
+         ;; Provider options pass through unchanged, with schema added for providers that need it
+         provider-opts (assoc (:provider/opts final-opts) :__schema schema)
+         
+         ;; Build final messages array
+         messages (build-messages prompt-input system-prompt message-history)
 
          ;; chan setup
-         source-chan (proto/request-stream provider model messages opts)
+         source-chan (proto/request-stream provider messages provider-opts)
          req-start (System/currentTimeMillis)
 
          ;; chan with cleanup
@@ -129,7 +163,7 @@
                    :usage (do
                             (deliver usage-promise
                                      (assoc event
-                                            :clj-llm/model model
+                                            :clj-llm/provider-opts provider-opts
                                             :clj-llm/req-start req-start
                                             :clj-llm/req-end (System/currentTimeMillis)
                                             :clj-llm/duration (- (System/currentTimeMillis) req-start)))
@@ -138,8 +172,8 @@
                             (deliver text-promise (errors/error
                                                    "LLM request failed"
                                                    {:event event
-                                                    :request {:model model
-                                                              :messages messages
+                                                    :request {:messages messages
+                                                              :provider-opts provider-opts
                                                               :started-at req-start
                                                               :provider provider}}))
                             (when-not (realized? usage-promise)

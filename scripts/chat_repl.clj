@@ -18,13 +18,13 @@
 (defn -main [& args]
   (let [model-name (or (first args) "gpt-5-nano")]
 
-    ;; Create backend - will validate API key
-    (let [backend (try
-                    (openai/backend {:api-key-env "OPENAI_API_KEY"})
-                    (catch Exception e
-                      (println "Error:" (ex-message e))
-                      (println "\nMake sure OPENAI_API_KEY is set in your environment")
-                      (System/exit 1)))
+    ;; Create provider - will validate API key
+    (let [provider (try
+                     (openai/->openai {:api-key-env "OPENAI_API_KEY"})
+                     (catch Exception e
+                       (println "Error:" (ex-message e))
+                       (println "\nMake sure OPENAI_API_KEY is set in your environment")
+                       (System/exit 1)))
 
           ;; Track conversation history
           conversation (atom [])]
@@ -54,12 +54,14 @@
 
               (try
                 ;; Stream the response
-                (let [chunks (:chunks (llm/prompt backend input
+                (let [chunks (:chunks (llm/prompt provider input
                                                   (cond->
-                                                   {:model model-name
-                                                    :message-history @conversation}
+                                                   {:llm/message-history @conversation
+                                                    :provider/opts {:model model-name}}
                                                     (str/starts-with? model-name "gpt-5-")
-                                                    (assoc :verbosity "low" :reasoning-effort "minimal"))))
+                                                    (->
+                                                     (assoc-in [:provider/opts :verbosity] "low")
+                                                     (assoc-in [:provider/opts :reasoning-effort] "minimal")))))
                       ;; Collect response for history
                       response-text (atom "")]
 

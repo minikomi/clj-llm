@@ -18,36 +18,29 @@
    :default-model "gpt-5-mini"
    :timeout-ms 60000})
 
-(def api-opts-keys [:temperature
-                    :top-p
-                    :max-tokens
-                    :frequency-penalty
-                    :presence-penalty
-                    :response-format
-                    :seed
-                    :stop])
-
 (defn- convert-options-for-api
   "Convert kebab-case options to underscore format for OpenAI API"
   [opts]
   (into {}
         (map (fn [[k v]]
                [(-> k name helpers/kebab->underscore keyword) v])
-             (select-keys opts api-opts-keys))))
+             opts)))
 
 (defn- build-body
   "Build OpenAI API request body"
-  [model messages {:keys [schema] :as opts}]
+  [messages schema provider-opts]
   (let [schema-config (when schema
                         {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
                          :tool_choice "required"})
-        api-opts (convert-options-for-api opts)]
+        api-opts (convert-options-for-api provider-opts)
+        ;; Extract model from provider opts, default if not present
+        model (:model provider-opts "gpt-4o-mini")]
     (merge {:model model
             :stream true
             :stream_options {:include_usage true}
             :messages messages}
            schema-config
-           api-opts)))
+           (dissoc api-opts :model))))
 
 (defn- parse-chunk
   "Parse a single SSE chunk from OpenAI stream"
@@ -61,7 +54,7 @@
 
 (defn- chunk->events
   "Convert OpenAI chunk to our event format"
-  [chunk opts]
+  [chunk schema]
   (when-let [parsed (parse-chunk chunk)]
     (cond
       (:error parsed)
@@ -75,7 +68,7 @@
             tool-call (first tool-calls)
             has-args? (get-in tool-call [:function :arguments])]
         (cond
-          (and (:schema opts) has-args?)
+          (and schema has-args?)
           [{:type :content :content (get-in tool-call [:function :arguments])}]
 
           :else nil))
@@ -118,12 +111,12 @@
 
 (defn- create-event-stream
   "Create event stream from HTTP response"
-  [api-base api-key model messages opts]
+  [api-base api-key messages schema provider-opts]
   (let [events-chan (chan 1024)
         url (str api-base "/chat/completions")
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
-        body (json/generate-string (build-body model messages opts))]
+        body (json/generate-string (build-body messages schema provider-opts))]
 
     (net/post-stream
      url
@@ -135,7 +128,7 @@
            (go-loop []
              (if-let [chunk (<! sse-chan)]
                (do
-                 (doseq [event (chunk->events chunk opts)]
+                 (doseq [event (chunk->events chunk schema)]
                    (when event
                      (>! events-chan event)))
                  (recur))
@@ -148,58 +141,60 @@
 
     events-chan))
 
-(defrecord OpenAIBackend [api-base api-key default-model default-opts timeout-ms]
+(defrecord OpenAIBackend [api-base api-key defaults timeout-ms]
   proto/LLMProvider
-  (request-stream [_ model messages opts]
-    (create-event-stream api-base api-key model messages opts)))
+  (request-stream [_ messages provider-opts]
+    ;; Extract schema from the calling context via core.clj
+    ;; Schema is handled in core.clj, but we need it here for OpenAI tools
+    ;; For now, we'll look for it in a special key
+    (let [schema (:__schema provider-opts)
+          clean-opts (dissoc provider-opts :__schema)]
+      (create-event-stream api-base api-key messages schema clean-opts))))
 
+(defn ->openai
+  "Create an OpenAI provider with optional defaults.
+   
+   config map:
+   :api-key - Required OpenAI API key (or use :api-key-env)
+   :api-key-env - Environment variable name for API key (default: OPENAI_API_KEY)
+   :api-base - API base URL (default: https://api.openai.com/v1)
+   :defaults - Optional default options (same shape as prompt opts)"
+  [{:keys [api-key api-key-env api-base defaults] :as config}]
+  (let [resolved-key (or api-key
+                         (when-let [env-var (or api-key-env "OPENAI_API_KEY")]
+                           (System/getenv env-var)))
+        resolved-base (or api-base "https://api.openai.com/v1")]
+
+    ;; Validate API key
+    (when-not resolved-key
+      (throw (errors/error "Missing API key"
+                           {:provider "openai"
+                            :api-key-env (or api-key-env "OPENAI_API_KEY")
+                            :config config})))
+
+    ;; Validate defaults if provided
+    (when defaults
+      ;; Note: We'd use PromptOpts here but it's not imported
+      ;; For now just validate it's a map
+      (when-not (map? defaults)
+        (throw (errors/error "Defaults must be a map" {:defaults defaults}))))
+
+    (->OpenAIBackend resolved-base
+                     resolved-key
+                     defaults
+                     60000))) ; default timeout
+
+;; Legacy backend function for compatibility
 (defn backend
-  "Create an OpenAI backend instance."
-  ([]
-   (backend {}))
-
-  ([config-or-model]
-   (cond
-     ;; String model shorthand
-     (string? config-or-model)
-     (backend {:backend {:default-options {:model config-or-model}}})
-
-     ;; Empty map - use all defaults
-     (and (map? config-or-model) (empty? config-or-model))
-     (backend {:backend {}})
-
-     ;; Check if it's a full config with :backend key
-     (contains? config-or-model :backend)
-     (let [{:keys [backend defaults]} config-or-model
-           ;; Merge with defaults FIRST
-           backend-config (merge default-config (or backend {}))
-           resolved-key (or (:api-key backend-config)
-                            (when-let [env (:api-key-env backend-config)]
-                              (System/getenv env)))]
-
-       ;; Validate API key
-       (when-not resolved-key
-         (throw (errors/error "Missing API key"
-                              {:provider "openai"
-                               :api-key-env (:api-key-env backend-config)})))
-
-       ;; Create backend record with defaults
-       (->OpenAIBackend (:api-base backend-config)
-                        resolved-key
-                        (:default-model backend-config)
-                        defaults
-                        (:timeout-ms backend-config)))
-
-     ;; Shorthand config - wrap in :backend
-     :else
-     (backend {:backend config-or-model}))))
+  "Create an OpenAI backend instance. DEPRECATED - use ->openai instead."
+  ([] (->openai {}))
+  ([config] (->openai config)))
 
 ;; Make backend print nicely in REPL
 (defmethod print-method OpenAIBackend [backend writer]
   (.write writer
-          (format "#OpenAI[model: %s, timeout: %dms%s]"
-                  (:default-model backend)
-                  (:timeout-ms backend)
-                  (if (:default-opts backend)
-                    (format ", defaults: %s" (pr-str (:default-opts backend)))
+          (format "#OpenAI[%s%s]"
+                  (:api-base backend)
+                  (if (:defaults backend)
+                    (format ", defaults: %s" (pr-str (:defaults backend)))
                     ""))))

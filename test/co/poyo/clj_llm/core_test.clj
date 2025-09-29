@@ -6,9 +6,9 @@
             [clojure.core.async :as a :refer [chan go >! <!! close!]]))
 
 ;; Mock provider for testing
-(defrecord MockProvider [responses]
+(defrecord MockProvider [responses defaults]
   proto/LLMProvider
-  (request-stream [_ model messages opts]
+  (request-stream [_ messages provider-opts]
     (let [ch (chan)]
       (go
         (doseq [event @responses]
@@ -19,31 +19,35 @@
 
 (defn mock-provider
   "Create a mock provider with predefined responses"
-  [events]
-  (->MockProvider (atom events)))
+  ([events] (mock-provider events nil))
+  ([events defaults]
+   (->MockProvider (atom events) defaults)))
 
-(deftest test-generate
+(deftest test-basic-prompt
   (testing "Basic text generation"
     (let [provider (mock-provider [{:type :content :content "Hello "}
-                                   {:type :content :content "world!"}])]
-      (is (= "Hello world!" (llm/generate provider "test")))))
+                                   {:type :content :content "world!"}])
+          response (llm/prompt provider "test")]
+      (is (= "Hello world!" @(:text response)))))
 
   (testing "Structured output generation"
     (let [provider (mock-provider [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
-          schema [:map [:name :string] [:age pos-int?]]]
-      (is (= {:name "Alice" :age 30}
-             (llm/generate provider "test" {:schema schema})))))
+          schema [:map [:name :string] [:age pos-int?]]
+          response (llm/prompt provider "test" {:llm/schema schema})]
+      (is (= {:name "Alice" :age 30} @(:structured response)))))
 
   (testing "Error handling"
-    (let [provider (mock-provider [{:type :error :error "API Error"}])]
-      (is (thrown? Exception (llm/generate provider "test"))))))
+    (let [provider (mock-provider [{:type :error :error "API Error"}])
+          response (llm/prompt provider "test")]
+      (is (instance? Exception @(:text response))))))
 
 (deftest test-stream
   (testing "Streaming text chunks"
     (let [provider (mock-provider [{:type :content :content "Hello "}
                                    {:type :content :content "streaming "}
                                    {:type :content :content "world!"}])
-          chunks (llm/stream provider "test")
+          response (llm/prompt provider "test")
+          chunks (:chunks response)
           collected (atom [])]
       ;; Collect all chunks
       (loop []
@@ -56,7 +60,8 @@
   (testing "Raw event access"
     (let [provider (mock-provider [{:type :content :content "Hi"}
                                    {:type :usage :prompt-tokens 5 :completion-tokens 10}])
-          events (llm/events provider "test")
+          response (llm/prompt provider "test")
+          events (:events response)
           collected (atom [])]
       ;; Collect all events
       (loop []
@@ -68,12 +73,12 @@
       (is (= :content (:type (first @collected))))
       (is (= :usage (:type (second @collected)))))))
 
-(deftest test-prompt
+(deftest test-response-object
   (testing "Rich response object"
     (let [provider (mock-provider [{:type :content :content "Response text"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 20}])
           resp (llm/prompt provider "test")]
-      ;; Test promise access directly (no IDeref anymore)
+      ;; Test promise access
       (is (= "Response text" @(:text resp)))
       ;; Usage includes enriched metadata but contains original fields
       (let [usage @(:usage resp)]
@@ -83,11 +88,12 @@
 
 (deftest test-message-building
   (testing "Messages from prompt and system prompt"
-    (let [provider (mock-provider [{:type :content :content "OK"}])]
-      ;; Test is implicit through generate working correctly
-      (is (string? (llm/generate provider "Hello" {:system-prompt "Be helpful"})))))
-
-  (testing "Direct messages array"
     (let [provider (mock-provider [{:type :content :content "OK"}])
-          messages [{:role :user :content "Hello"}]]
-      (is (string? (llm/generate provider nil {:messages messages}))))))
+          response (llm/prompt provider "Hello" {:llm/system-prompt "Be helpful"})]
+      (is (string? @(:text response)))))
+
+  (testing "Direct message history"
+    (let [provider (mock-provider [{:type :content :content "OK"}])
+          messages [{:role :user :content "Hello"}]
+          response (llm/prompt provider nil {:llm/message-history messages})]
+      (is (string? @(:text response))))))
