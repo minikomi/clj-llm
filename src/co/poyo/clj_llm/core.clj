@@ -9,7 +9,6 @@
    [malli.core :as m]
    [malli.error :as me]
    [malli.transform :as mt]
-   [malli.generator :as mg]
 
    [cheshire.core :as json]
    [clojure.string :as str]))
@@ -36,11 +35,14 @@
   "Schema for library-level options (what clj-llm controls)"
   [:map
    [:llm/system-prompt {:optional true
-                        :description "System prompt for the AI"} 
+                        :description "System prompt for the AI"}
     :string]
    [:llm/schema {:optional true
                  :description "Schema for structured responses"}
     :map]
+   [:llm/timeout-ms {:optional true
+                     :description "Request timeout in milliseconds"}
+    pos-int?]
    [:llm/message-history {:optional true
                           :description "Conversation history"}
     [:vector [:map
@@ -58,12 +60,14 @@
     :map]])
 
 (defn- extract-library-options [opts]
-  (-> opts
-      (select-keys [:llm/system-prompt :llm/schema :llm/message-history])
-      (as-> lib-opts
-        (when (seq lib-opts)
-          (m/validate LibraryOpts lib-opts)
-          lib-opts))))
+  (let [lib-keys (->> (m/children LibraryOpts)
+                      (map first))]
+    (-> opts
+        (select-keys lib-keys)
+        (as-> lib-opts
+          (when (seq lib-opts)
+            (m/validate LibraryOpts lib-opts)
+            lib-opts)))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Response record

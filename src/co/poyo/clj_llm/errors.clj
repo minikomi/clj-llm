@@ -1,17 +1,11 @@
 (ns co.poyo.clj-llm.errors
   "Simple error handling for clj-llm.")
 
-(defn error 
+(defn error
   "Create an LLM error with optional data"
   ([msg] (error msg nil))
   ([msg data]
    (ex-info msg (merge {:type :llm-error} data))))
-
-(defn retryable? 
-  "Check if an error is retryable based on HTTP status"
-  [e]
-  (when (instance? clojure.lang.ExceptionInfo e)
-    (boolean (#{429 500 502 503} (:status (ex-data e))))))
 
 (defn parse-http-error
   "Convert HTTP response to exception"
