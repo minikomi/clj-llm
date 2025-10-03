@@ -56,12 +56,12 @@
                 ;; Stream the response
                 (let [chunks (:chunks (llm/prompt provider input
                                                   (cond->
-                                                   {:llm/message-history @conversation
-                                                    :provider/opts {:model model-name}}
+                                                   {:message-history @conversation
+                                                    :provider-opts {:model model-name}}
                                                     (str/starts-with? model-name "gpt-5-")
                                                     (->
-                                                     (assoc-in [:provider/opts :verbosity] "low")
-                                                     (assoc-in [:provider/opts :reasoning-effort] "minimal")))))
+                                                     (assoc-in [:provider-opts :verbosity] "low")
+                                                     (assoc-in [:provider-opts :reasoning-effort] "minimal")))))
                       ;; Collect response for history
                       response-text (atom "")]
 
