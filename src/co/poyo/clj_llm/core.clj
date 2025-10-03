@@ -44,20 +44,20 @@
 (def PromptOpts
   "Schema for combined options passed to prompt function"
   [:map {:closed true}
-   [:system-prompt
+   [::system-prompt
     {:optional true :description "System prompt for the AI"}
     :string]
-   [:schema
+   [::schema
     {:optional true :description "Schema for structured responses"}
     :map]
-   [:timeout-ms
+   [::timeout-ms
     {:optional true :description "Request timeout in milliseconds"}
     pos-int?]
-   [:message-history
+   [::message-history
     {:optional true :description "Conversation history"}
     MessageHistory]
-   [:provider-opts {:optional true
-                    :description "Provider-specific options (passthrough)"}
+   [::provider-opts {:optional true
+                     :description "Provider-specific options (passthrough)"}
     :map]])
 
 ;; ════════════════════════════════════════════════════════════════════
@@ -127,7 +127,7 @@
    (prompt provider prompt-input nil))
   ([provider prompt-input opts]
    (let [;; Validate and extract opts
-         {:keys [system-prompt schema message-history provider-opts]} (extract-prompt-opts opts)
+         {::keys [system-prompt schema message-history provider-opts]} (extract-prompt-opts opts)
 
          ;; Build final messages array
          messages (build-messages prompt-input system-prompt message-history)
