@@ -97,3 +97,28 @@
           messages [{:role :user :content "Hello"}]
           response (llm/prompt provider nil {:llm/message-history messages})]
       (is (string? @(:text response))))))
+
+(deftest test-extract-library-options
+  (testing "Extracts all library options from schema"
+    (let [extract-fn #'llm/extract-library-options
+          opts {:llm/system-prompt "Test"
+                :llm/schema [:map [:name :string]]
+                :llm/timeout-ms 5000
+                :llm/message-history [{:role :user :content "Hi"}]
+                :provider/opts {:model "gpt-4"}
+                :random-key "ignored"}
+          result (extract-fn opts)]
+      ;; Should extract all llm/* keys
+      (is (= "Test" (:llm/system-prompt result)))
+      (is (= [:map [:name :string]] (:llm/schema result)))
+      (is (= 5000 (:llm/timeout-ms result)))
+      (is (= [{:role :user :content "Hi"}] (:llm/message-history result)))
+      ;; Should not include provider opts or random keys
+      (is (nil? (:provider/opts result)))
+      (is (nil? (:random-key result)))))
+
+  (testing "Returns nil when no library options present"
+    (let [extract-fn #'llm/extract-library-options
+          opts {:provider/opts {:model "gpt-4"}}
+          result (extract-fn opts)]
+      (is (nil? result)))))
