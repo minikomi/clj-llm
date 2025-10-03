@@ -3,7 +3,7 @@
 
 (defprotocol LLMProvider
   "Protocol that all LLM providers must implement"
-  (request-stream [this messages provider-opts]
+  (request-stream [this messages schema provider-opts]
     "Make a streaming request to the LLM provider.
      
      Arguments:

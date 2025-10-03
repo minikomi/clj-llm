@@ -4,70 +4,61 @@
    [co.poyo.clj-llm.errors :as errors]
    [co.poyo.clj-llm.helpers :as helpers]
 
+   [cheshire.core :as json]
    [clojure.core.async :as a :refer [go-loop <! >! <!! chan]]
-
+   [clojure.string :as str]
    [malli.core :as m]
    [malli.error :as me]
-   [malli.transform :as mt]
-
-   [cheshire.core :as json]
-   [clojure.string :as str]))
+   [malli.transform :as mt]))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Utilities
+;; Configuration and Options Schemas
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn deep-merge
-  "Deep merge maps, recursively merging nested maps"
-  [& maps]
-  (apply merge-with
-         (fn [v1 v2]
-           (if (and (map? v1) (map? v2))
-             (deep-merge v1 v2)
-             v2))
-         maps))
+(def ContentSchema
+  [:or
+   :string
+   [:vector
+    [:map
+     [:type [:enum "text" "image_url"]]
+     [:text {:optional true} :string]
+     [:image_url {:optional true}
+      [:map [:url :string]]]]]])
 
-;; ════════════════════════════════════════════════════════════════════
-;; Malli Schemas for Configuration and Options
-;; ════════════════════════════════════════════════════════════════════
-
-(def LibraryOpts
-  "Schema for library-level options (what clj-llm controls)"
-  [:map
-   [:llm/system-prompt {:optional true
-                        :description "System prompt for the AI"}
-    :string]
-   [:llm/schema {:optional true
-                 :description "Schema for structured responses"}
-    :map]
-   [:llm/timeout-ms {:optional true
-                     :description "Request timeout in milliseconds"}
-    pos-int?]
-   [:llm/message-history {:optional true
-                          :description "Conversation history"}
-    [:vector [:map
-              [:role [:enum :user :assistant :system]]
-              [:content :string]]]]])
+(def MessageHistory
+  [:vector
+   [:map
+    [:role [:enum :system :user :assistant :tool]]
+    [:content {:optional true} ContentSchema]
+    [:name {:optional true} :string]
+    [:tool_calls {:optional true}
+     [:vector
+      [:map
+       [:id :string]
+       [:type [:enum "function"]]
+       [:function [:map
+                   [:name :string]
+                   [:arguments :string]]]]]]
+    [:tool_call_id {:optional true} :string]]])
 
 (def PromptOpts
   "Schema for combined options passed to prompt function"
   [:map
-   [:llm/system-prompt {:optional true} :string]
-   [:llm/schema {:optional true} :map]  
-   [:llm/message-history {:optional true} [:vector :map]]
-   [:provider/opts {:optional true
-                    :description "Provider-specific options (passthrough)"}
+   [::system-prompt
+    {:optional true :description "System prompt for the AI"}
+    :string]
+   [::schema
+    {:optional true :description "Schema for structured responses"}
+    :map]
+   [::timeout-ms
+    {:optional true :description "Request timeout in milliseconds"}
+    pos-int?]
+   [::message-history
+    {:optional true :description "Conversation history"}
+    MessageHistory]
+   [::provider-opts {:optional true
+                     :description "Provider-specific options (passthrough)"}
     :map]])
-
-(defn- extract-library-options [opts]
-  (let [lib-keys (->> (m/children LibraryOpts)
-                      (map first))]
-    (-> opts
-        (select-keys lib-keys)
-        (as-> lib-opts
-          (when (seq lib-opts)
-            (m/validate LibraryOpts lib-opts)
-            lib-opts)))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Response record
@@ -78,42 +69,50 @@
   (deref [_] @text))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Helpers
+;; Input/Output Helpers
 ;; ════════════════════════════════════════════════════════════════════
+
+(defn- extract-prompt-opts [opts]
+  (let [lib-opts (select-keys opts (map first (m/children PromptOpts)))]
+    (if (m/validate PromptOpts lib-opts)
+      lib-opts
+      (throw (errors/error
+              "Invalid library options"
+              {:errors (me/humanize (m/explain PromptOpts lib-opts))
+               :options opts})))))
 
 (defn- parse-structured-output
   "Parse the response as JSON when schema is provided"
   [text schema]
   (try
     (let [parsed (json/parse-string text true)]
-      (if schema
-        (let [result (m/decode schema parsed mt/json-transformer)]
-          (if (m/validate schema result)
-            result
-            (throw (errors/error
-                    "Schema validation failed"
-                    {:schema schema
-                     :value result
-                     :errors (me/humanize (m/explain schema result))}))))
-        parsed))
+      (let [result (m/decode schema parsed mt/json-transformer)]
+        (if (m/validate schema result)
+          result
+          (throw (errors/error
+                  "Schema validation failed"
+                  {:schema schema
+                   :value result
+                   :errors (me/humanize (m/explain schema result))})))))
     (catch clojure.lang.ExceptionInfo e (throw e))
     (catch Exception e
       (throw (errors/error
               "Failed to parse structured output"
-              {:input text})))))
+              {:schema schema
+               :input text})))))
 
 (defn- build-messages
   "Build messages array from prompt and options"
   [prompt system-prompt message-history]
   (let [base-messages (or message-history [])
         messages-with-system (if system-prompt
-                               (if (and (seq base-messages) 
-                                       (= :system (:role (first base-messages))))
+                               (if (and (seq base-messages)
+                                        (= :system (:role (first base-messages))))
                                  ;; Replace existing system message
-                                 (cons {:role :system :content system-prompt} 
+                                 (cons {:role :system :content system-prompt}
                                        (rest base-messages))
                                  ;; Add system message at start
-                                 (cons {:role :system :content system-prompt} 
+                                 (cons {:role :system :content system-prompt}
                                        base-messages))
                                base-messages)]
     (if prompt
@@ -128,21 +127,14 @@
   ([provider prompt-input]
    (prompt provider prompt-input nil))
   ([provider prompt-input opts]
-   (let [;; Merge defaults from provider with runtime options
-         final-opts (deep-merge (:defaults provider) opts)
-         
-         ;; Validate and extract library options
-         lib-opts (extract-library-options final-opts)
-         {:llm/keys [system-prompt schema message-history]} lib-opts
-         
-         ;; Provider options pass through unchanged, with schema added for providers that need it
-         provider-opts (assoc (:provider/opts final-opts) :__schema schema)
-         
+   (let [;; Validate and extract opts
+         {::keys [system-prompt schema message-history provider-opts]} (extract-prompt-opts opts)
+
          ;; Build final messages array
          messages (build-messages prompt-input system-prompt message-history)
 
          ;; chan setup
-         source-chan (proto/request-stream provider messages provider-opts)
+         source-chan (proto/request-stream provider messages schema provider-opts)
          req-start (System/currentTimeMillis)
 
          ;; chan with cleanup

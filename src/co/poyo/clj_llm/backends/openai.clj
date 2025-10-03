@@ -3,7 +3,7 @@
    
    Supports OpenAI, OpenRouter, Together.ai, and any OpenAI-compatible endpoint."
   (:require [cheshire.core :as json]
-            [clojure.core.async :as a :refer [chan go-loop <! >! close!]]
+            [clojure.core.async :as a :refer [chan go go-loop <! >! close!]]
             [clojure.string :as str]
             [co.poyo.clj-llm.net :as net]
             [co.poyo.clj-llm.sse :as sse]
@@ -14,9 +14,7 @@
 
 (def ^:private default-config
   {:api-key-env "OPENAI_API_KEY"
-   :api-base "https://api.openai.com/v1"
-   :default-model "gpt-5-mini"
-   :timeout-ms 60000})
+   :api-base "https://api.openai.com/v1"})
 
 (defn- convert-options-for-api
   "Convert kebab-case options to underscore format for OpenAI API"
@@ -56,30 +54,26 @@
   "Convert OpenAI chunk to our event format"
   [chunk schema]
   (when-let [parsed (parse-chunk chunk)]
-    (cond
-      (:error parsed)
-      [{:type :error :error (:error parsed)}]
+    (let [{:keys [error usage choices]} parsed
+          {:keys [delta]} (first choices)
+          {:keys [content tool_calls]} delta]
+      (cond
+        error
+        [{:type :error :error error}]
 
-      (get-in parsed [:choices 0 :delta :content])
-      [{:type :content :content (get-in parsed [:choices 0 :delta :content])}]
+        content
+        [{:type :content :content content}]
 
-      (get-in parsed [:choices 0 :delta :tool_calls])
-      (let [tool-calls (get-in parsed [:choices 0 :delta :tool_calls])
-            tool-call (first tool-calls)
-            has-args? (get-in tool-call [:function :arguments])]
-        (cond
-          (and schema has-args?)
-          [{:type :content :content (get-in tool-call [:function :arguments])}]
+        (seq tool_calls)
+        (let [{{:keys [arguments]} :function} (first tool_calls)]
+          (when (and schema arguments)
+            [{:type :content :content arguments}]))
 
-          :else nil))
-
-      (:usage parsed)
-      [{:type :usage
-        :prompt-tokens (get-in parsed [:usage :prompt_tokens])
-        :completion-tokens (get-in parsed [:usage :completion_tokens])
-        :total-tokens (get-in parsed [:usage :total_tokens])}]
-
-      :else nil)))
+        usage
+        [{:type :usage
+          :prompt-tokens (:prompt_tokens usage)
+          :completion-tokens (:completion_tokens usage)
+          :total-tokens (:total_tokens usage)}]))))
 
 (defn- handle-error-response
   "Parse error response from API and create appropriate error event"
@@ -117,78 +111,46 @@
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
         body (json/generate-string (build-body messages schema provider-opts))]
-
-    (net/post-stream
-     url
-     headers
-     body
-     (fn [response]
-       (if (= 200 (:status response))
-         (let [sse-chan (sse/parse-sse (:body response))]
-           (go-loop []
-             (if-let [chunk (<! sse-chan)]
-               (do
-                 (doseq [event (chunk->events chunk schema)]
-                   (when event
-                     (>! events-chan event)))
-                 (recur))
-               (do
-                 (>! events-chan {:type :done})
-                 (close! events-chan)))))
-         (do
-           (a/put! events-chan (handle-error-response response))
-           (close! events-chan)))))
-
+    (net/post-stream url headers body
+                     (fn handle-response [response]
+                       (if (= 200 (:status response))
+                         (let [sse-chan (sse/parse-sse (:body response))]
+                           (go
+                             (try
+                               (loop []
+                                 (when-let [chunk (<! sse-chan)]
+                                   (doseq [event (chunk->events chunk schema)]
+                                     (when event
+                                       (>! events-chan event)))
+                                   (recur)))
+                               (>! events-chan {:type :done})
+                               (catch Exception e
+                                 (>! events-chan {:type :error :error e}))
+                               (finally
+                                 (close! events-chan)))))
+                         (go
+                           (>! events-chan (handle-error-response response))
+                           (close! events-chan)))))
     events-chan))
 
-(defrecord OpenAIBackend [api-base api-key defaults timeout-ms]
+(defrecord OpenAIBackend [api-base api-key defaults]
   proto/LLMProvider
-  (request-stream [_ messages provider-opts]
-    ;; Extract schema from the calling context via core.clj
-    ;; Schema is handled in core.clj, but we need it here for OpenAI tools
-    ;; For now, we'll look for it in a special key
-    (let [schema (:__schema provider-opts)
-          clean-opts (dissoc provider-opts :__schema)]
-      (create-event-stream api-base api-key messages schema clean-opts))))
+  (request-stream [_ messages schema provider-opts]
+    (let [final-opts (helpers/deep-merge defaults provider-opts)]
+      (create-event-stream api-base api-key messages schema final-opts))))
 
 (defn ->openai
-  "Create an OpenAI provider with optional defaults.
-   
-   config map:
-   :api-key - Required OpenAI API key (or use :api-key-env)
-   :api-key-env - Environment variable name for API key (default: OPENAI_API_KEY)
-   :api-base - API base URL (default: https://api.openai.com/v1)
-   :defaults - Optional default options (same shape as prompt opts)"
-  [{:keys [api-key api-key-env api-base defaults] :as config}]
-  (let [resolved-key (or api-key
-                         (when-let [env-var (or api-key-env "OPENAI_API_KEY")]
-                           (System/getenv env-var)))
-        resolved-base (or api-base "https://api.openai.com/v1")]
+  ([] (->openai default-config))
+  ([{:keys [api-key api-env-var api-base defaults]}]
+   (let [resolved-api-key (or api-env-var (:api-key-env default-config))
+         resolved-key (or api-key (System/getenv resolved-api-key))
+         resolved-base (or api-base (:api-base default-config))]
 
-    ;; Validate API key
-    (when-not resolved-key
-      (throw (errors/error "Missing API key"
-                           {:provider "openai"
-                            :api-key-env (or api-key-env "OPENAI_API_KEY")
-                            :config config})))
+     (when-not resolved-key
+       (throw (errors/error "Missing API key"
+                            {:provider "openai" :api-key-env resolved-api-key})))
 
-    ;; Validate defaults if provided
-    (when defaults
-      ;; Note: We'd use PromptOpts here but it's not imported
-      ;; For now just validate it's a map
-      (when-not (map? defaults)
-        (throw (errors/error "Defaults must be a map" {:defaults defaults}))))
-
-    (->OpenAIBackend resolved-base
-                     resolved-key
-                     defaults
-                     60000))) ; default timeout
-
-;; Legacy backend function for compatibility
-(defn backend
-  "Create an OpenAI backend instance. DEPRECATED - use ->openai instead."
-  ([] (->openai {}))
-  ([config] (->openai config)))
+     (->OpenAIBackend resolved-base resolved-key defaults))))
 
 ;; Make backend print nicely in REPL
 (defmethod print-method OpenAIBackend [backend writer]
