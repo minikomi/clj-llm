@@ -6,14 +6,13 @@
             [clojure.core.async :refer [<!!]]
             [clojure.string :as str]))
 
-(defn print-streaming-response
-  "Print response chunks as they arrive"
-  [chunks-chan]
-  (loop []
-    (when-let [chunk (<!! chunks-chan)]
-      (print chunk)
-      (flush)
-      (recur))))
+(defn print-flush [s]
+  (print s)
+  (flush))
+
+(def gpt5-extra-opts
+  {:verbosity "low"
+   :reasoning-effort "minimal"})
 
 (defn -main [& args]
   (let [model-name (or (first args) "gpt-5-nano")]
@@ -39,8 +38,7 @@
               :content "You are a helpful AI assistant. Be concise but thorough."})
 
       (loop []
-        (print "You> ")
-        (flush)
+        (print-flush "You> ")
 
         (let [input (read-line)]
           (if (empty? input)
@@ -49,27 +47,21 @@
               (System/exit 0))
 
             (do
-              (print "\nAI> ")
-              (flush)
+              (print-flush "\nAI> ")
 
               (try
                 ;; Stream the response
-                (let [chunks (:chunks (llm/prompt provider input
-                                                  (cond->
-                                                   {::llm/message-history @conversation
-                                                    ::llm/provider-opts {:model model-name}}
-                                                    (str/starts-with? model-name "gpt-5-")
-                                                    (->
-                                                     (assoc-in [::llm/provider-opts :verbosity] "low")
-                                                     (assoc-in [::llm/provider-opts :reasoning-effort] "minimal")))))
-                      ;; Collect response for history
+                (let [opts {::llm/message-history @conversation
+                            ::llm/provider-opts (cond-> {:model model-name}
+                                                  (str/starts-with? model-name "gpt-5-")
+                                                  (merge gpt5-extra-opts))}
+                      chunks (:chunks (llm/prompt provider input opts))
                       response-text (atom "")]
 
                   ;; Print chunks and collect full response
                   (loop []
                     (when-let [chunk (<!! chunks)]
-                      (print chunk)
-                      (flush)
+                      (print-flush chunk)
                       (swap! response-text str chunk)
                       (recur)))
 
@@ -80,9 +72,7 @@
 
                 (catch Exception e
                   (println (str "\n❌ Error: " (ex-message e)))
-                  (print e)
-                  ;; Don't add error to conversation history
-                  ))
+                  (print-flush e)))
 
               (println "\n")
               (recur))))))))

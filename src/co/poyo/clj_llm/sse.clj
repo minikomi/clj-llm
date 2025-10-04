@@ -1,28 +1,73 @@
 (ns co.poyo.clj-llm.sse
-  "Simple SSE parsing for OpenAI streaming responses"
-  (:require [clojure.string :as str]
-            [clojure.core.async :as a :refer [chan >!! close! thread]]
-            [clojure.java.io :as io]))
+  "Simple SSE parsing for streaming responses"
+  (:require
+   [cheshire.core :as json]
+   [clojure.string :as str]
+   [clojure.core.async :as a :refer [chan >!! close! thread]]
+   [clojure.java.io :as io]
+   [clojure.walk :as walk]
+   [camel-snake-kebab.core :as csk]))
+
+(defn- json->kebab
+  "Parse JSON string and transform all keys to kebab-case"
+  [json-str]
+  (->> json-str
+       (json/parse-string)
+       (walk/postwalk
+        (fn [x]
+          (if (map? x)
+            (update-keys x (comp keyword csk/->kebab-case))
+            x)))))
+
+(defn- default-sse-parser
+  "Default SSE parser - extracts 'data:' lines and attempts JSON parsing.
+   Returns {::data parsed-json}, {::data {::unparsed raw-string}}, or {::done true}"
+  [line]
+  (when (str/starts-with? line "data:")
+    (let [raw-data (str/trim (subs line 5))]
+      (if (= raw-data "[DONE]")
+        {::done true}
+        (try
+          {::data (json->kebab raw-data)}
+          (catch Exception _
+            {::data {::unparsed raw-data}}))))))
+
+(defn- default-done-pred
+  "Default predicate to check if event signals end of stream"
+  [event]
+  (::done event))
 
 (defn parse-sse
   "Parse SSE stream from an InputStream into a channel of events.
-   Only handles 'data:' lines which is all OpenAI uses.
-   
-   Returns channel of maps like {\"data\" \"...json...\"}"
-  [input-stream]
-  (let [out (chan 1024)]
-    (thread
-      (try
-        (with-open [reader (io/reader input-stream)]
-          (loop []
-            (when-let [line (.readLine reader)]
-              (when (str/starts-with? line "data: ")
-                (let [data (subs line 6)]
-                  (when-not (= data "[DONE]")
-                    (>!! out {"data" data}))))
-              (recur))))
-        (catch Exception e
-          (>!! out {"error" (.getMessage e)}))
-        (finally
-          (close! out))))
-    out))
+
+   Options:
+   - :buffer-size - Channel buffer size (default: 1024)
+   - :parser-fn - Function that takes a line and returns event map or nil (default: default-sse-parser)
+                  Parser can emit {::done true} to signal end of stream
+
+   Returns channel of event maps: {::data ...}, {::data {::unparsed ...}}, {::done true}, or {::error ...}"
+  ([input-stream] (parse-sse input-stream {}))
+  ([input-stream {:keys [buffer-size parser-fn]
+                  :or {buffer-size 1024
+                       parser-fn default-sse-parser}}]
+   (let [out (chan buffer-size)]
+     (thread
+       (try
+         (with-open [reader (io/reader input-stream)]
+           (try
+             (loop []
+               (if-let [line (.readLine reader)]
+                 (if-let [event (parser-fn line)]
+
+                   (do
+                     (>!! out event)
+                     (if (::done event)
+                       nil ;; Stop after emitting done
+                       (recur)))
+                   (recur))
+                 nil))))
+         (catch Exception e
+           (>!! out {::error e ::type :stream-error}))
+         (finally
+           (close! out))))
+     out)))

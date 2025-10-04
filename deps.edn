@@ -2,7 +2,9 @@
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         org.clojure/core.async {:mvn/version "1.8.741"}
         cheshire/cheshire {:mvn/version "6.0.0"}
-        metosin/malli {:mvn/version "0.17.0"}}
+        metosin/malli {:mvn/version "0.17.0"}
+        camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}}
+
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}
@@ -24,5 +26,4 @@
                                    :git/tag "v0.1.4-alpha"
                                    :git/sha "080b29b"}}
    :exec-fn clojure-mcp.main/start-mcp-server
-   :exec-args {:port 7888}}
-  }}
+   :exec-args {:port 7888}}}}

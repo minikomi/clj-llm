@@ -2,27 +2,32 @@
   "OpenAI and OpenAI-compatible API provider implementation.
    
    Supports OpenAI, OpenRouter, Together.ai, and any OpenAI-compatible endpoint."
-  (:require [cheshire.core :as json]
-            [clojure.core.async :as a :refer [chan go go-loop <! >! close!]]
-            [clojure.string :as str]
-            [co.poyo.clj-llm.net :as net]
-            [co.poyo.clj-llm.sse :as sse]
-            [co.poyo.clj-llm.schema :as schema]
-            [co.poyo.clj-llm.protocol :as proto]
-            [co.poyo.clj-llm.errors :as errors]
-            [co.poyo.clj-llm.helpers :as helpers]))
+  (:require
+   [camel-snake-kebab.core :as csk]
+   [cheshire.core :as json]
+   [clojure.core.async :as a :refer [chan go go-loop <! >! close!]]
+   [clojure.string :as str]
+   [co.poyo.clj-llm.net :as net]
+   [co.poyo.clj-llm.sse :as sse]
+   [co.poyo.clj-llm.schema :as schema]
+   [co.poyo.clj-llm.protocol :as proto]
+   [co.poyo.clj-llm.errors :as errors]
+   [co.poyo.clj-llm.helpers :as helpers]
+   [clojure.walk :as walk]))
 
 (def ^:private default-config
   {:api-key-env "OPENAI_API_KEY"
    :api-base "https://api.openai.com/v1"})
 
 (defn- convert-options-for-api
-  "Convert kebab-case options to underscore format for OpenAI API"
+  "Convert kebab-case options to snake_case format for OpenAI API"
   [opts]
-  (into {}
-        (map (fn [[k v]]
-               [(-> k name helpers/kebab->underscore keyword) v])
-             opts)))
+  (walk/postwalk
+   (fn [x]
+     (if (map? x)
+       (update-keys x csk/->snake_case_keyword)
+       x))
+   opts))
 
 (defn- build-body
   "Build OpenAI API request body"
@@ -38,43 +43,35 @@
      api-opts
      schema-config)))
 
-(defn- parse-chunk
-  "Parse a single SSE chunk from OpenAI stream"
-  [chunk]
-  (when-let [data (get chunk "data")]
-    (when (not= data "[DONE]")
-      (try
-        (json/parse-string data true)
-        (catch Exception e
-          {:error (str "Failed to parse chunk: " (.getMessage e))})))))
-
-(defn- chunk->events
+(defn- data->internal-event
   "Convert OpenAI chunk to our event format"
-  [chunk schema]
-  (when-let [parsed (parse-chunk chunk)]
-    (cond
-      (:error parsed)
-      [{:type :error :error (:error parsed)}]
+  [data schema]
+  (cond
+    (:error data)
+    [{:type :error :error (:error data)}]
 
-      (get-in parsed [:choices 0 :delta :content])
-      [{:type :content :content (get-in parsed [:choices 0 :delta :content])}]
+    (get-in data [:choices 0 :delta :content])
+    [{:type :content :content (get-in data [:choices 0 :delta :content])}]
 
-      (get-in parsed [:choices 0 :delta :tool_calls])
-      (let [tool-calls (get-in parsed [:choices 0 :delta :tool_calls])
-            tool-call (first tool-calls)
-            has-args? (get-in tool-call [:function :arguments])]
-        (cond
-          (and schema has-args?)
-          [{:type :content :content (get-in tool-call [:function :arguments])}]
-          :else nil))
+    (get-in data [:choices 0 :delta :tool-calls])
+    (let [tool-calls (get-in data [:choices 0 :delta :tool-calls])
+          tool-call (first tool-calls)
+          has-args? (get-in tool-call [:function :arguments])]
+      (cond
+        (and schema has-args?)
+        [{:type :content :content (get-in tool-call [:function :arguments])}]
+        :else nil))
 
-      (:usage parsed)
-      [{:type :usage
-        :prompt-tokens (get-in parsed [:usage :prompt_tokens])
-        :completion-tokens (get-in parsed [:usage :completion_tokens])
-        :total-tokens (get-in parsed [:usage :total_tokens])}]
+    (get-in data [:choices 0 :finish-reason])
+    [{:type :done :reason (get-in data [:choices 0 :finish-reason])}]
 
-      :else nil)))
+    (:usage data)
+    [{:type :usage
+      :prompt-tokens (get-in data [:usage :prompt_tokens])
+      :completion-tokens (get-in data [:usage :completion_tokens])
+      :total-tokens (get-in data [:usage :total_tokens])}]
+
+    :else (prn "failed" data)))
 
 (defn- handle-error-response
   "Parse error response from API and create appropriate error event"
@@ -120,11 +117,28 @@
                              (try
                                (loop []
                                  (when-let [chunk (<! sse-chan)]
-                                   (doseq [event (chunk->events chunk schema)]
-                                     (when event
-                                       (>! events-chan event)))
-                                   (recur)))
-                               (>! events-chan {:type :done})
+                                   (cond
+                                     ;; Done signal from SSE
+                                     (::sse/done chunk)
+                                     (>! events-chan {:type :done})
+
+                                     ;; SSE parsing or stream error
+                                     (::sse/error chunk)
+                                     (do
+                                       (>! events-chan {:type :error :error (::sse/error chunk)})
+                                       (recur))
+
+                                     ;; Unparsed JSON - skip
+                                     (get-in chunk [::sse/data ::sse/unparsed])
+                                     (recur)
+
+                                     ;; Valid data chunk - process events
+                                     :else
+                                     (do
+                                       (doseq [internal-event (data->internal-event (::sse/data chunk) schema)]
+                                         (when internal-event
+                                           (>! events-chan internal-event)))
+                                       (recur)))))
                                (catch Exception e
                                  (>! events-chan {:type :error :error e}))
                                (finally

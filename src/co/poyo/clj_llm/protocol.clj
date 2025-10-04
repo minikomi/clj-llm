@@ -9,4 +9,5 @@
      Arguments:
      - this: The provider instance
      - messages: Vector of message maps with :role and :content
-     - provider-opts: Map of provider-specific options (passed through unchanged)"))
+     - schema: Optional malli schema for structured output (or nil)
+     - provider-opts: Map of provider-specific options (passed through unchanged to underlying API)"))
