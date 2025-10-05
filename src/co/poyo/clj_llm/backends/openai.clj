@@ -166,22 +166,35 @@
     (create-event-stream api-base api-key messages schema provider-opts)))
 
 (defn ->openai
-  ([] (->openai default-config))
-  ([{:keys [api-key api-env-var api-base defaults] :as config}]
-   (let [resolved-api-key (or api-env-var (:api-key-env default-config))
-         resolved-key (or api-key (System/getenv resolved-api-key))
+  ([] (->openai {}))
+  ([config]
+   (let [;; Extract API config
+         api-key (::api-key config)
+         api-env-var (::api-env-var config)
+         api-base (::api-base config)
+
+         ;; Extract prompt defaults (everything except ::openai/ keys)
+         defaults (into {}
+                        (remove (fn [[k _]]
+                                  (#{::api-key ::api-env-var ::api-base} k))
+                                config))
+
+         ;; Resolve API config
+         resolved-api-env (or api-env-var (:api-key-env default-config))
+         resolved-key (or api-key (System/getenv resolved-api-env))
          resolved-base (or api-base (:api-base default-config))]
 
      (when-not resolved-key
        (throw (errors/error "Missing API key"
-                            {:provider "openai" :api-key-env resolved-api-key})))
+                            {:provider "openai" :api-key-env resolved-api-env})))
 
      (->OpenAIBackend resolved-base resolved-key defaults))))
 
 (defmethod print-method OpenAIBackend [backend writer]
-  (.write writer
-          (format "#OpenAI[%s%s]"
-                  (:api-base backend)
-                  (if (:defaults backend)
-                    (format ", defaults: %s" (pr-str (:defaults backend)))
-                    ""))))
+  (let [defaults (:defaults backend)
+        model (or (:co.poyo.clj-llm.core/model defaults)
+                  (:model (:co.poyo.clj-llm.core/provider-opts defaults)))]
+    (.write writer "#OpenAI")
+    (when model
+      (.write writer (str " " (pr-str model))))
+    (.write writer (str " " (pr-str (:api-base backend))))))

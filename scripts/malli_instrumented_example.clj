@@ -88,8 +88,8 @@
 ;; Set up LLM backend
 ;; ==========================================
 
-(def ai (openai/->openai {:api-key-env "OPENAI_API_KEY"
-                          :defaults {:model "gpt-5-nano"}}))
+(def ai (openai/->openai {::openai/api-env-var "OPENAI_API_KEY"
+                          ::llm/model "gpt-4o-mini"}))
 
 ;; ==========================================
 ;; Example 1: Money Transfer
