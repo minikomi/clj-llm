@@ -19,10 +19,9 @@
 
     ;; Create provider - will validate API key
     (let [provider (try
-                     (openai/->openai {:api-key-env "OPENAI_API_KEY"})
+                     (openai/->openai)
                      (catch Exception e
                        (println "Error:" (ex-message e))
-                       (println "\nMake sure OPENAI_API_KEY is set in your environment")
                        (System/exit 1)))
 
           ;; Track conversation history
@@ -52,9 +51,9 @@
               (try
                 ;; Stream the response
                 (let [opts #:co.poyo.clj-llm.core{:message-history @conversation
-                                                   :provider-opts (cond-> {:model model-name}
-                                                                    (str/starts-with? model-name "gpt-5-")
-                                                                    (merge gpt5-extra-opts))}
+                                                  :provider-opts (cond-> {:model model-name}
+                                                                   (str/starts-with? model-name "gpt-5-")
+                                                                   (merge gpt5-extra-opts))}
                       chunks (:chunks (llm/prompt provider input opts))
                       response-text (atom "")]
 

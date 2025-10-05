@@ -15,7 +15,8 @@
 
   ;; Create provider
   (let [ai (try
-             (openai/->openai {:api-key-env "OPENAI_API_KEY"})
+             (openai/->openai {::openai/api-env-var "OPENAI_API_KEY"
+                               ::llm/model "gpt-4o-mini"})
              (catch Exception e
                (println "❌ Error:" (ex-message e))
                (System/exit 1)))]
