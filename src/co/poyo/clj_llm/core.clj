@@ -46,22 +46,29 @@
   [:map {:closed true
          :map-schema [:vector]}
    [::system-prompt
-    {:optional true :description "System prompt for the AI"}
+    {:optional true
+     :description "System prompt for the AI"}
     :string]
    [::schema
-    {:optional true :description "Schema for structured responses"}
+    {:optional true
+     :description "Schema for structured responses"}
     :any]
    [::model
-    {:optional true :description "Model name"}
+    {:optional true
+     :description "Model name"}
     :string]
    [::timeout-ms
-    {:optional true :description "Request timeout in milliseconds"}
+    {:optional true
+     :description "Request timeout in milliseconds"}
     pos-int?]
    [::message-history
-    {:optional true :description "Conversation history"}
+    {:optional true
+     :description "Conversation history"}
     MessageHistory]
-   [::provider-opts {:optional true
-                     :description "Provider-specific options (passthrough)"}
+   [::provider-opts
+    {:optional true
+     :default {}
+     :description "Provider-specific options (passthrough)"}
     :map]])
 
 ;; ════════════════════════════════════════════════════════════════════
@@ -87,7 +94,7 @@
   (update provider :defaults #(helpers/deep-merge % defaults)))
 
 (defn with-model [provider model]
-  (assoc-in provider [:defaults ::provider-opts :model] model))
+  (assoc-in provider [:defaults ::model] model))
 
 (defn with-schema [provider schema]
   (assoc-in provider [:defaults ::schema] schema))
@@ -97,6 +104,9 @@
 
 (defn with-timeout [provider timeout-ms]
   (assoc-in provider [:defaults ::timeout-ms] timeout-ms))
+
+(defn with-message-history [provider message-history]
+  (assoc-in provider [:defaults ::message-history] message-history))
 
 (defn with-provider-opts [provider opts]
   (assoc-in provider [:defaults ::provider-opts] opts))
@@ -109,12 +119,12 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (defn- extract-prompt-opts [opts]
-  (if (m/validate PromptOpts opts)
-    (m/coerce PromptOpts opts)
-    (throw (errors/error
-            "Invalid library options"
-            {:errors (me/humanize (m/explain PromptOpts opts))
-             :options opts}))))
+  (let [decoded (m/decode PromptOpts opts (mt/default-value-transformer))]
+    (if-let [explanation (m/explain PromptOpts decoded)]
+      (throw (errors/error
+              "Invalid prompt options"
+              {:errors (me/humanize explanation)}))
+      decoded)))
 
 (defn- parse-structured-output
   "Parse the response as JSON when schema is provided"
@@ -140,15 +150,11 @@
   "Build messages array from prompt and options"
   [prompt system-prompt message-history]
   (let [base-messages (or message-history [])
-        messages-with-system (if system-prompt
-                               (if (and (seq base-messages)
-                                        (= :system (:role (first base-messages))))
-                                 ;; Replace existing system message
-                                 (cons {:role :system :content system-prompt}
-                                       (rest base-messages))
-                                 ;; Add system message at start
-                                 (cons {:role :system :content system-prompt}
-                                       base-messages))
+        first-message-role (get-in base-messages [0 :role])
+        messages-with-system (if (and system-prompt (not= first-message-role :system))
+                               ;; append system prompt at the start
+                               (into [{:role :system :content system-prompt}]
+                                     base-messages)
                                base-messages)]
     (if prompt
       (conj (vec messages-with-system) {:role :user :content prompt})
@@ -199,6 +205,7 @@
          ;; Consumer loop
          _ (go-loop [chunks []]
              (if-let [event (<! source-chan)]
+
                ;; Process event
                (do
                  (a/offer! events-chan event)

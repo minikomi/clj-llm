@@ -49,10 +49,10 @@
   [data schema]
   (cond
     (:error data)
-    [{:type :error :error (:error data)}]
+    {:type :error :error (:error data)}
 
     (get-in data [:choices 0 :delta :content])
-    [{:type :content :content (get-in data [:choices 0 :delta :content])}]
+    {:type :content :content (get-in data [:choices 0 :delta :content])}
 
     (get-in data [:choices 0 :delta :tool-calls])
     (let [tool-calls (get-in data [:choices 0 :delta :tool-calls])
@@ -60,26 +60,19 @@
           has-args? (get-in tool-call [:function :arguments])]
       (cond
         (and schema has-args?)
-        [{:type :content :content (get-in tool-call [:function :arguments])}]
+        {:type :content :content (get-in tool-call [:function :arguments])}
         :else nil))
 
     (get-in data [:choices 0 :finish-reason])
-    [{:type :done :reason (get-in data [:choices 0 :finish-reason])}]
+    {:type :finish :reason (get-in data [:choices 0 :finish-reason])}
 
     (:usage data)
-    [{:type :usage
-      :prompt-tokens (get-in data [:usage :prompt-tokens])
-      :completion-tokens (get-in data [:usage :completion-tokens])
-      :total-tokens (get-in data [:usage :total-tokens])
-      :prompt-tokens-details (get-in data [:usage :prompt-tokens-details])
-      :completion-tokens-details (get-in data [:usage :completion-tokens-details])
-      :model (:model data)
-      :id (:id data)
-      :created (:created data)
-      :service-tier (:service-tier data)
-      :system-fingerprint (:system-fingerprint data)}]
+    (into {:type :usage}
+          (:usage data))
 
-    :else (prn "failed" data)))
+    :else
+    {:type :failed
+     :data data}))
 
 (defn- handle-error-response
   "Parse error response from API and create appropriate error event"
@@ -142,11 +135,9 @@
 
                                      ;; Valid data chunk - process events
                                      :else
-                                     (do
-                                       (doseq [internal-event (data->internal-event (::sse/data chunk) schema)]
-                                         (when internal-event
-                                           (>! events-chan internal-event)))
-                                       (recur)))))
+                                     (do (when-let [internal-event (data->internal-event (::sse/data chunk) schema)]
+                                           (>! events-chan internal-event))
+                                         (recur)))))
                                (catch Exception e
                                  (>! events-chan {:type :error :error e}))
                                (finally
