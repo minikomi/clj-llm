@@ -51,10 +51,10 @@
 
               (try
                 ;; Stream the response
-                (let [opts {::llm/message-history @conversation
-                            ::llm/provider-opts (cond-> {:model model-name}
-                                                  (str/starts-with? model-name "gpt-5-")
-                                                  (merge gpt5-extra-opts))}
+                (let [opts #:co.poyo.clj-llm.core{:message-history @conversation
+                                                   :provider-opts (cond-> {:model model-name}
+                                                                    (str/starts-with? model-name "gpt-5-")
+                                                                    (merge gpt5-extra-opts))}
                       chunks (:chunks (llm/prompt provider input opts))
                       response-text (atom "")]
 

@@ -4,35 +4,72 @@
             [co.poyo.clj-llm.backends.openai :as openai]
             [co.poyo.clj-llm.errors :as errors]
             [clojure.core.async :refer [<!!]]
-            [clojure.pprint :as pp]))
+            [clojure.pprint :as pp]
+            [cheshire.core :as json]))
 
 (comment
   ;; ==========================================
   ;; SETUP - Create backends for testing
   ;; ==========================================
-  
+
   ;; OpenAI backend
   (def openai-backend
-    (openai/backend))
-  
+    (openai/->openai))
+
+  (:defaults openai-backend)
+
+  @(llm/prompt openai-backend "hi" {::llm/model "gpt-5-nano"
+                                    ::llm/provider-opts {:verbosity "low"
+                                                         :reasoning-effort "minimal"}})
+
+  (def gpt-5-nano-backend
+    (-> openai-backend
+        (llm/with-model "gpt-5-nano")
+        (llm/merge-provider-opts {:verbosity "high"
+                                  :reasoning-effort "minimal"})))
+
+  @(llm/prompt gpt-5-nano-backend "hi")
+
+  (def CatResponse)
+
+  @(-> (openai/->openai)
+       (llm/with-model "gpt-4o-mini")
+       (llm/with-schema
+         [:map
+          [:cat-like-answer
+           {:description "lots of meows answer to the question. but make it CAT like. no emojis"}
+           :string]
+          [:emojis [:vector :string]]])
+       (llm/merge-provider-opts {} #_{:verbosity "low"
+                                      :reasoning-effort "minimal"})
+       (llm/with-system-prompt "you are a cat you love emojis, and hate dogs")
+       (llm/prompt "What is 2+2?")
+       :structured)
+
+  @(:text a)
+
+  (def evts (drain-channel (:events a)))
+
+  evts
+
   ;; ==========================================
   ;; BASIC TEXT GENERATION
   ;; ==========================================
-  
+
   ;; Simple text generation
   @(:text (llm/prompt openai-backend "What is 2+2?"))
-  
+
   ;; With temperature control
   (llm/generate openai-backend
                 "Write a creative story opening"
                 {:temperature 0.9})
-  
+
   ;; With specific model
   (llm/generate openai-backend
                 "Explain quantum computing"
                 {:model "gpt-4.1-nano"
                  :max-tokens 200})
-  
+
   ;; With system prompt
   (llm/generate openai-backend
                 "How do I make a flat white?"
@@ -41,18 +78,18 @@
   ;; ==========================================
   ;; STRUCTURED OUTPUT WITH MALLI SCHEMAS
   ;; ==========================================
-  
+
   ;; Simple person extraction
   (def person-schema
     [:map
      [:name :string]
      [:age :int]
      [:occupation :string]])
-  
+
   (llm/generate openai-backend
                 "Extract: Marie Curie was a 66 year old physicist"
                 {:schema person-schema})
-  
+
   ;; Complex nested schema
   (def company-schema
     [:map
@@ -63,7 +100,7 @@
                            [:role :string]
                            [:salary :int]]]]
      [:locations [:vector :string]]])
-  
+
   (llm/generate openai-backend
                 "Extract: TechCorp was founded in 2010. Employees: Alice (CEO, $200k), Bob (Engineer, $120k). Offices in NYC and SF."
                 {:schema company-schema})
@@ -71,7 +108,7 @@
   ;; ==========================================
   ;; STREAMING RESPONSES
   ;; ==========================================
-  
+
   ;; Basic streaming
   (let [chunks (llm/stream openai-backend "Tell me a story about a robot." {:model "gpt-4.1-mini"})]
     (loop []
@@ -79,7 +116,7 @@
         (print chunk)
         (flush)
         (recur))))
-  
+
   ;; Stream with error handling
   (let [chunks (llm/stream openai-backend "Invalid model test" {:model "fake-model"})]
     (println chunks)
@@ -93,7 +130,7 @@
   ;; ==========================================
   ;; RAW EVENTS STREAM
   ;; ==========================================
-  
+
   ;; Monitor all events
   (let [events (llm/events openai-backend "Hello world")]
     (loop []
@@ -108,51 +145,51 @@
   ;; ==========================================
   ;; ADVANCED PROMPT FUNCTION
   ;; ==========================================
-  
+
   ;; Rich response object
   (def resp (llm/prompt openai-backend "Explain artificial intelligence"))
-  
+
   ;; Deref for text
   @resp
-  
+
   ;; Access different aspects
   @(:text resp)       ;; Full text promise
   @(:usage resp)      ;; Token usage info
   (:chunks resp)      ;; Text chunks channel
   (:events resp)      ;; Raw events channel
-  
+
   ;; With structured output
   (def structured-resp
     (llm/prompt openai-backend
                 "Extract: John is 30 years old"
                 {:schema person-schema}))
-  
+
   @(:structured structured-resp)  ;; Structured data
 
   ;; ==========================================
   ;; CONVERSATION HANDLING
   ;; ==========================================
-  
+
   ;; Simple conversation
   (def messages
     [{:role :system :content "You are a helpful assistant"}
      {:role :user :content "My name is Alice"}
      {:role :assistant :content "Nice to meet you, Alice!"}
      {:role :user :content "What's my name?"}])
-  
+
   (llm/generate openai-backend nil {:messages messages})
-  
+
   ;; Building conversation incrementally
   (def conversation (atom []))
-  
+
   ;; Add system message
   (swap! conversation conj {:role :system :content "You are a poet"})
-  
+
   ;; Add user message and get response
   (swap! conversation conj {:role :user :content "Write a haiku about code"})
   (def response (llm/generate openai-backend nil {:messages @conversation}))
   (swap! conversation conj {:role :assistant :content response})
-  
+
   ;; Continue conversation
   (swap! conversation conj {:role :user :content "Now write one about bugs"})
   (llm/generate openai-backend nil {:messages @conversation})
@@ -160,7 +197,7 @@
   ;; ==========================================
   ;; ERROR HANDLING TESTING
   ;; ==========================================
-  
+
   ;; Test invalid API key
   (try
     (let [bad-backend (openai/backend {:api-key "invalid-key"})]
@@ -169,14 +206,14 @@
       (println "Retryable?" (errors/retryable? e))
       (println "Message:" (.getMessage e))
       (println "Data:" (ex-data e))))
-  
+
   ;; Test invalid model
   (try
     (llm/generate openai-backend "test" {:model "fake-model"})
     (catch Exception e
       (println "Message:" (.getMessage e))
       (pp/pprint (ex-data e))))
-  
+
   ;; Test network timeout (if backend supports it)
   (try
     (llm/generate openai-backend "test" {:timeout-ms 1})
@@ -186,14 +223,14 @@
   ;; ==========================================
   ;; BACKEND COMPARISON
   ;; ==========================================
-  
+
   ;; Same prompt with different backends
   (def test-prompt "Write a one-sentence summary of machine learning")
-  
+
   ;; OpenAI
   (println "OpenAI:")
   (println (llm/generate openai-backend test-prompt))
-  
+
   ;; To test with other backends, create them first:
   ;; (def anthropic-backend (anthropic/backend))
   ;; (println "\nAnthropic:")
@@ -202,16 +239,16 @@
   ;; ==========================================
   ;; PERFORMANCE TESTING
   ;; ==========================================
-  
+
   ;; Time a simple generation
   (time (llm/generate openai-backend "Hello" {:model "gpt-4o-mini"}))
-  
+
   ;; Concurrent requests
   (def futures
     (doall
      (for [i (range 3)]
        (future (llm/generate openai-backend (str "Count to " (inc i)))))))
-  
+
   ;; Wait for all and collect results
   (doseq [f futures]
     (println @f))
@@ -219,7 +256,7 @@
   ;; ==========================================
   ;; CONFIGURATION TESTING
   ;; ==========================================
-  
+
   ;; Test all configuration options
   (llm/generate openai-backend
                 "Be creative"
@@ -231,7 +268,7 @@
                  :presence-penalty 0.1
                  :stop ["END" "\n\n"]
                  :seed 12345})
-  
+
   ;; Test with custom headers (backend-specific)
   (llm/generate openai-backend
                 "Hello"
@@ -240,7 +277,7 @@
   ;; ==========================================
   ;; UTILITY FUNCTIONS FOR TESTING
   ;; ==========================================
-  
+
   ;; Helper to test streaming with timing
   (defn time-stream [backend prompt]
     (let [start (System/currentTimeMillis)
@@ -253,10 +290,10 @@
       {:duration-ms (- (System/currentTimeMillis) start)
        :chunks @collected
        :total-chars (reduce + (map count @collected))}))
-  
+
   ;; Test streaming performance
   (time-stream openai-backend "Write a short paragraph about AI")
-  
+
   ;; Helper to validate schema results
   (defn test-schema-extraction [backend text schema]
     (try
@@ -264,7 +301,7 @@
         {:success true :result result})
       (catch Exception e
         {:success false :error (ex-message e) :data (ex-data e)})))
-  
+
   ;; Test schema validation
   (test-schema-extraction
    openai-backend

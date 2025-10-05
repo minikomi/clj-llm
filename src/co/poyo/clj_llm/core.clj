@@ -43,13 +43,17 @@
 
 (def PromptOpts
   "Schema for combined options passed to prompt function"
-  [:map {:closed true}
+  [:map {:closed true
+         :map-schema [:vector]}
    [::system-prompt
     {:optional true :description "System prompt for the AI"}
     :string]
    [::schema
     {:optional true :description "Schema for structured responses"}
-    :map]
+    :any]
+   [::model
+    {:optional true :description "Model name"}
+    :string]
    [::timeout-ms
     {:optional true :description "Request timeout in milliseconds"}
     pos-int?]
@@ -67,6 +71,38 @@
 (defrecord Response [chunks events text usage structured]
   clojure.lang.IDeref
   (deref [_] @text))
+
+(defmethod print-method Response [r writer]
+  (.write writer "#Response{:text ")
+  (if (realized? (:text r))
+    (.write writer (pr-str @(:text r)))
+    (.write writer "<pending>"))
+  (.write writer "}"))
+
+;; ════════════════════════════════════════════════════════════════════
+;; Provider update helpers
+;; ════════════════════════════════════════════════════════════════════
+
+(defn with-defaults [provider defaults]
+  (update provider :defaults #(helpers/deep-merge % defaults)))
+
+(defn with-model [provider model]
+  (assoc-in provider [:defaults ::provider-opts :model] model))
+
+(defn with-schema [provider schema]
+  (assoc-in provider [:defaults ::schema] schema))
+
+(defn with-system-prompt [provider system-prompt]
+  (assoc-in provider [:defaults ::system-prompt] system-prompt))
+
+(defn with-timeout [provider timeout-ms]
+  (assoc-in provider [:defaults ::timeout-ms] timeout-ms))
+
+(defn with-provider-opts [provider opts]
+  (assoc-in provider [:defaults ::provider-opts] opts))
+
+(defn merge-provider-opts [provider opts]
+  (update-in provider [:defaults ::provider-opts] #(merge % opts)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Input/Output Helpers
@@ -124,16 +160,31 @@
 
 (defn prompt
   ([provider prompt-input]
-   (prompt provider prompt-input nil))
+   (prompt provider prompt-input {}))
   ([provider prompt-input opts]
-   (let [;; Validate and extract opts
-         {::keys [system-prompt schema message-history provider-opts]} (extract-prompt-opts opts)
+   (let [;; Merge provider defaults with user opts
+         merged-opts (helpers/deep-merge (:defaults provider) opts)
+
+         ;; Validate and extract opts
+         {::keys [system-prompt schema model message-history provider-opts]} (extract-prompt-opts merged-opts)
+
+         ;; Merge model into provider-opts (provider-opts :model takes precedence)
+         final-provider-opts (if model
+                               (merge {:model model} provider-opts)
+                               provider-opts)
+
+         ;; Validate model is set
+         _ (when-not (:model final-provider-opts)
+             (throw (errors/error
+                     "No model specified"
+                     {:provider provider
+                      :opts opts})))
 
          ;; Build final messages array
          messages (build-messages prompt-input system-prompt message-history)
 
          ;; chan setup
-         source-chan (proto/request-stream provider messages schema provider-opts)
+         source-chan (proto/request-stream provider messages schema final-provider-opts)
          req-start (System/currentTimeMillis)
 
          ;; chan with cleanup
@@ -158,7 +209,7 @@
                    :usage (do
                             (deliver usage-promise
                                      (assoc event
-                                            :clj-llm/provider-opts provider-opts
+                                            :clj-llm/provider-opts final-provider-opts
                                             :clj-llm/req-start req-start
                                             :clj-llm/req-end (System/currentTimeMillis)
                                             :clj-llm/duration (- (System/currentTimeMillis) req-start)))
@@ -168,7 +219,7 @@
                                                    "LLM request failed"
                                                    {:event event
                                                     :request {:messages messages
-                                                              :provider-opts provider-opts
+                                                              :provider-opts final-provider-opts
                                                               :started-at req-start
                                                               :provider provider}}))
                             (when-not (realized? usage-promise)

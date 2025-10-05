@@ -9,8 +9,8 @@
 
 (let [start-time (System/currentTimeMillis)
       response (llm/prompt provider "give me a long poem please"
-                          {:provider/opts {:model "gpt-4o-mini"
-                                           :temperature 0}})
+                          #:co.poyo.clj-llm.core{:provider-opts {:model "gpt-4o-mini"
+                                                                  :temperature 0}})
       chunks (:chunks response)]
   (println "Stream started at 0ms")
   (loop [chunk-count 0]

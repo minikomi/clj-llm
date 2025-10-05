@@ -11,7 +11,8 @@
       (is (= "Test error" (ex-message err)))
       (is (= "bar" (:foo (ex-data err)))))))
 
-(deftest test-retryable
+;; Retryable functionality removed during simplification
+#_(deftest test-retryable
   (testing "Retryable errors"
     (is (errors/retryable? (errors/error "test" {:status 429})))
     (is (errors/retryable? (errors/error "test" {:status 500})))
@@ -37,5 +38,4 @@
   (testing "500 Server error"
     (let [err (errors/parse-http-error "openai" 500 "Internal error")]
       (is (= "openai: Server error" (ex-message err)))
-      (is (= 500 (:status (ex-data err))))
-      (is (errors/retryable? err)))))
+      (is (= 500 (:status (ex-data err))))))))
