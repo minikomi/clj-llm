@@ -22,12 +22,13 @@
 (defn- convert-options-for-api
   "Convert kebab-case options to snake_case format for OpenAI API"
   [opts]
-  (walk/postwalk
-   (fn [x]
-     (if (map? x)
-       (update-keys x csk/->snake_case_keyword)
-       x))
-   opts))
+  (when opts
+    (walk/postwalk
+     (fn [x]
+       (if (map? x)
+         (update-keys x csk/->snake_case_keyword)
+         x))
+     opts)))
 
 (defn- build-body
   "Build OpenAI API request body"
@@ -67,9 +68,16 @@
 
     (:usage data)
     [{:type :usage
-      :prompt-tokens (get-in data [:usage :prompt_tokens])
-      :completion-tokens (get-in data [:usage :completion_tokens])
-      :total-tokens (get-in data [:usage :total_tokens])}]
+      :prompt-tokens (get-in data [:usage :prompt-tokens])
+      :completion-tokens (get-in data [:usage :completion-tokens])
+      :total-tokens (get-in data [:usage :total-tokens])
+      :prompt-tokens-details (get-in data [:usage :prompt-tokens-details])
+      :completion-tokens-details (get-in data [:usage :completion-tokens-details])
+      :model (:model data)
+      :id (:id data)
+      :created (:created data)
+      :service-tier (:service-tier data)
+      :system-fingerprint (:system-fingerprint data)}]
 
     :else (prn "failed" data)))
 
@@ -155,8 +163,7 @@
 (defrecord OpenAIBackend [api-base api-key defaults]
   proto/LLMProvider
   (request-stream [_ messages schema provider-opts]
-    (let [final-opts (helpers/deep-merge defaults provider-opts)]
-      (create-event-stream api-base api-key messages schema final-opts))))
+    (create-event-stream api-base api-key messages schema provider-opts)))
 
 (defn ->openai
   ([] (->openai default-config))

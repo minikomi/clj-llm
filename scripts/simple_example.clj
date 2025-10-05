@@ -24,7 +24,7 @@
     (println "1️⃣ Simple text generation:")
     (println "Q: What is 2+2?")
     (print "A: ")
-    (println @(:text (llm/prompt ai "What is 2+2?" {:provider/opts {:model "gpt-4o-mini"}})))
+    (println @(:text (llm/prompt ai "What is 2+2?" #:co.poyo.clj-llm.core{:provider-opts {:model "gpt-4o-mini"}})))
     (println)
 
     ;; Example 2: Structured output
@@ -32,12 +32,14 @@
     (println "Extract: John Doe is a 30 year old software engineer")
     (let [schema [:map
                   [:name :string]
-                  [:age pos-int?]
+                  [:age :int]
                   [:occupation :string]]
-          result @(:structured (llm/prompt ai
-                                           "Extract: John Doe is a 30 year old software engineer"
-                                           {:llm/schema schema
-                                            :provider/opts {:model "gpt-4o-mini"}}))]
+          result @(-> ai
+                      (update :defaults merge
+                              {::llm/schema schema
+                               ::llm/provider-opts {:model "gpt-5-mini" :reasoning-effort "minimal"}})
+                      (llm/prompt "John Doe is a 30 year old software engineer" {})
+                      :structured)]
       (println "Result:" result))
     (println)
 
@@ -46,8 +48,8 @@
     (print "Story: ")
     (let [response (llm/prompt ai
                                "Tell me a very short story about a robot (2 sentences)"
-                               {:provider/opts {:model "gpt-4o-mini"
-                                                :temperature 0.8}})
+                               #:co.poyo.clj-llm.core{:provider-opts {:model "gpt-4o-mini"
+                                                                      :temperature 0.8}})
           chunks (:chunks response)]
       (loop []
         (when-let [chunk (<!! chunks)]
@@ -63,8 +65,8 @@
                     {:role :assistant :content "Ahoy there, matey! What brings ye to these waters?"}
                     {:role :user :content "What's your favorite treasure?"}]]
       (print "Pirate says: ")
-      (println @(:text (llm/prompt ai nil {:provider/opts {:model "gpt-4o-mini"}
-                                           :llm/message-history messages}))))
+      (println @(:text (llm/prompt ai nil #:co.poyo.clj-llm.core{:provider-opts {:model "gpt-4o-mini"}
+                                                                 :message-history messages}))))
 
     (println "\n✅ All examples completed!")))
 

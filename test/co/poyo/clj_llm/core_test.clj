@@ -8,7 +8,7 @@
 ;; Mock provider for testing
 (defrecord MockProvider [responses defaults]
   proto/LLMProvider
-  (request-stream [_ messages provider-opts]
+  (request-stream [_ messages schema provider-opts]
     (let [ch (chan)]
       (go
         (doseq [event @responses]
@@ -33,7 +33,7 @@
   (testing "Structured output generation"
     (let [provider (mock-provider [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
           schema [:map [:name :string] [:age pos-int?]]
-          response (llm/prompt provider "test" {:llm/schema schema})]
+          response (llm/prompt provider "test" #:co.poyo.clj-llm.core{:schema schema})]
       (is (= {:name "Alice" :age 30} @(:structured response)))))
 
   (testing "Error handling"
@@ -89,36 +89,32 @@
 (deftest test-message-building
   (testing "Messages from prompt and system prompt"
     (let [provider (mock-provider [{:type :content :content "OK"}])
-          response (llm/prompt provider "Hello" {:llm/system-prompt "Be helpful"})]
+          response (llm/prompt provider "Hello" #:co.poyo.clj-llm.core{:system-prompt "Be helpful"})]
       (is (string? @(:text response)))))
 
   (testing "Direct message history"
     (let [provider (mock-provider [{:type :content :content "OK"}])
           messages [{:role :user :content "Hello"}]
-          response (llm/prompt provider nil {:llm/message-history messages})]
+          response (llm/prompt provider nil #:co.poyo.clj-llm.core{:message-history messages})]
       (is (string? @(:text response))))))
 
-(deftest test-extract-library-options
-  (testing "Extracts all library options from schema"
-    (let [extract-fn #'llm/extract-library-options
-          opts {:llm/system-prompt "Test"
-                :llm/schema [:map [:name :string]]
-                :llm/timeout-ms 5000
-                :llm/message-history [{:role :user :content "Hi"}]
-                :provider/opts {:model "gpt-4"}
-                :random-key "ignored"}
+(deftest test-extract-prompt-opts
+  (testing "Validates and extracts prompt options"
+    (let [extract-fn #'llm/extract-prompt-opts
+          opts #:co.poyo.clj-llm.core{:system-prompt "Test"
+                                       :schema [:map [:name :string]]
+                                       :timeout-ms 5000
+                                       :message-history [{:role :user :content "Hi"}]
+                                       :provider-opts {:model "gpt-4"}}
           result (extract-fn opts)]
-      ;; Should extract all llm/* keys
-      (is (= "Test" (:llm/system-prompt result)))
-      (is (= [:map [:name :string]] (:llm/schema result)))
-      (is (= 5000 (:llm/timeout-ms result)))
-      (is (= [{:role :user :content "Hi"}] (:llm/message-history result)))
-      ;; Should not include provider opts or random keys
-      (is (nil? (:provider/opts result)))
-      (is (nil? (:random-key result)))))
+      ;; Should extract all co.poyo.clj-llm.core/* keys
+      (is (= "Test" (:co.poyo.clj-llm.core/system-prompt result)))
+      (is (= [:map [:name :string]] (:co.poyo.clj-llm.core/schema result)))
+      (is (= 5000 (:co.poyo.clj-llm.core/timeout-ms result)))
+      (is (= [{:role :user :content "Hi"}] (:co.poyo.clj-llm.core/message-history result)))
+      (is (= {:model "gpt-4"} (:co.poyo.clj-llm.core/provider-opts result)))))
 
-  (testing "Returns nil when no library options present"
-    (let [extract-fn #'llm/extract-library-options
-          opts {:provider/opts {:model "gpt-4"}}
-          result (extract-fn opts)]
-      (is (nil? result)))))
+  (testing "Rejects invalid options"
+    (let [extract-fn #'llm/extract-prompt-opts
+          opts #:co.poyo.clj-llm.core{:invalid-key "value"}]
+      (is (thrown? clojure.lang.ExceptionInfo (extract-fn opts))))))

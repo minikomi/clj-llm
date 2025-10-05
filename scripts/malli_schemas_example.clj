@@ -23,15 +23,15 @@
    [:from {:description "Sender's name"} :string]
    [:to {:description "Recipient's name"} :string]
    [:amount {:description "Amount to transfer"} :double]
-   [:currency {:optional true 
-               :description "Currency code (defaults to USD)"} 
+   [:currency {:optional true
+               :description "Currency code (defaults to USD)"}
     [:enum "USD" "EUR" "GBP"]]])
 
 (defn transfer-money
   "Process a money transfer"
   [{:keys [from to amount currency]}]
   {:success true
-   :message (str "Transferred " amount " " (or currency "USD") 
+   :message (str "Transferred " amount " " (or currency "USD")
                  " from " from " to " to)
    :timestamp (str (java.time.Instant/now))})
 
@@ -42,7 +42,7 @@
    [:name {:description "Full name"} :string]
    [:email {:description "Email address"} :string]
    [:age {:description "Age in years"} :int]
-   [:roles {:description "User roles/permissions"} 
+   [:roles {:description "User roles/permissions"}
     [:vector [:enum "admin" "user" "developer" "manager"]]]])
 
 (defn create-user
@@ -82,7 +82,7 @@
 ;; ==========================================
 
 (def ai (openai/->openai {:api-key-env "OPENAI_API_KEY"
-                          :defaults {:provider/opts {:model "gpt-4o-mini"}}}))
+                          :defaults {:model "gpt-4o-mini"}}))
 
 ;; ==========================================
 ;; Example 1: Money Transfer
@@ -93,11 +93,11 @@
 
 (let [prompt "Please transfer $1,500 from Alice to Bob"]
   (println "Input:" prompt)
-  
-  (let [data @(:structured (llm/prompt ai prompt {:llm/schema transfer-schema}))]
+
+  (let [data @(:structured (llm/prompt ai prompt {::llm/schema transfer-schema}))]
     (println "\nExtracted:")
     (pp/pprint data)
-    
+
     (println "\nResult:")
     (pp/pprint (transfer-money data))))
 
@@ -110,11 +110,11 @@
 
 (let [prompt "Create account for Jane Smith (jane@example.com), 28 years old, needs admin and developer access"]
   (println "Input:" prompt)
-  
-  (let [data @(:structured (llm/prompt ai prompt {:llm/schema user-schema}))]
+
+  (let [data @(:structured (llm/prompt ai prompt {::llm/schema user-schema}))]
     (println "\nExtracted:")
     (pp/pprint data)
-    
+
     (println "\nResult:")
     (pp/pprint (create-user data))))
 
@@ -127,11 +127,11 @@
 
 (let [prompt "Schedule a project sync meeting with Alice, Bob, and Charlie on Friday Dec 15th at 2:30 PM for 90 minutes in Conference Room A"]
   (println "Input:" prompt)
-  
-  (let [data @(:structured (llm/prompt ai prompt {:llm/schema meeting-schema}))]
+
+  (let [data @(:structured (llm/prompt ai prompt {::llm/schema meeting-schema}))]
     (println "\nExtracted:")
     (pp/pprint data)
-    
+
     (println "\nResult:")
     (pp/pprint (schedule-meeting data))))
 
@@ -144,7 +144,7 @@
 
 (def requests
   ["Transfer 200 EUR from John to Sarah"
-   "Send $50 from Mike to Emma"  
+   "Send $50 from Mike to Emma"
    "Transfer £1000 from David to Lisa"])
 
 (println "Processing multiple transfer requests:\n")
@@ -152,7 +152,7 @@
 (doseq [req requests]
   (println "Request:" req)
   (try
-    (let [data @(:structured (llm/prompt ai req {:llm/schema transfer-schema}))
+    (let [data @(:structured (llm/prompt ai req {::llm/schema transfer-schema}))
           result (transfer-money data)]
       (println "→" (:message result)))
     (catch Exception e

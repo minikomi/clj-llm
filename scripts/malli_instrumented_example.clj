@@ -34,7 +34,7 @@
   "Process a money transfer between accounts"
   [{:keys [from to amount currency]}]
   {:success true
-   :message (str "Transferred " amount " " (or currency "USD") 
+   :message (str "Transferred " amount " " (or currency "USD")
                  " from " from " to " to)})
 
 ;; A function for creating users
@@ -89,7 +89,7 @@
 ;; ==========================================
 
 (def ai (openai/->openai {:api-key-env "OPENAI_API_KEY"
-                          :defaults {:provider/opts {:model "gpt-4o-mini"}}}))
+                          :defaults {:model "gpt-5-nano"}}))
 
 ;; ==========================================
 ;; Example 1: Money Transfer
@@ -100,15 +100,15 @@
 
 (let [schema (schema/instrumented-function->malli-schema transfer-money)
       prompt "Extract from this message: Hey, can you transfer $1,500 from Alice's account to Bob's account? Thanks!"]
-  
+
   (println "Input text:" prompt)
   (println "\nExtracted schema from function:")
   (pp/pprint (m/form schema))
-  
-  (let [extracted-data @(:structured (llm/prompt ai prompt {:llm/schema schema}))]
+
+  (let [extracted-data @(:structured (llm/prompt ai prompt #:co.poyo.clj-llm.core{:schema schema}))]
     (println "\nExtracted data:")
     (pp/pprint extracted-data)
-    
+
     (println "\nCalling function with extracted data:")
     (pp/pprint (transfer-money extracted-data))))
 
@@ -121,13 +121,13 @@
 
 (let [schema (schema/instrumented-function->malli-schema create-user)
       prompt "Please create an account for John Doe, email: john.doe@example.com, 32 years old, should have admin and developer access"]
-  
+
   (println "Input text:" prompt)
-  
-  (let [extracted-data @(:structured (llm/prompt ai prompt {:llm/schema schema}))]
+
+  (let [extracted-data @(:structured (llm/prompt ai prompt #:co.poyo.clj-llm.core{:schema schema}))]
     (println "\nExtracted data:")
     (pp/pprint extracted-data)
-    
+
     (println "\nCalling function with extracted data:")
     (pp/pprint (create-user extracted-data))))
 
@@ -140,14 +140,14 @@
 
 (let [schema (schema/instrumented-function->malli-schema process-order)
       prompt "Customer 550e8400-e29b-41d4-a716-446655440000 wants to order 2 laptops (SKU: LAPTOP-001) at $999 each and 1 mouse (SKU: MOUSE-002) at $29. Ship to 123 Main St, San Francisco, USA"]
-  
+
   (println "Input text:" prompt)
-  
+
   (try
-    (let [extracted-data @(:structured (llm/prompt ai prompt {:llm/schema schema}))]
+    (let [extracted-data @(:structured (llm/prompt ai prompt #:co.poyo.clj-llm.core{:schema schema}))]
       (println "\nExtracted data:")
       (pp/pprint extracted-data)
-      
+
       (println "\nCalling function with extracted data:")
       (pp/pprint (process-order extracted-data)))
     (catch Exception e
@@ -163,7 +163,7 @@
 (println "=================================\n")
 
 (println "Transfer function as JSON Schema:")
-(pp/pprint (schema/malli->json-schema 
+(pp/pprint (schema/malli->json-schema
             (schema/instrumented-function->malli-schema transfer-money)))
 
 (println "\n\nDone!")
