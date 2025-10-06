@@ -21,16 +21,27 @@
 
 (defn- default-sse-parser
   "Default SSE parser - extracts 'data:' lines and attempts JSON parsing.
+   Ignores 'event:' lines (type is in the JSON data itself).
    Returns {::data parsed-json}, {::data {::unparsed raw-string}}, or {::done true}"
   [line]
-  (when (str/starts-with? line "data:")
+  (cond
+    ;; Ignore event: lines - type is in the data
+    (str/starts-with? line "event:")
+    nil
+
+    ;; Parse data: lines
+    (str/starts-with? line "data:")
     (let [raw-data (str/trim (subs line 5))]
       (if (= raw-data "[DONE]")
         {::done true}
         (try
           {::data (json->kebab raw-data)}
           (catch Exception _
-            {::data {::unparsed raw-data}}))))))
+            {::data {::unparsed raw-data}}))))
+
+    ;; Empty line or other
+    :else
+    nil))
 
 (defn- default-done-pred
   "Default predicate to check if event signals end of stream"
@@ -42,10 +53,10 @@
 
    Options:
    - :buffer-size - Channel buffer size (default: 1024)
-   - :parser-fn - Function that takes a line and returns event map or nil (default: default-sse-parser)
+   - :parser-fn - Function that takes a line and returns event map or nil (default: stateful parser)
                   Parser can emit {::done true} to signal end of stream
 
-   Returns channel of event maps: {::data ...}, {::data {::unparsed ...}}, {::done true}, or {::error ...}"
+   Returns channel of event maps: {::data ...}, {::done true}, or {::error ...}"
   ([input-stream] (parse-sse input-stream {}))
   ([input-stream {:keys [buffer-size parser-fn]
                   :or {buffer-size 1024

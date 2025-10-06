@@ -147,18 +147,12 @@
                :input text})))))
 
 (defn- build-messages
-  "Build messages array from prompt and options"
-  [prompt system-prompt message-history]
-  (let [base-messages (or message-history [])
-        first-message-role (get-in base-messages [0 :role])
-        messages-with-system (if (and system-prompt (not= first-message-role :system))
-                               ;; append system prompt at the start
-                               (into [{:role :system :content system-prompt}]
-                                     base-messages)
-                               base-messages)]
+  "Build messages array from prompt and message history (excludes system prompt)"
+  [prompt message-history]
+  (let [base-messages (or message-history [])]
     (if prompt
-      (conj (vec messages-with-system) {:role :user :content prompt})
-      (vec messages-with-system))))
+      (conj (vec base-messages) {:role :user :content prompt})
+      (vec base-messages))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Main prompt fn
@@ -174,23 +168,18 @@
          ;; Validate and extract opts
          {::keys [system-prompt schema model message-history provider-opts]} (extract-prompt-opts merged-opts)
 
-         ;; Merge model into provider-opts (provider-opts :model takes precedence)
-         final-provider-opts (if model
-                               (merge {:model model} provider-opts)
-                               provider-opts)
-
          ;; Validate model is set
-         _ (when-not (:model final-provider-opts)
+         _ (when-not model
              (throw (errors/error
                      "No model specified"
                      {:provider provider
                       :opts opts})))
 
          ;; Build final messages array
-         messages (build-messages prompt-input system-prompt message-history)
+         messages (build-messages prompt-input message-history)
 
          ;; chan setup
-         source-chan (proto/request-stream provider messages schema final-provider-opts)
+         source-chan (proto/request-stream provider model system-prompt messages schema provider-opts)
          req-start (System/currentTimeMillis)
 
          ;; chan with cleanup
@@ -216,7 +205,7 @@
                    :usage (do
                             (deliver usage-promise
                                      (assoc event
-                                            :clj-llm/provider-opts final-provider-opts
+                                            :clj-llm/provider-opts provider-opts
                                             :clj-llm/req-start req-start
                                             :clj-llm/req-end (System/currentTimeMillis)
                                             :clj-llm/duration (- (System/currentTimeMillis) req-start)))
@@ -226,7 +215,7 @@
                                                    "LLM request failed"
                                                    {:event event
                                                     :request {:messages messages
-                                                              :provider-opts final-provider-opts
+                                                              :provider-opts provider-opts
                                                               :started-at req-start
                                                               :provider provider}}))
                             (when-not (realized? usage-promise)

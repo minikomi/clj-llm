@@ -8,7 +8,7 @@
 ;; Mock provider for testing
 (defrecord MockProvider [responses defaults]
   proto/LLMProvider
-  (request-stream [_ messages schema provider-opts]
+  (request-stream [_ model system-prompt messages schema provider-opts]
     (let [ch (chan)]
       (go
         (doseq [event @responses]
@@ -21,7 +21,8 @@
   "Create a mock provider with predefined responses"
   ([events] (mock-provider events nil))
   ([events defaults]
-   (->MockProvider (atom events) defaults)))
+   (->MockProvider (atom events)
+                   (merge #:co.poyo.clj-llm.core{:model "test-model"} defaults))))
 
 (deftest test-basic-prompt
   (testing "Basic text generation"
