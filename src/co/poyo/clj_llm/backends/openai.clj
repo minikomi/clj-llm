@@ -32,15 +32,21 @@
 
 (defn- build-body
   "Build OpenAI API request body"
-  [messages schema opts]
-  (let [schema-config (when schema
+  [model system-prompt messages schema opts]
+  (let [;; Prepend system message if system-prompt is provided
+        messages-with-system (if system-prompt
+                               (into [{:role "system" :content system-prompt}]
+                                     messages)
+                               messages)
+        schema-config (when schema
                         {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
                          :tool_choice "required"})
         api-opts (convert-options-for-api opts)]
     (merge
      {:stream true
       :stream_options {:include_usage true}
-      :messages messages}
+      :model model
+      :messages messages-with-system}
      api-opts
      schema-config)))
 
@@ -104,12 +110,12 @@
 
 (defn- create-event-stream
   "Create event stream from HTTP response"
-  [api-base api-key messages schema opts]
+  [api-base api-key model system-prompt messages schema opts]
   (let [events-chan (chan 1024)
         url (str api-base "/chat/completions")
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
-        body (json/generate-string (build-body messages schema opts))]
+        body (json/generate-string (build-body model system-prompt messages schema opts))]
     (net/post-stream url headers body
                      (fn handle-response [response]
                        (if (= 200 (:status response))
@@ -153,8 +159,8 @@
 
 (defrecord OpenAIBackend [api-base api-key defaults]
   proto/LLMProvider
-  (request-stream [_ messages schema provider-opts]
-    (create-event-stream api-base api-key messages schema provider-opts)))
+  (request-stream [_ model system-prompt messages schema provider-opts]
+    (create-event-stream api-base api-key model system-prompt messages schema provider-opts)))
 
 (defn ->openai
   ([] (->openai {}))
@@ -183,8 +189,7 @@
 
 (defmethod print-method OpenAIBackend [backend writer]
   (let [defaults (:defaults backend)
-        model (or (:co.poyo.clj-llm.core/model defaults)
-                  (:model (:co.poyo.clj-llm.core/provider-opts defaults)))]
+        model (:co.poyo.clj-llm.core/model defaults)]
     (.write writer "#OpenAI")
     (when model
       (.write writer (str " " (pr-str model))))

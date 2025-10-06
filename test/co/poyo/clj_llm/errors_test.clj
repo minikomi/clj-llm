@@ -38,4 +38,4 @@
   (testing "500 Server error"
     (let [err (errors/parse-http-error "openai" 500 "Internal error")]
       (is (= "openai: Server error" (ex-message err)))
-      (is (= 500 (:status (ex-data err))))))))
+      (is (= 500 (:status (ex-data err)))))))
