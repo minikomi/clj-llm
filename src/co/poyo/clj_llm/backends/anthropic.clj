@@ -31,10 +31,22 @@
 
 (defn- build-body
   "Build Anthropic API request body"
-  [model system-prompt messages schema opts]
-  (let [schema-config (when schema
-                        {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
-                         :tool_choice {:type "any"}})
+  [model system-prompt messages schema tools tool-choice opts]
+  (let [;; Handle both multi-tool and single-schema modes
+        tools-config (cond
+                       ;; Multi-tool mode
+                       tools
+                       {:tools (mapv co.poyo.clj-llm.schema/malli->json-schema tools)
+                        :tool_choice (cond
+                                       (= tool-choice "auto") {:type "auto"}
+                                       (= tool-choice "required") {:type "any"}
+                                       (= tool-choice "none") nil
+                                       :else (or tool-choice {:type "auto"}))}
+
+                       ;; Legacy single schema mode (structured output)
+                       schema
+                       {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
+                        :tool_choice {:type "any"}})
         api-opts (convert-options-for-api opts)
         ;; Anthropic requires max_tokens
         max-tokens (or (:max_tokens api-opts) 4096)
@@ -44,19 +56,45 @@
                     :messages messages
                     :stream true}
                    api-opts
-                   schema-config)]
+                   tools-config)]
     ;; Add system prompt as top-level parameter if provided
     (if system-prompt
       (assoc base-body :system system-prompt)
       base-body)))
 
 (defn- data->internal-event
-  "Convert Anthropic SSE event to our internal event format"
-  [data schema]
+  "Convert Anthropic SSE event to our internal event format.
+   In schema mode (single schema for structured output), tool input JSON is treated as content.
+   In tools mode (multiple tools), tool use blocks are emitted as :tool-call events."
+  [data schema tools]
   (case (:type data)
-    ;; Content delta - extract text
+    ;; Content delta - extract text (regular text responses)
     "content_block_delta"
-    {:type :content :content (get-in data [:delta :text])}
+    (cond
+      ;; Text content
+      (get-in data [:delta :text])
+      {:type :content :content (get-in data [:delta :text])}
+
+      ;; Tool input JSON in schema mode (structured output)
+      (and schema (get-in data [:delta :partial_json]))
+      {:type :content :content (get-in data [:delta :partial_json])}
+
+      ;; Tool input JSON in multi-tool mode
+      (and tools (get-in data [:delta :partial_json]))
+      {:type :tool-call-delta
+       :index (:index data)
+       :arguments (get-in data [:delta :partial_json])}
+
+      :else nil)
+
+    ;; Content block start - detect tool use
+    "content_block_start"
+    (when (and tools (= "tool_use" (get-in data [:content_block :type])))
+      {:type :tool-call
+       :id (get-in data [:content_block :id])
+       :index (:index data)
+       :name (get-in data [:content_block :name])
+       :arguments ""})
 
     ;; Message delta with usage info
     "message_delta"
@@ -68,7 +106,7 @@
     {:type :done}
 
     ;; Ignore lifecycle and ping events
-    ("message_start" "content_block_start" "content_block_stop" "ping")
+    ("message_start" "content_block_stop" "ping")
     nil
 
     ;; Error events
@@ -108,13 +146,13 @@
 
 (defn- create-event-stream
   "Create event stream from HTTP response"
-  [api-base api-key api-version model system-prompt messages schema opts]
+  [api-base api-key api-version model system-prompt messages schema tools tool-choice opts]
   (let [events-chan (chan 1024)
         url (str api-base "/v1/messages")
         headers {"x-api-key" api-key
                  "anthropic-version" api-version
                  "Content-Type" "application/json"}
-        body-map (build-body model system-prompt messages schema opts)
+        body-map (build-body model system-prompt messages schema tools tool-choice opts)
         body (json/generate-string body-map)]
     (net/post-stream url headers body
                      (fn handle-response [response]
@@ -143,7 +181,8 @@
                                      :else
                                      (let [internal-event (data->internal-event
                                                            (::sse/data chunk)
-                                                           schema)]
+                                                           schema
+                                                           tools)]
                                        (if internal-event
                                          (do
                                            (>! events-chan internal-event)
@@ -167,8 +206,8 @@
 
 (defrecord AnthropicBackend [api-base api-key api-version defaults]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema provider-opts]
-    (create-event-stream api-base api-key api-version model system-prompt messages schema provider-opts)))
+  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+    (create-event-stream api-base api-key api-version model system-prompt messages schema tools tool-choice provider-opts)))
 
 (defn ->anthropic
   ([] (->anthropic {}))

@@ -32,15 +32,23 @@
 
 (defn- build-body
   "Build OpenAI API request body"
-  [model system-prompt messages schema opts]
+  [model system-prompt messages schema tools tool-choice opts]
   (let [;; Prepend system message if system-prompt is provided
         messages-with-system (if system-prompt
                                (into [{:role "system" :content system-prompt}]
                                      messages)
                                messages)
-        schema-config (when schema
-                        {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
-                         :tool_choice "required"})
+        ;; Handle both multi-tool and single-schema modes
+        tools-config (cond
+                       ;; Multi-tool mode
+                       tools
+                       {:tools (mapv co.poyo.clj-llm.schema/malli->json-schema tools)
+                        :tool_choice (or tool-choice "auto")}
+
+                       ;; Legacy single schema mode (structured output)
+                       schema
+                       {:tools [(co.poyo.clj-llm.schema/malli->json-schema schema)]
+                        :tool_choice "required"})
         api-opts (convert-options-for-api opts)]
     (merge
      {:stream true
@@ -48,11 +56,13 @@
       :model model
       :messages messages-with-system}
      api-opts
-     schema-config)))
+     tools-config)))
 
 (defn- data->internal-event
-  "Convert OpenAI chunk to our event format"
-  [data schema]
+  "Convert OpenAI chunk to our event format.
+   In schema mode (single schema for structured output), tool calls are treated as content.
+   In tools mode (multiple tools), tool calls are emitted as :tool-call events."
+  [data schema tools]
   (cond
     (:error data)
     {:type :error :error (:error data)}
@@ -63,10 +73,27 @@
     (get-in data [:choices 0 :delta :tool-calls])
     (let [tool-calls (get-in data [:choices 0 :delta :tool-calls])
           tool-call (first tool-calls)
+          has-name? (get-in tool-call [:function :name])
           has-args? (get-in tool-call [:function :arguments])]
       (cond
+        ;; Schema mode: treat tool arguments as content for structured output
         (and schema has-args?)
         {:type :content :content (get-in tool-call [:function :arguments])}
+
+        ;; Multi-tool mode: initial tool call (has name)
+        (and tools has-name?)
+        {:type :tool-call
+         :id (get tool-call :id)
+         :index (get tool-call :index)
+         :name (get-in tool-call [:function :name])
+         :arguments ""}
+
+        ;; Multi-tool mode: argument delta (subsequent chunks)
+        (and tools has-args?)
+        {:type :tool-call-delta
+         :index (get tool-call :index)
+         :arguments (get-in tool-call [:function :arguments])}
+
         :else nil))
 
     (get-in data [:choices 0 :finish-reason])
@@ -110,12 +137,12 @@
 
 (defn- create-event-stream
   "Create event stream from HTTP response"
-  [api-base api-key model system-prompt messages schema opts]
+  [api-base api-key model system-prompt messages schema tools tool-choice opts]
   (let [events-chan (chan 1024)
         url (str api-base "/chat/completions")
         headers {"Authorization" (str "Bearer " api-key)
                  "Content-Type" "application/json"}
-        body (json/generate-string (build-body model system-prompt messages schema opts))]
+        body (json/generate-string (build-body model system-prompt messages schema tools tool-choice opts))]
     (net/post-stream url headers body
                      (fn handle-response [response]
                        (if (= 200 (:status response))
@@ -141,7 +168,7 @@
 
                                      ;; Valid data chunk - process events
                                      :else
-                                     (do (when-let [internal-event (data->internal-event (::sse/data chunk) schema)]
+                                     (do (when-let [internal-event (data->internal-event (::sse/data chunk) schema tools)]
                                            (>! events-chan internal-event))
                                          (recur)))))
                                (catch Exception e
@@ -159,8 +186,8 @@
 
 (defrecord OpenAIBackend [api-base api-key defaults]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema provider-opts]
-    (create-event-stream api-base api-key model system-prompt messages schema provider-opts)))
+  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+    (create-event-stream api-base api-key model system-prompt messages schema tools tool-choice provider-opts)))
 
 (defn ->openai
   ([] (->openai {}))
