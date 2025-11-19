@@ -53,6 +53,14 @@
     {:optional true
      :description "Schema for structured responses"}
     :any]
+   [::tools
+    {:optional true
+     :description "Vector of tool schemas for multi-tool calling"}
+    [:vector :any]]
+   [::tool-choice
+    {:optional true
+     :description "Tool choice strategy: 'auto', 'required', 'none', or specific tool"}
+    :any]
    [::model
     {:optional true
      :description "Model name"}
@@ -75,7 +83,7 @@
 ;; Response record
 ;; ════════════════════════════════════════════════════════════════════
 
-(defrecord Response [chunks events text usage structured]
+(defrecord Response [chunks events text usage structured tool-calls]
   clojure.lang.IDeref
   (deref [_] @text))
 
@@ -113,6 +121,12 @@
 
 (defn merge-provider-opts [provider opts]
   (update-in provider [:defaults ::provider-opts] #(merge % opts)))
+
+(defn with-tools [provider tools]
+  (assoc-in provider [:defaults ::tools] tools))
+
+(defn with-tool-choice [provider tool-choice]
+  (assoc-in provider [:defaults ::tool-choice] tool-choice))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Input/Output Helpers
@@ -166,7 +180,7 @@
          merged-opts (helpers/deep-merge (:defaults provider) opts)
 
          ;; Validate and extract opts
-         {::keys [system-prompt schema model message-history provider-opts]} (extract-prompt-opts merged-opts)
+         {::keys [system-prompt schema tools tool-choice model message-history provider-opts]} (extract-prompt-opts merged-opts)
 
          ;; Validate model is set
          _ (when-not model
@@ -179,7 +193,7 @@
          messages (build-messages prompt-input message-history)
 
          ;; chan setup
-         source-chan (proto/request-stream provider model system-prompt messages schema provider-opts)
+         source-chan (proto/request-stream provider model system-prompt messages schema tools tool-choice provider-opts)
          req-start (System/currentTimeMillis)
 
          ;; chan with cleanup
@@ -190,9 +204,12 @@
          text-promise (promise)
          usage-promise (promise)
          structured-promise (promise)
+         tool-calls-promise (promise)
 
          ;; Consumer loop
-         _ (go-loop [chunks []]
+         _ (go-loop [chunks []
+                    tool-calls []
+                    tool-calls-by-index {}]  ;; Track tool calls by index for delta accumulation
              (if-let [event (<! source-chan)]
 
                ;; Process event
@@ -201,7 +218,20 @@
                  (case (:type event)
                    :content (do
                               (a/offer! text-chunks-chan (:content event))
-                              (recur (conj chunks (:content event))))
+                              (recur (conj chunks (:content event)) tool-calls tool-calls-by-index))
+                   :tool-call
+                   (let [idx (or (:index event) (count tool-calls))
+                         new-call (assoc event :arguments (or (:arguments event) ""))]
+                     (recur chunks
+                            (conj tool-calls new-call)
+                            (assoc tool-calls-by-index idx (count tool-calls))))
+                   :tool-call-delta
+                   (let [idx (:index event)
+                         tc-idx (get tool-calls-by-index idx)
+                         updated-calls (if tc-idx
+                                        (update-in tool-calls [tc-idx :arguments] str (:arguments event))
+                                        tool-calls)]
+                     (recur chunks updated-calls tool-calls-by-index))
                    :usage (do
                             (deliver usage-promise
                                      (assoc event
@@ -209,7 +239,7 @@
                                             :clj-llm/req-start req-start
                                             :clj-llm/req-end (System/currentTimeMillis)
                                             :clj-llm/duration (- (System/currentTimeMillis) req-start)))
-                            (recur chunks))
+                            (recur chunks tool-calls tool-calls-by-index))
                    :error (do
                             (deliver text-promise (errors/error
                                                    "LLM request failed"
@@ -222,18 +252,22 @@
                               (deliver usage-promise nil))
                             (when-not (realized? structured-promise)
                               (deliver structured-promise (Exception. (:error event))))
+                            (when-not (realized? tool-calls-promise)
+                              (deliver tool-calls-promise nil))
                             (a/close! text-chunks-chan)
                             (a/close! events-chan))
                    :done (do
                            (deliver text-promise (apply str chunks))
+                           (deliver tool-calls-promise (if (seq tool-calls) tool-calls nil))
                            (when-not (realized? usage-promise)
                              (deliver usage-promise nil))
                            (a/close! text-chunks-chan)
                            (a/close! events-chan))
-                   (recur chunks)))
+                   (recur chunks tool-calls tool-calls-by-index)))
                ;; Source closed
                (do
                  (deliver text-promise (apply str chunks))
+                 (deliver tool-calls-promise (if (seq tool-calls) tool-calls nil))
                  (when-not (realized? usage-promise)
                    (deliver usage-promise nil))
                  (a/close! text-chunks-chan)
@@ -255,4 +289,5 @@
                  events-chan
                  text-promise
                  usage-promise
-                 structured-promise))))
+                 structured-promise
+                 tool-calls-promise))))
