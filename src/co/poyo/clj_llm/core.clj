@@ -42,19 +42,20 @@
   (.write writer "}"))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Provider builder helpers
+;; Provider defaults
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn with-defaults      [provider defaults]      (update provider :defaults #(helpers/deep-merge % defaults)))
-(defn with-model         [provider model]         (assoc-in provider [:defaults :model] model))
-(defn with-schema        [provider schema]        (assoc-in provider [:defaults :schema] schema))
-(defn with-system-prompt [provider system-prompt]  (assoc-in provider [:defaults :system-prompt] system-prompt))
-(defn with-timeout       [provider timeout-ms]     (assoc-in provider [:defaults :timeout-ms] timeout-ms))
-(defn with-message-history [provider history]      (assoc-in provider [:defaults :message-history] history))
-(defn with-provider-opts [provider opts]           (assoc-in provider [:defaults :provider-opts] opts))
-(defn merge-provider-opts [provider opts]          (update-in provider [:defaults :provider-opts] merge opts))
-(defn with-tools         [provider tools]          (assoc-in provider [:defaults :tools] tools))
-(defn with-tool-choice   [provider tool-choice]    (assoc-in provider [:defaults :tool-choice] tool-choice))
+(defn with-defaults
+  "Set call-time defaults on a provider (model, system-prompt, schema, etc.).
+   These are merged with per-call opts, with per-call taking precedence.
+
+   (-> (openai/->openai)
+       (llm/with-defaults {:model \"gpt-4o-mini\"
+                           :system-prompt \"you are a cat\"
+                           :schema cat-schema}))"
+  [provider defaults]
+  (validate-opts defaults)
+  (update provider :defaults #(helpers/deep-merge % defaults)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Internal helpers

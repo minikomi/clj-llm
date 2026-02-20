@@ -189,30 +189,31 @@
   (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
     (create-event-stream api-base api-key model system-prompt messages schema tools tool-choice provider-opts)))
 
+(def ^:private openai-config-keys #{:api-key :api-key-env :api-base})
+
 (defn ->openai
+  "Create an OpenAI provider. Config keys:
+    :api-key     - API key string
+    :api-key-env - env var name (default: OPENAI_API_KEY)
+    :api-base    - API base URL (default: https://api.openai.com/v1)
+
+   Use llm/with-defaults to set model, system-prompt, schema, etc."
   ([] (->openai {}))
   ([config]
-   (let [;; Extract API config
-         api-key (::api-key config)
-         api-env-var (::api-env-var config)
-         api-base (::api-base config)
-
-         ;; Extract prompt defaults (everything except ::openai/ keys)
-         defaults (into {}
-                        (remove (fn [[k _]]
-                                  (#{::api-key ::api-env-var ::api-base} k))
-                                config))
-
-         ;; Resolve API config
-         resolved-api-env (or api-env-var (:api-key-env default-config))
-         resolved-key (or api-key (System/getenv resolved-api-env))
-         resolved-base (or api-base (:api-base default-config))]
-
-     (when-not resolved-key
+   (let [unknown (seq (remove openai-config-keys (keys config)))]
+     (when unknown
+       (throw (errors/error
+               (str "Unknown provider config keys: " (pr-str (vec unknown))
+                    ". Use llm/with-defaults for prompt options.")
+               {:unknown-keys (vec unknown)
+                :valid-keys openai-config-keys}))))
+   (let [api-env  (or (:api-key-env config) (:api-key-env default-config))
+         api-key  (or (:api-key config) (System/getenv api-env))
+         api-base (or (:api-base config) (:api-base default-config))]
+     (when-not api-key
        (throw (errors/error "Missing API key"
-                            {:provider "openai" :api-key-env resolved-api-env})))
-
-     (->OpenAIBackend resolved-base resolved-key defaults))))
+                            {:provider "openai" :api-key-env api-env})))
+     (->OpenAIBackend api-base api-key {}))))
 
 (defmethod print-method OpenAIBackend [backend writer]
   (let [defaults (:defaults backend)
