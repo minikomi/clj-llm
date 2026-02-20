@@ -1,4 +1,4 @@
-(ns co.poyo.clj-llm.backends.common
+(ns co.poyo.clj-llm.backends.backend-helpers
   "Shared utilities for LLM backend implementations."
   (:require
    [camel-snake-kebab.core :as csk]
