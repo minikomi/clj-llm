@@ -5,7 +5,7 @@
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.errors :as errors]
-   [co.poyo.clj-llm.backends.common :as common]))
+   [co.poyo.clj-llm.backends.backend-helpers :as bh]))
 
 (def ^:private default-config
   {:api-key-env "ANTHROPIC_API_KEY"
@@ -27,7 +27,7 @@
                        schema
                        {:tools [(schema/malli->json-schema schema)]
                         :tool_choice {:type "any"}})
-        api-opts (common/convert-options-for-api opts)
+        api-opts (bh/convert-options-for-api opts)
         max-tokens (or (:max_tokens api-opts) 4096)
         base-body (merge
                    {:model model
@@ -97,7 +97,7 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (common/create-event-stream url headers body
+      (bh/create-event-stream url headers body
                                   #(data->internal-event % schema tools)
                                   "anthropic"))))
 
