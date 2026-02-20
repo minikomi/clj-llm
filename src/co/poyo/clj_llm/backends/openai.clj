@@ -42,43 +42,46 @@
    In schema mode, tool calls are treated as content.
    In tools mode, tool calls are emitted as :tool-call events."
   [data schema tools]
-  (cond
-    (:error data)
-    {:type :error :error (:error data)}
+  (let [content (get-in data [:choices 0 :delta :content])
+        tool-calls (get-in data [:choices 0 :delta :tool-calls])
+        finish-reason (get-in data [:choices 0 :finish-reason])
+        usage (:usage data)]
+    (cond
+      (:error data)
+      {:type :error :error (:error data)}
 
-    (get-in data [:choices 0 :delta :content])
-    {:type :content :content (get-in data [:choices 0 :delta :content])}
+      (not-empty content)
+      {:type :content :content content}
 
-    (get-in data [:choices 0 :delta :tool-calls])
-    (let [tool-call (first (get-in data [:choices 0 :delta :tool-calls]))
-          has-name? (get-in tool-call [:function :name])
-          has-args? (get-in tool-call [:function :arguments])]
-      (cond
-        (and schema has-args?)
-        {:type :content :content (get-in tool-call [:function :arguments])}
+      tool-calls
+      (let [tool-call (first tool-calls)
+            has-name? (get-in tool-call [:function :name])
+            has-args? (not-empty (get-in tool-call [:function :arguments]))]
+        (cond
+          (and schema has-args?)
+          {:type :content :content (get-in tool-call [:function :arguments])}
 
-        (and tools has-name?)
-        {:type :tool-call
-         :id (get tool-call :id)
-         :index (get tool-call :index)
-         :name (get-in tool-call [:function :name])
-         :arguments ""}
+          (and tools has-name?)
+          {:type :tool-call
+           :id (get tool-call :id)
+           :index (get tool-call :index)
+           :name (get-in tool-call [:function :name])
+           :arguments ""}
 
-        (and tools has-args?)
-        {:type :tool-call-delta
-         :index (get tool-call :index)
-         :arguments (get-in tool-call [:function :arguments])}
+          (and tools has-args?)
+          {:type :tool-call-delta
+           :index (get tool-call :index)
+           :arguments (get-in tool-call [:function :arguments])}
 
-        :else nil))
+          :else nil))
 
-    (get-in data [:choices 0 :finish-reason])
-    {:type :finish :reason (get-in data [:choices 0 :finish-reason])}
+      finish-reason
+      {:type :finish :reason finish-reason}
 
-    (:usage data)
-    (into {:type :usage} (:usage data))
+      usage
+      (into {:type :usage} usage)
 
-    :else
-    {:type :failed :data data}))
+      :else nil)))
 
 ;; ==========================================
 ;; OpenAI Backend
