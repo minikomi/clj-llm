@@ -1,14 +1,17 @@
 (ns co.poyo.clj-llm.core-test
-  "Basic tests for the new API"
+  "Tests for the core API"
   (:require [clojure.test :refer [deftest testing is]]
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
             [clojure.core.async :as a :refer [chan go >! <!! close!]]))
 
-;; Mock provider for testing
+;; ════════════════════════════════════════════════════════════════════
+;; Mock provider
+;; ════════════════════════════════════════════════════════════════════
+
 (defrecord MockProvider [responses defaults]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema provider-opts]
+  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
     (let [ch (chan)]
       (go
         (doseq [event @responses]
@@ -18,39 +21,53 @@
       ch)))
 
 (defn mock-provider
-  "Create a mock provider with predefined responses"
-  ([events] (mock-provider events nil))
+  ([events] (mock-provider events {}))
   ([events defaults]
    (->MockProvider (atom events)
-                   (merge #:co.poyo.clj-llm.core{:model "test-model"} defaults))))
+                   (merge {:model "test-model"} defaults))))
 
-(deftest test-basic-prompt
+;; ════════════════════════════════════════════════════════════════════
+;; Tests
+;; ════════════════════════════════════════════════════════════════════
+
+(deftest test-generate
   (testing "Basic text generation"
     (let [provider (mock-provider [{:type :content :content "Hello "}
-                                   {:type :content :content "world!"}])
-          response (llm/prompt provider "test")]
-      (is (= "Hello world!" @(:text response)))))
+                                   {:type :content :content "world!"}])]
+      (is (= "Hello world!" (llm/generate provider "test")))))
 
   (testing "Structured output generation"
     (let [provider (mock-provider [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
-          schema [:map [:name :string] [:age pos-int?]]
-          response (llm/prompt provider "test" #:co.poyo.clj-llm.core{:schema schema})]
-      (is (= {:name "Alice" :age 30} @(:structured response)))))
+          schema [:map [:name :string] [:age pos-int?]]]
+      (is (= {:name "Alice" :age 30}
+             (llm/generate provider "test" {:schema schema})))))
 
   (testing "Error handling"
-    (let [provider (mock-provider [{:type :error :error "API Error"}])
-          response (llm/prompt provider "test")]
-      (is (instance? Exception @(:text response))))))
+    (let [provider (mock-provider [{:type :error :error "API Error"}])]
+      (is (thrown? Exception (llm/generate provider "test"))))))
+
+(deftest test-prompt
+  (testing "Rich response object"
+    (let [provider (mock-provider [{:type :content :content "Response text"}
+                                   {:type :usage :prompt-tokens 10 :completion-tokens 20}])
+          resp (llm/prompt provider "test")]
+      ;; IDeref gives text
+      (is (= "Response text" @resp))
+      ;; Direct promise access
+      (is (= "Response text" @(:text resp)))
+      ;; Usage
+      (let [usage @(:usage resp)]
+        (is (= :usage (:type usage)))
+        (is (= 10 (:prompt-tokens usage)))
+        (is (= 20 (:completion-tokens usage)))))))
 
 (deftest test-stream
   (testing "Streaming text chunks"
     (let [provider (mock-provider [{:type :content :content "Hello "}
                                    {:type :content :content "streaming "}
                                    {:type :content :content "world!"}])
-          response (llm/prompt provider "test")
-          chunks (:chunks response)
+          chunks (llm/stream provider "test")
           collected (atom [])]
-      ;; Collect all chunks
       (loop []
         (when-let [chunk (<!! chunks)]
           (swap! collected conj chunk)
@@ -61,61 +78,51 @@
   (testing "Raw event access"
     (let [provider (mock-provider [{:type :content :content "Hi"}
                                    {:type :usage :prompt-tokens 5 :completion-tokens 10}])
-          response (llm/prompt provider "test")
-          events (:events response)
+          events (llm/events provider "test")
           collected (atom [])]
-      ;; Collect all events
       (loop []
         (when-let [event (<!! events)]
           (swap! collected conj event)
           (when-not (= :done (:type event))
             (recur))))
-      (is (= 3 (count @collected))) ;; content, usage, done
+      (is (= 3 (count @collected)))
       (is (= :content (:type (first @collected))))
       (is (= :usage (:type (second @collected)))))))
 
-(deftest test-response-object
-  (testing "Rich response object"
-    (let [provider (mock-provider [{:type :content :content "Response text"}
-                                   {:type :usage :prompt-tokens 10 :completion-tokens 20}])
-          resp (llm/prompt provider "test")]
-      ;; Test promise access
-      (is (= "Response text" @(:text resp)))
-      ;; Usage includes enriched metadata but contains original fields
-      (let [usage @(:usage resp)]
-        (is (= :usage (:type usage)))
-        (is (= 10 (:prompt-tokens usage)))
-        (is (= 20 (:completion-tokens usage)))))))
-
 (deftest test-message-building
-  (testing "Messages from prompt and system prompt"
-    (let [provider (mock-provider [{:type :content :content "OK"}])
-          response (llm/prompt provider "Hello" #:co.poyo.clj-llm.core{:system-prompt "Be helpful"})]
-      (is (string? @(:text response)))))
+  (testing "With system prompt"
+    (let [provider (mock-provider [{:type :content :content "OK"}])]
+      (is (string? (llm/generate provider "Hello" {:system-prompt "Be helpful"})))))
 
   (testing "Direct message history"
     (let [provider (mock-provider [{:type :content :content "OK"}])
-          messages [{:role :user :content "Hello"}]
-          response (llm/prompt provider nil #:co.poyo.clj-llm.core{:message-history messages})]
-      (is (string? @(:text response))))))
+          messages [{:role :user :content "Hello"}]]
+      (is (string? (llm/generate provider nil {:message-history messages}))))))
 
-(deftest test-extract-prompt-opts
-  (testing "Validates and extracts prompt options"
-    (let [extract-fn #'llm/extract-prompt-opts
-          opts #:co.poyo.clj-llm.core{:system-prompt "Test"
-                                       :schema [:map [:name :string]]
-                                       :timeout-ms 5000
-                                       :message-history [{:role :user :content "Hi"}]
-                                       :provider-opts {:model "gpt-4"}}
-          result (extract-fn opts)]
-      ;; Should extract all co.poyo.clj-llm.core/* keys
-      (is (= "Test" (:co.poyo.clj-llm.core/system-prompt result)))
-      (is (= [:map [:name :string]] (:co.poyo.clj-llm.core/schema result)))
-      (is (= 5000 (:co.poyo.clj-llm.core/timeout-ms result)))
-      (is (= [{:role :user :content "Hi"}] (:co.poyo.clj-llm.core/message-history result)))
-      (is (= {:model "gpt-4"} (:co.poyo.clj-llm.core/provider-opts result)))))
+(deftest test-with-helpers
+  (testing "Building an agent with defaults"
+    (let [base (mock-provider [{:type :content :content "meow"}])
+          agent (-> base
+                    (llm/with-model "gpt-4o")
+                    (llm/with-system-prompt "you are a cat"))]
+      (is (= "gpt-4o" (get-in agent [:defaults :model])))
+      (is (= "you are a cat" (get-in agent [:defaults :system-prompt])))
+      (is (= "meow" (llm/generate agent "hi"))))))
 
-  (testing "Rejects invalid options"
-    (let [extract-fn #'llm/extract-prompt-opts
-          opts #:co.poyo.clj-llm.core{:invalid-key "value"}]
-      (is (thrown? clojure.lang.ExceptionInfo (extract-fn opts))))))
+(deftest test-unknown-opts-rejected
+  (testing "Unknown options throw"
+    (let [provider (mock-provider [{:type :content :content "ok"}])]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown options"
+            (llm/generate provider "test" {:bogus true}))))))
+
+(deftest test-tool-calls
+  (testing "Tool call accumulation"
+    (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":"}
+                                   {:type :tool-call-delta :index 0 :arguments "\"example.com\"}"}
+                                   {:type :usage :prompt-tokens 10 :completion-tokens 5}])
+          resp (llm/prompt provider "test")]
+      (let [tool-calls @(:tool-calls resp)]
+        (is (= 1 (count tool-calls)))
+        (is (= "ping" (:name (first tool-calls))))
+        (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls))))))))

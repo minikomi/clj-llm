@@ -240,7 +240,7 @@
 
 (defmethod print-method AnthropicBackend [backend writer]
   (let [defaults (:defaults backend)
-        model (:co.poyo.clj-llm.core/model defaults)]
+        model (:model defaults)]
     (.write writer "#Anthropic")
     (when model
       (.write writer (str " " (pr-str model))))

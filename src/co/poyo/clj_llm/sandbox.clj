@@ -18,8 +18,8 @@
 
   (:defaults openai-backend)
 
-  @(llm/prompt openai-backend "hi" {::llm/model "gpt-5-nano"
-                                    ::llm/provider-opts {:verbosity "low"
+  @(llm/prompt openai-backend "hi" {:model "gpt-5-nano"
+                                    :provider-opts {:verbosity "low"
                                                          :reasoning-effort "minimal"}})
 
   (def gpt-5-nano-backend
