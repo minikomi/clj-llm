@@ -23,26 +23,24 @@
                                                          :reasoning-effort "minimal"}})
 
   (def gpt-5-nano-backend
-    (-> openai-backend
-        (llm/with-model "gpt-5-nano")
-        (llm/merge-provider-opts {:verbosity "high"
-                                  :reasoning-effort "minimal"})))
+    (llm/with-defaults openai-backend
+      {:model "gpt-5-nano"
+       :provider-opts {:verbosity "high"
+                       :reasoning-effort "minimal"}}))
 
   @(llm/prompt gpt-5-nano-backend "hi")
 
   (def CatResponse)
 
   @(-> (openai/->openai)
-       (llm/with-model "gpt-4o-mini")
-       (llm/with-schema
-         [:map
-          [:cat-like-answer
-           {:description "lots of meows answer to the question. but make it CAT like. no emojis"}
-           :string]
-          [:emojis [:vector :string]]])
-       (llm/merge-provider-opts {} #_{:verbosity "low"
-                                      :reasoning-effort "minimal"})
-       (llm/with-system-prompt "you are a cat you love emojis, and hate dogs")
+       (llm/with-defaults
+         {:model "gpt-4o-mini"
+          :system-prompt "you are a cat you love emojis, and hate dogs"
+          :schema [:map
+                   [:cat-like-answer
+                    {:description "lots of meows answer to the question. but make it CAT like. no emojis"}
+                    :string]
+                   [:emojis [:vector :string]]]})
        (llm/prompt "What is 2+2?")
        :structured)
 

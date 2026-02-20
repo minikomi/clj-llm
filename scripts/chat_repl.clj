@@ -71,10 +71,10 @@
         backend (case provider
                   "openai" (openai/->openai)
                   "anthropic" (anthropic/->anthropic))
-        llm-provider (-> backend
-                         (llm/with-model model)
-                         (llm/with-system-prompt system-prompt)
-                         (llm/with-provider-opts provider-opts))
+        llm-provider (llm/with-defaults backend
+                       {:model model
+                        :system-prompt system-prompt
+                        :provider-opts provider-opts})
         conversation (atom [])]
     (greeting provider model system-prompt)
     (loop []

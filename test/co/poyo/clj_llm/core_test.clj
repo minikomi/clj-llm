@@ -99,15 +99,19 @@
           messages [{:role :user :content "Hello"}]]
       (is (string? (llm/generate provider nil {:message-history messages}))))))
 
-(deftest test-with-helpers
+(deftest test-with-defaults
   (testing "Building an agent with defaults"
     (let [base (mock-provider [{:type :content :content "meow"}])
-          agent (-> base
-                    (llm/with-model "gpt-4o")
-                    (llm/with-system-prompt "you are a cat"))]
+          agent (llm/with-defaults base {:model "gpt-4o"
+                                         :system-prompt "you are a cat"})]
       (is (= "gpt-4o" (get-in agent [:defaults :model])))
       (is (= "you are a cat" (get-in agent [:defaults :system-prompt])))
-      (is (= "meow" (llm/generate agent "hi"))))))
+      (is (= "meow" (llm/generate agent "hi")))))
+
+  (testing "with-defaults validates keys"
+    (let [base (mock-provider [{:type :content :content "ok"}])]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown options"
+            (llm/with-defaults base {:model "gpt-4o" :bogus true}))))))
 
 (deftest test-unknown-opts-rejected
   (testing "Unknown options throw"

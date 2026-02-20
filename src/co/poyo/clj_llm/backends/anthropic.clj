@@ -209,34 +209,35 @@
   (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
     (create-event-stream api-base api-key api-version model system-prompt messages schema tools tool-choice provider-opts)))
 
+(def ^:private anthropic-config-keys #{:api-key :api-key-env :api-base :api-version})
+
 (defn ->anthropic
+  "Create an Anthropic provider. Config keys:
+    :api-key     - API key string
+    :api-key-env - env var name (default: ANTHROPIC_API_KEY)
+    :api-base    - API base URL (default: https://api.anthropic.com)
+    :api-version - API version (default: 2023-06-01)
+
+   Use llm/with-defaults to set model, system-prompt, schema, etc."
   ([] (->anthropic {}))
   ([config]
-   (let [;; Extract API config
-         api-key (::api-key config)
-         api-env-var (::api-env-var config)
-         api-base (::api-base config)
-         api-version (::api-version config)
-
-         ;; Extract prompt defaults (everything except ::anthropic/ keys)
-         defaults (into {}
-                        (remove (fn [[k _]]
-                                  (#{::api-key ::api-env-var ::api-base ::api-version} k))
-                                config))
-
-         ;; Resolve API config
-         resolved-api-env (or api-env-var (:api-key-env default-config))
-         resolved-key (or api-key
-                          (System/getenv resolved-api-env)
-                          (System/getProperty resolved-api-env))
-         resolved-base (or api-base (:api-base default-config))
-         resolved-version (or api-version (:api-version default-config))]
-
-     (when-not resolved-key
+   (let [unknown (seq (remove anthropic-config-keys (keys config)))]
+     (when unknown
+       (throw (errors/error
+               (str "Unknown provider config keys: " (pr-str (vec unknown))
+                    ". Use llm/with-defaults for prompt options.")
+               {:unknown-keys (vec unknown)
+                :valid-keys anthropic-config-keys}))))
+   (let [api-env     (or (:api-key-env config) (:api-key-env default-config))
+         api-key     (or (:api-key config)
+                         (System/getenv api-env)
+                         (System/getProperty api-env))
+         api-base    (or (:api-base config) (:api-base default-config))
+         api-version (or (:api-version config) (:api-version default-config))]
+     (when-not api-key
        (throw (errors/error "Missing API key"
-                            {:provider "anthropic" :api-key-env resolved-api-env})))
-
-     (->AnthropicBackend resolved-base resolved-key resolved-version defaults))))
+                            {:provider "anthropic" :api-key-env api-env})))
+     (->AnthropicBackend api-base api-key api-version {}))))
 
 (defmethod print-method AnthropicBackend [backend writer]
   (let [defaults (:defaults backend)

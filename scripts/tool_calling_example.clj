@@ -184,9 +184,9 @@
   (println "  4. Loop continues until LLM has the final answer\n")
 
   ;; Create backend
-  (let [backend (-> (openai/->openai)
-                    (llm/with-model "gpt-4o-mini")
-                    (llm/with-system-prompt "You are a helpful assistant. Use the available tools when needed to answer user questions."))]
+  (let [backend (llm/with-defaults (openai/->openai)
+                   {:model "gpt-4o-mini"
+                    :system-prompt "You are a helpful assistant. Use the available tools when needed to answer user questions."})]
 
     ;; Example 1: Simple tool use
     (println "\n" (str/join "" (repeat 70 "═")))
