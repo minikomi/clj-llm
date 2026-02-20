@@ -6,7 +6,7 @@
 (println "--------------------")
 
 (def provider (openai/->openai {::openai/api-key (System/getenv "OPENAI_API_KEY")
-                                        ::llm/model "gpt-4o-mini"}))
+                                        :model "gpt-4o-mini"}))
 
 (let [start-time (System/currentTimeMillis)
       response (llm/prompt provider "give me a long poem please"

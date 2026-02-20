@@ -111,9 +111,9 @@
 
     ;; Call LLM with available tools
     (let [response (llm/prompt backend nil
-                               {::llm/message-history context
-                                ::llm/tools available-tools
-                                ::llm/tool-choice "auto"})]
+                               {:message-history context
+                                :tools available-tools
+                                :tool-choice "auto"})]
 
       ;; Wait for response to complete
       (let [tool-calls @(:tool-calls response)

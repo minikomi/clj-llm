@@ -16,7 +16,7 @@
   ;; Create provider
   (let [ai (try
              (openai/->openai {::openai/api-env-var "OPENAI_API_KEY"
-                               ::llm/model "gpt-4o-mini"})
+                               :model "gpt-4o-mini"})
              (catch Exception e
                (println "❌ Error:" (ex-message e))
                (System/exit 1)))]
@@ -37,8 +37,8 @@
                   [:occupation :string]]
           result @(-> ai
                       (update :defaults merge
-                              {::llm/schema schema
-                               ::llm/provider-opts {:model "gpt-5-mini" :reasoning-effort "minimal"}})
+                              {:schema schema
+                               :provider-opts {:model "gpt-5-mini" :reasoning-effort "minimal"}})
                       (llm/prompt "John Doe is a 30 year old software engineer" {})
                       :structured)]
       (println "Result:" result))

@@ -82,7 +82,7 @@
 ;; ==========================================
 
 (def ai (openai/->openai {::openai/api-env-var "OPENAI_API_KEY"
-                          ::llm/model "gpt-4o-mini"}))
+                          :model "gpt-4o-mini"}))
 
 ;; ==========================================
 ;; Example 1: Money Transfer
@@ -94,7 +94,7 @@
 (let [prompt "Please transfer $1,500 from Alice to Bob"]
   (println "Input:" prompt)
 
-  (let [data @(:structured (llm/prompt ai prompt {::llm/schema transfer-schema}))]
+  (let [data @(:structured (llm/prompt ai prompt {:schema transfer-schema}))]
     (println "\nExtracted:")
     (pp/pprint data)
 
@@ -111,7 +111,7 @@
 (let [prompt "Create account for Jane Smith (jane@example.com), 28 years old, needs admin and developer access"]
   (println "Input:" prompt)
 
-  (let [data @(:structured (llm/prompt ai prompt {::llm/schema user-schema}))]
+  (let [data @(:structured (llm/prompt ai prompt {:schema user-schema}))]
     (println "\nExtracted:")
     (pp/pprint data)
 
@@ -128,7 +128,7 @@
 (let [prompt "Schedule a project sync meeting with Alice, Bob, and Charlie on Friday Dec 15th at 2:30 PM for 90 minutes in Conference Room A"]
   (println "Input:" prompt)
 
-  (let [data @(:structured (llm/prompt ai prompt {::llm/schema meeting-schema}))]
+  (let [data @(:structured (llm/prompt ai prompt {:schema meeting-schema}))]
     (println "\nExtracted:")
     (pp/pprint data)
 
@@ -152,7 +152,7 @@
 (doseq [req requests]
   (println "Request:" req)
   (try
-    (let [data @(:structured (llm/prompt ai req {::llm/schema transfer-schema}))
+    (let [data @(:structured (llm/prompt ai req {:schema transfer-schema}))
           result (transfer-money data)]
       (println "→" (:message result)))
     (catch Exception e

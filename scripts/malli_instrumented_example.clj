@@ -89,7 +89,7 @@
 ;; ==========================================
 
 (def ai (openai/->openai {::openai/api-env-var "OPENAI_API_KEY"
-                          ::llm/model "gpt-4o-mini"}))
+                          :model "gpt-4o-mini"}))
 
 ;; ==========================================
 ;; Example 1: Money Transfer

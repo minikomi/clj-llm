@@ -88,7 +88,7 @@
             (print-flush "\nAI> ")
             (try
               ;; Stream the response
-              (let [{:keys [chunks usage]} (llm/prompt llm-provider input {::llm/message-history @conversation})
+              (let [{:keys [chunks usage]} (llm/prompt llm-provider input {:message-history @conversation})
                     response-text (atom "")]
                 ;; Print chunks and collect full response
                 (loop []
