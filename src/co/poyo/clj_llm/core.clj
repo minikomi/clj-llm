@@ -226,18 +226,29 @@
      (->Response text-chunks events text-p usage-p structured-p tool-calls-p))))
 
 (defn generate
-  "Simple blocking generation. Returns text string, or structured data when
-   :schema is provided.
+  "Blocking generation. Returns depend on what you asked for:
+   - Text by default: \"Hello!\"
+   - Structured data with :schema: {:name \"Alice\"}
+   - Tool calls with :tools: [{:name \"get_weather\" :arguments {:city \"Tokyo\"}}]
 
-   (generate ai \"hello\")                     ;; => \"Hello!\" 
-   (generate ai \"extract\" {:schema my-schema}) ;; => {:name \"Alice\"}"
+   (generate ai \"hello\")
+   (generate ai \"extract\" {:schema person-schema})
+   (generate ai \"weather in tokyo\" {:tools [weather-tool]})"
   ([provider prompt-input]
    (generate provider prompt-input {}))
   ([provider prompt-input opts]
    (let [response (prompt provider prompt-input opts)
-         result   (if (:schema (helpers/deep-merge (:defaults provider) opts))
-                    @(:structured response)
-                    @(:text response))]
+         merged   (helpers/deep-merge (:defaults provider) opts)
+         result   (cond
+                    (:schema merged) @(:structured response)
+                    (:tools merged)  (let [tc @(:tool-calls response)]
+                                       (when tc
+                                         (mapv (fn [t]
+                                                 (let [args (try (json/parse-string (:arguments t) true)
+                                                                 (catch Exception _ (:arguments t)))]
+                                                   {:id (:id t) :name (:name t) :arguments args}))
+                                               tc)))
+                    :else            @(:text response))]
      (if (instance? Exception result)
        (throw result)
        result))))
@@ -248,6 +259,25 @@
    (stream provider prompt-input {}))
   ([provider prompt-input opts]
    (:chunks (prompt provider prompt-input opts))))
+
+(defn stream-print
+  "Stream text to *out*, printing chunks as they arrive. Returns the full text.
+   Great for REPL use.
+
+   (stream-print ai \"Tell me a story\")"
+  ([provider prompt-input]
+   (stream-print provider prompt-input {}))
+  ([provider prompt-input opts]
+   (let [ch (stream provider prompt-input opts)
+         sb (StringBuilder.)]
+     (loop []
+       (when-let [chunk (<!! ch)]
+         (.append sb chunk)
+         (print chunk)
+         (flush)
+         (recur)))
+     (println)
+     (.toString sb))))
 
 (defn events
   "Returns a channel of raw events from the LLM."

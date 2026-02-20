@@ -3,7 +3,8 @@
   (:require [clojure.test :refer [deftest testing is]]
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
-            [clojure.core.async :as a :refer [chan go >! <!! close!]]))
+            [clojure.core.async :as a :refer [chan go >! <!! close!]]
+            [clojure.string :as str]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Mock provider
@@ -120,7 +121,7 @@
             (llm/generate provider "test" {:bogus true}))))))
 
 (deftest test-tool-calls
-  (testing "Tool call accumulation"
+  (testing "Tool call accumulation via prompt"
     (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
                                    {:type :tool-call-delta :index 0 :arguments "{\"host\":"}
                                    {:type :tool-call-delta :index 0 :arguments "\"example.com\"}"}
@@ -129,4 +130,29 @@
       (let [tool-calls @(:tool-calls resp)]
         (is (= 1 (count tool-calls)))
         (is (= "ping" (:name (first tool-calls))))
-        (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls))))))))
+        (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls)))))))
+
+  (testing "generate with :tools returns parsed tool calls"
+    (let [tool-schema [:map {:name "ping" :description "Ping a host"}
+                       [:host :string]]
+          provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}
+                                   {:type :tool-call :index 1 :id "call_2" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 1 :arguments "{\"host\":\"test.com\"}"}
+                                   {:type :usage :prompt-tokens 10 :completion-tokens 5}])
+          result (llm/generate provider "ping both" {:tools [tool-schema]})]
+      (is (= 2 (count result)))
+      (is (= "ping" (:name (first result))))
+      (is (= {:host "example.com"} (:arguments (first result))))
+      (is (= {:host "test.com"} (:arguments (second result)))))))
+
+(deftest test-stream-print
+  (testing "stream-print returns full text"
+    (let [provider (mock-provider [{:type :content :content "one "}
+                                   {:type :content :content "two "}
+                                   {:type :content :content "three"}])
+          output (with-out-str
+                   (let [result (llm/stream-print provider "test")]
+                     (is (= "one two three" result))))]
+      ;; Verify it printed to stdout
+      (is (clojure.string/includes? output "one two three")))))
