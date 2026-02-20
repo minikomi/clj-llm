@@ -48,16 +48,16 @@
   (case (:type data)
     "content_block_delta"
     (cond
-      (get-in data [:delta :text])
+      (not-empty (get-in data [:delta :text]))
       {:type :content :content (get-in data [:delta :text])}
 
-      (and schema (get-in data [:delta :partial_json]))
-      {:type :content :content (get-in data [:delta :partial_json])}
+      (and schema (not-empty (get-in data [:delta :partial-json])))
+      {:type :content :content (get-in data [:delta :partial-json])}
 
-      (and tools (get-in data [:delta :partial_json]))
+      (and tools (not-empty (get-in data [:delta :partial-json])))
       {:type :tool-call-delta
        :index (:index data)
-       :arguments (get-in data [:delta :partial_json])}
+       :arguments (get-in data [:delta :partial-json])}
 
       :else nil)
 
