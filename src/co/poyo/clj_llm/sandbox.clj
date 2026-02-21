@@ -10,63 +10,50 @@
   ;; Setup
   ;; ══════════════════════════════════════
 
-  (def ai (openai/->openai))
+  ;; Provider = connection
+  (def provider (openai/->openai))
 
-  (def ai-mini
-    (llm/with-defaults ai {:model "gpt-4o-mini"}))
+  ;; Defaults = just data on the map
+  (def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
+
+  ;; Layer more config with update+merge
+  (def extractor (update ai :defaults merge
+                        {:schema [:map [:name :string] [:age :int] [:occupation :string]]
+                         :system-prompt "Extract structured data"}))
 
   ;; ══════════════════════════════════════
-  ;; Basic text
+  ;; Basic text — returns a string
   ;; ══════════════════════════════════════
 
-  (:text (llm/generate ai-mini "What is 2+2?"))
+  (llm/generate ai "What is 2+2?")
   ;; => "2+2 equals 4."
 
-  (:text (llm/generate ai-mini "Write a haiku"
-                              {:system-prompt "You are a poet"}))
-
-  ;; Full result map
-  (llm/generate ai-mini "What is 2+2?")
-  ;; => {:text "2+2 equals 4."}
+  (llm/generate ai {:system-prompt "You are a poet"} "Write a haiku")
 
   ;; ══════════════════════════════════════
-  ;; Structured output
+  ;; Structured output — returns a parsed map
   ;; ══════════════════════════════════════
 
-  (:structured (llm/generate ai-mini
-                             "Extract: Marie Curie was a 66 year old physicist"
-                             {:schema [:map
-                                       [:name :string]
-                                       [:age :int]
-                                       [:occupation :string]]}))
+  (llm/generate ai {:schema [:map [:name :string] [:age :int] [:occupation :string]]}
+                "Extract: Marie Curie was a 66 year old physicist")
   ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
-  (def company-schema
-    [:map
-     [:name :string]
-     [:founded :int]
-     [:employees [:vector [:map
-                           [:name :string]
-                           [:role :string]
-                           [:salary :int]]]]
-     [:locations [:vector :string]]])
-
-  (llm/generate ai-mini
-                "TechCorp founded 2010. Alice CEO $200k, Bob Engineer $120k. NYC and SF."
-                {:schema company-schema})
+  ;; Or use a pre-configured extractor
+  (llm/generate extractor "Marie Curie was a 66 year old physicist")
+  ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
   ;; ══════════════════════════════════════
   ;; Streaming
   ;; ══════════════════════════════════════
 
-  (llm/stream-print ai-mini "Tell me a story about a robot.")
+  ;; Print as it streams, returns full text
+  (llm/stream-print ai "Tell me a story about a robot.")
 
-  ;; Raw channel if you need it
-  (let [ch (llm/stream ai-mini "Count to 5")]
+  ;; Raw channel
+  (let [ch (llm/stream ai "Count to 5")]
     (loop []
       (when-let [chunk (<!! ch)]
-        (print chunk)
-        (flush)
+        (print chunk) (flush)
         (recur))))
 
   ;; ══════════════════════════════════════
@@ -77,48 +64,37 @@
     [:map {:name "get_weather" :description "Get weather for a city"}
      [:city {:description "City name"} :string]])
 
-  (llm/generate ai-mini "What's the weather in Tokyo?"
-                {:tools [weather-tool]})
-  ;; => {:text ""
-  ;;     :tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
-  ;;     :message {:role :assistant :tool_calls [...]}}
+  ;; Returns a vector of tool calls
+  (llm/generate ai {:tools [weather-tool]} "What's the weather in Tokyo?")
+  ;; => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+  ;; (meta result) => {:message {:role :assistant :tool_calls [...]}}
 
-  ;; Round-trip tool results back
-  (let [{:keys [tool-calls message]} (llm/generate ai-mini "Weather?" {:tools [weather-tool]})
-        results (mapv #(llm/tool-result (:id %) (str "Sunny in " (:city (:arguments %)))) tool-calls)
-        history (into [{:role :user :content "Weather?"} message] results)]
-    (:text (llm/generate ai-mini nil {:message-history history})))
+  ;; Round-trip: feed tool results back as history
+  (let [calls   (llm/generate ai {:tools [weather-tool]} "Weather?")
+        msg     (:message (meta calls))
+        results (mapv #(llm/tool-result (:id %) (str "Sunny in " (:city (:arguments %)))) calls)
+        history (into [{:role :user :content "Weather?"} msg] results)]
+    (llm/generate ai history))
 
   ;; ══════════════════════════════════════
   ;; Full response (prompt)
   ;; ══════════════════════════════════════
 
-  (def resp (llm/prompt ai-mini "Explain AI briefly"))
-
+  (def resp (llm/prompt ai "Explain AI briefly"))
   @resp              ;; text (IDeref)
   @(:text resp)      ;; same
   @(:usage resp)     ;; token counts
 
   ;; ══════════════════════════════════════
-  ;; Building agents
+  ;; Composition — threading just works
   ;; ══════════════════════════════════════
 
-  (def cat-agent
-    (llm/with-defaults ai
-      {:model "gpt-4o-mini"
-       :system-prompt "You are a cat. Be brief. Love emojis."
-       :schema [:map
-                [:cat-answer :string]
-                [:emojis [:vector :string]]]}))
-
-  (:structured (llm/generate cat-agent "What is 2+2?"))
-  ;; => {:cat-answer "Meow 4!" :emojis ["🐱" "4⃣"]}
-
-  ;; Override per-call
-  (:structured (llm/generate cat-agent "What is 2+2?" {:model "gpt-4o"}))
+  (->> "Raw technical document with some errors"
+       (llm/generate ai {:system-prompt "Fix grammar"})
+       (llm/generate ai {:system-prompt "Translate to French"}))
 
   ;; ══════════════════════════════════════
-  ;; Conversations
+  ;; Conversations — history is just a vector
   ;; ══════════════════════════════════════
 
   (def conversation
@@ -126,19 +102,19 @@
 
   (defn chat! [msg]
     (swap! conversation conj {:role :user :content msg})
-    (let [text (:text (llm/generate ai-mini nil {:message-history @conversation}))]
+    (let [text (llm/generate ai @conversation)]
       (swap! conversation conj {:role :assistant :content text})
       text))
 
   (chat! "How do I reverse a list in Clojure?")
-  (chat! "What about in Python?")
+  (chat! "What about in Python?") ;; remembers context
 
   ;; ══════════════════════════════════════
   ;; Error handling
   ;; ══════════════════════════════════════
 
   (try
-    (llm/generate ai-mini "test" {:model "fake-model"})
+    (llm/generate ai {:model "fake-model"} "test")
     (catch Exception e
       (println "Error:" (.getMessage e))
       (println "Data:" (ex-data e))))

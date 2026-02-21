@@ -9,7 +9,8 @@
          '[cheshire.core :as json]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
-         '[clojure.edn :as edn])
+         '[clojure.edn :as edn]
+         '[babashka.http-client :as http])
 
 (def port 8001)
 (def data-dir ".chat-data/agent")
@@ -23,7 +24,7 @@
           (openai/->openai {:api-key openrouter-key
                             :api-base "https://openrouter.ai/api/v1"})
           (openai/->openai))
-        (llm/with-defaults {:model (or (System/getenv "LLM_MODEL") "openai/gpt-4.1-mini")}))))
+        (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "openai/gpt-4.1-mini")}))))
 
 ;; ══════ Tools ══════
 
@@ -39,15 +40,37 @@
   [:map {:name "calculate" :description "Evaluate a Clojure math expression. Use prefix notation, e.g. (+ 2 2), (Math/sqrt 144), (Math/pow 2 10)"}
    [:expression {:description "Clojure expression, e.g. (+ (Math/pow 2 10) (Math/sqrt 256))"} :string]])
 
+(def tavily-key (System/getenv "TAVILY_API_KEY"))
+
+(defn tavily-search [query]
+  (try
+    (let [resp (http/post "https://api.tavily.com/search"
+                 {:headers {"Content-Type" "application/json"}
+                  :body (json/generate-string
+                          {:query query
+                           :api_key tavily-key
+                           :max_results 5
+                           :include_answer true})})
+          data (json/parse-string (:body resp) true)]
+      (str (when-let [answer (:answer data)]
+             (str "Summary: " answer "\n\n"))
+           "Sources:\n"
+           (str/join "\n"
+             (map-indexed
+               (fn [i r]
+                 (str (inc i) ". " (:title r) "\n"
+                      "   " (:content r) "\n"
+                      "   URL: " (:url r)))
+               (:results data)))))
+    (catch Exception e
+      (str "Search error: " (.getMessage e)))))
+
 (def agent-tools [get-weather search-web calculate])
 
 (defn execute-tool [{:keys [name arguments]}]
   (case name
     "get_weather"  (str "Weather in " (:city arguments) ": Sunny, 24°C, light breeze")
-    "search_web"   (str "Search results for '" (:query arguments) "': "
-                       "1. Wikipedia article on the topic. "
-                       "2. Recent news coverage. "
-                       "3. Expert analysis and discussion.")
+    "search_web"   (tavily-search (:query arguments))
     "calculate"    (str "Result: "
                         (try (load-string (:expression arguments))
                              (catch Exception e (str "Error: " (.getMessage e)))))
@@ -308,13 +331,14 @@ a { color:#8ab4f8; text-decoration:none }
                    (loop [history (vec (:llm-history chat))
                           step-displays []
                           n 0]
-                     (let [result (llm/generate ai nil {:tools agent-tools
-                                                        :message-history history})]
-                       (if-let [tool-calls (seq (:tool-calls result))]
+                     (let [result (llm/generate ai {:tools agent-tools} history)]
+                       (if (vector? result)
+                         ;; Tool calls — execute and loop
                          (if (>= (inc n) max-steps)
                            (do (hk/send! ch (sse-event "chunk" "(max tool steps reached)") false)
                                (hk/close ch))
-                           (let [tool-results (mapv (fn [tc] {:call tc :result (execute-tool tc)}) tool-calls)
+                           (let [tool-calls result
+                                 tool-results (mapv (fn [tc] {:call tc :result (execute-tool tc)}) tool-calls)
                                  step-html (str "<div class='tool-step'>"
                                                (apply str
                                                  (map (fn [{:keys [call result]}]
@@ -326,15 +350,14 @@ a { color:#8ab4f8; text-decoration:none }
                                  result-msgs (mapv (fn [{:keys [call result]}]
                                                      (llm/tool-result (:id call) (str result)))
                                                    tool-results)
-                                 ;; Build LLM history: assistant tool-call msg + tool results
-                                 new-history (into (conj history (:message result)) result-msgs)]
+                                 new-history (into (conj history (:message (meta result))) result-msgs)]
                              (hk/send! ch (sse-event "step" step-html) false)
                              (recur new-history
                                     (conj step-displays {:calls (vec tool-calls)
                                                          :results (mapv :result tool-results)})
                                     (inc n))))
                          ;; Text response — stream char by char for effect
-                         (let [text (or (:text result) "")]
+                         (let [text (or result "")]
                            (doseq [chunk (partition-all 4 text)]
                              (hk/send! ch (sse-event "chunk" (apply str chunk)) false)
                              (Thread/sleep 12))

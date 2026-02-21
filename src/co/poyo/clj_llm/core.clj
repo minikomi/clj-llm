@@ -15,7 +15,7 @@
 
 (def ^:private known-keys
   #{:model :system-prompt :schema :tools :tool-choice
-    :timeout-ms :message-history :provider-opts})
+    :timeout-ms :provider-opts})
 
 (defn- validate-opts [opts]
   (let [unknown (remove known-keys (keys opts))]
@@ -46,18 +46,13 @@
 ;; ════════════════════════════════════════════════════════════════════
 ;; Provider defaults
 ;; ════════════════════════════════════════════════════════════════════
-
-(defn with-defaults
-  "Set call-time defaults on a provider (model, system-prompt, schema, etc.).
-   These are merged with per-call opts, with per-call taking precedence.
-
-   (-> (openai/->openai)
-       (llm/with-defaults {:model \"gpt-4o-mini\"
-                           :system-prompt \"you are a cat\"
-                           :schema cat-schema}))"
-  [provider defaults]
-  (validate-opts defaults)
-  (update provider :defaults #(helpers/deep-merge % defaults)))
+;; Provider defaults — just data on the :defaults key.
+;;
+;;   (def ai (assoc (openai/->openai) :defaults {:model "gpt-4o-mini"}))
+;;   (def extractor (update ai :defaults merge {:schema person-schema}))
+;;
+;; generate merges :defaults with per-call opts (per-call wins).
+;; ════════════════════════════════════════════════════════════════════
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Internal helpers
@@ -83,10 +78,18 @@
               {:schema schema :input text})))))
 
 (defn- build-messages
-  "Build messages vector from prompt string and optional history."
-  [prompt-input message-history]
-  (cond-> (vec (or message-history []))
-    prompt-input (conj {:role :user :content prompt-input})))
+  "Coerce input to a messages vector.
+   String  → [{:role :user :content input}]
+   Vector  → used as-is (message history)
+   nil     → []"
+  [input]
+  (cond
+    (string? input) [{:role :user :content input}]
+    (vector? input) input
+    (nil? input)    []
+    :else (throw (errors/error
+                  (str "Input must be a string, vector, or nil — got " (type input))
+                  {:input input}))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Event stream consumer
@@ -184,26 +187,22 @@
 
    Supports @(prompt ...) via IDeref to block and get text.
 
-   Options (plain keywords):
-    :model           - model name string
-    :system-prompt   - system prompt string
-    :schema          - malli schema for structured output
-    :tools           - vector of malli tool schemas
-    :tool-choice     - tool choice strategy
-    :timeout-ms      - request timeout
-    :message-history - conversation history vector
-    :provider-opts   - map passed through to the provider API"
-  ([provider prompt-input]
-   (prompt provider prompt-input {}))
-  ([provider prompt-input opts]
+   Input is the last arg — a string (prompt) or vector (message history).
+
+   (prompt ai \"hello\")                              ; simple
+   (prompt ai {:schema s} \"extract this\")            ; with opts
+   (prompt ai {:tools t} [{:role :user ...} ...])    ; with history"
+  ([provider input]
+   (prompt provider {} input))
+  ([provider opts input]
    (let [merged (validate-opts (helpers/deep-merge (:defaults provider) opts))
          {:keys [model system-prompt schema tools tool-choice
-                 message-history provider-opts]} merged
+                 provider-opts]} merged
 
          _ (when-not model
              (throw (errors/error "No model specified" {:opts merged})))
 
-         messages      (build-messages prompt-input message-history)
+         messages      (build-messages input)
          source-chan    (proto/request-stream provider model system-prompt messages
                                              schema tools tool-choice
                                              (or provider-opts {}))
@@ -250,47 +249,47 @@
                     tool-calls)})
 
 (defn generate
-  "Blocking generation. Always returns a map:
+  "Blocking generation. Returns the natural value:
 
    (generate ai \"hello\")
-   ;; => {:text \"Hello!\"}
+   ;; => \"Hello!\"
 
-   (generate ai \"extract\" {:schema person-schema})
-   ;; => {:text \"{...}\" :structured {:name \"Alice\"}}
+   (generate ai {:schema person-schema} \"extract this\")
+   ;; => {:name \"Alice\" :age 30}
 
-   (generate ai \"weather\" {:tools [weather-tool]})
-   ;; => {:text \"\" :tool-calls [{:id \"...\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
-   ;;      :message {:role :assistant :tool_calls [...]}}
+   (generate ai {:tools [weather-tool]} \"weather in Tokyo\")
+   ;; => [{:id \"...\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
+   ;; (meta result) => {:message {:role :assistant :tool_calls [...]}}
 
-   :text       - always present
-   :structured - present when :schema provided
-   :tool-calls - present when tools were called
-   :message    - assistant message formatted for history (present with tool calls)
-   :usage      - token usage (when provider reports it)"
-  ([provider prompt-input]
-   (generate provider prompt-input {}))
-  ([provider prompt-input opts]
-   (let [response (prompt provider prompt-input opts)
+   Input is last — string or message-history vector. Threads with ->>:
+
+   (->> \"raw text\"
+        (llm/generate ai {:system-prompt \"Fix grammar\"})
+        (llm/generate ai {:system-prompt \"Translate to French\"}))
+
+   For streaming/usage, use `prompt` directly."
+  ([provider input]
+   (generate provider {} input))
+  ([provider opts input]
+   (let [response (prompt provider opts input)
          merged   (helpers/deep-merge (:defaults provider) opts)
          text     @(:text response)
-         _        (when (instance? Exception text) (throw text))
-         usage    (when (realized? (:usage response)) @(:usage response))
-         result   {:text text}]
-     (cond-> result
-       usage
-       (assoc :usage usage)
-
-       (:schema merged)
-       (assoc :structured
-              (let [s @(:structured response)]
-                (if (instance? Exception s) (throw s) s)))
-
+         _        (when (instance? Exception text) (throw text))]
+     (cond
+       ;; Tools mode: return tool-calls vector with :message in meta, or text if no calls
        (:tools merged)
-       ((fn [r]
-          (let [tc (parse-tool-calls @(:tool-calls response))]
-            (cond-> r
-              tc (assoc :tool-calls tc
-                       :message (tool-calls->assistant-message tc))))))))))
+       (let [tc (parse-tool-calls @(:tool-calls response))]
+         (if (seq tc)
+           (with-meta tc {:message (tool-calls->assistant-message tc)})
+           text))
+
+       ;; Schema mode: return structured data directly
+       (:schema merged)
+       (let [s @(:structured response)]
+         (if (instance? Exception s) (throw s) s))
+
+       ;; Text mode: return string
+       :else text))))
 
 (defn tool-result
   "Create a tool result message for feeding back into message history.
@@ -313,57 +312,60 @@
      :history - full message history (reusable)
      :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
 
-   (run-agent ai \"Weather in Tokyo\" [weather-tool] my-executor)
-   (run-agent ai \"Weather in Tokyo\" [weather-tool] my-executor {:max-steps 5})"
-  ([provider prompt-input tools execute-fn]
-   (run-agent provider prompt-input tools execute-fn {}))
-  ([provider prompt-input tools execute-fn opts]
+   opts must include :tools (or have them in provider :defaults).
+
+   (run-agent ai {:tools [weather-tool]} executor \"Weather in Tokyo\")
+   (run-agent ai {:tools [t] :max-steps 5} executor \"Weather in Tokyo\")"
+  ([provider execute-fn input]
+   (run-agent provider {} execute-fn input))
+  ([provider opts execute-fn input]
    (let [max-steps (or (:max-steps opts) 10)
          base-opts (dissoc opts :max-steps)]
-     (loop [history [{:role :user :content prompt-input}]
+     (loop [history (build-messages input)
             steps []
             n 0]
-       (let [result (generate provider nil
-                              (merge base-opts
-                                     {:tools tools
-                                      :message-history history}))]
-         (if-let [tool-calls (seq (:tool-calls result))]
-           (if (>= (inc n) max-steps)
-             {:text (:text result) :history history :steps steps
-              :truncated true}
-             (let [tool-results (mapv (fn [tc]
-                                       {:call tc
-                                        :result (execute-fn tc)})
-                                     tool-calls)
-                   result-msgs (mapv (fn [{:keys [call result]}]
-                                      (tool-result (:id call) (str result)))
-                                    tool-results)
-                   new-history (into (conj history (:message result))
-                                    result-msgs)]
-               (recur new-history
-                      (conj steps {:tool-calls (vec tool-calls)
-                                   :tool-results (mapv :result tool-results)})
-                      (inc n))))
-           {:text (:text result)
-            :history (conj history (:message result))
+       (let [result (generate provider base-opts history)]
+         (if (vector? result)
+           ;; Tool calls - execute and loop
+           (let [tool-calls result
+                 msg (:message (meta tool-calls))]
+             (if (>= (inc n) max-steps)
+               {:text "" :history history :steps steps :truncated true}
+               (let [tool-results (mapv (fn [tc]
+                                         {:call tc
+                                          :result (execute-fn tc)})
+                                       tool-calls)
+                     result-msgs (mapv (fn [{:keys [call result]}]
+                                        (tool-result (:id call) (str result)))
+                                      tool-results)
+                     new-history (into (conj history msg) result-msgs)]
+                 (recur new-history
+                        (conj steps {:tool-calls (vec tool-calls)
+                                     :tool-results (mapv :result tool-results)})
+                        (inc n)))))
+           ;; Text response - done
+           {:text result
+            :history (conj history {:role :assistant :content result})
             :steps steps}))))))
 
+
 (defn stream
-  "Returns a channel of text chunks as they stream from the LLM."
-  ([provider prompt-input]
-   (stream provider prompt-input {}))
-  ([provider prompt-input opts]
-   (:chunks (prompt provider prompt-input opts))))
+  "Returns a channel of text chunks as they stream from the LLM.
+   Input is last — string or message-history vector."
+  ([provider input]
+   (stream provider {} input))
+  ([provider opts input]
+   (:chunks (prompt provider opts input))))
 
 (defn stream-print
-  "Stream text to *out*, printing chunks as they arrive. Returns {:text ...}.
+  "Stream text to *out*, printing chunks as they arrive. Returns the full text string.
    Great for REPL use.
 
    (stream-print ai \"Tell me a story\")"
-  ([provider prompt-input]
-   (stream-print provider prompt-input {}))
-  ([provider prompt-input opts]
-   (let [ch (stream provider prompt-input opts)
+  ([provider input]
+   (stream-print provider {} input))
+  ([provider opts input]
+   (let [ch (stream provider opts input)
          sb (StringBuilder.)]
      (loop []
        (when-let [chunk (<!! ch)]
@@ -372,11 +374,12 @@
          (flush)
          (recur)))
      (println)
-     {:text (.toString sb)})))
+     (.toString sb))))
 
 (defn events
-  "Returns a channel of raw events from the LLM."
-  ([provider prompt-input]
-   (events provider prompt-input {}))
-  ([provider prompt-input opts]
-   (:events (prompt provider prompt-input opts))))
+  "Returns a channel of raw events from the LLM.
+   Input is last — string or message-history vector."
+  ([provider input]
+   (events provider {} input))
+  ([provider opts input]
+   (:events (prompt provider opts input))))
