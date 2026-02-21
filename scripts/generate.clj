@@ -17,24 +17,22 @@
 (println "--- text ---")
 (println (llm/generate ai "What is the capital of France?"))
 
-;; With system prompt
+;; With system prompt — opts before input
 (println "\n--- system prompt ---")
-(println (llm/generate ai "What is 2+2?"
-                        {:system-prompt "You are a pirate. Be brief."}))
+(println (llm/generate ai {:system-prompt "You are a pirate. Be brief."} "What is 2+2?"))
 
 ;; Structured output — returns a map
 (println "\n--- structured ---")
 (println (llm/generate ai
-                       "Extract: Marie Curie was a 66 year old physicist"
                        {:schema [:map
                                 [:name :string]
                                 [:age :int]
-                                [:occupation :string]]}))
+                                [:occupation :string]]}
+                       "Extract: Marie Curie was a 66 year old physicist"))
 
 ;; Nested schema
 (println "\n--- nested schema ---")
 (println (llm/generate ai
-                       "TechCorp founded 2010. Alice CEO $200k, Bob Engineer $120k. NYC and SF."
                        {:schema [:map
                                 [:name :string]
                                 [:founded :int]
@@ -42,13 +40,14 @@
                                                      [:name :string]
                                                      [:role :string]
                                                      [:salary :int]]]]
-                                [:locations [:vector :string]]]}))
+                                [:locations [:vector :string]]]}
+                       "TechCorp founded 2010. Alice CEO $200k, Bob Engineer $120k. NYC and SF."))
 
 ;; Layer config with update+merge
 (println "\n--- layered defaults ---")
 (def extractor
   (update ai :defaults merge {:system-prompt "Extract structured data."
-                                  :schema [:map [:name :string] [:age :int] [:occupation :string]]}))
+                              :schema [:map [:name :string] [:age :int] [:occupation :string]]}))
 
 (println (llm/generate extractor "Marie Curie was a 66 year old physicist"))
 (println (llm/generate extractor "Albert Einstein was a 76 year old theoretical physicist"))
