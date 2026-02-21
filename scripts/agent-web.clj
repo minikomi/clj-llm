@@ -193,6 +193,7 @@ a { color:#8ab4f8; text-decoration:none }
   "    var d2=JSON.parse(e.data);"
   "    msgs.innerHTML=d2.messagesHtml;scrollDown();"
   "    if(window.history.replaceState)window.history.replaceState(null,null,'/c/'+d2.chatId);"
+  "    document.getElementById('form').action='/c/'+d2.chatId+'/send';"
   "  });"
   "  es.onerror=function(){es.close();ta.disabled=false;document.getElementById('send-btn').disabled=false;};"
   "})}"
@@ -271,10 +272,11 @@ a { color:#8ab4f8; text-decoration:none }
     (let [chat-id-raw (subs uri 3 (- (count uri) 5))
           chat-id (if (= chat-id-raw "new") (new-chat-id) chat-id-raw)
           {:keys [message]} (parse-form body)
-          chat (or (load-chat chat-id) {:id chat-id :messages [] :created-at (System/currentTimeMillis)})
+          chat (or (load-chat chat-id) {:id chat-id :messages [] :llm-history [] :created-at (System/currentTimeMillis)})
           user-msg {:role :user :content message}
           chat (-> chat
                    (update :messages conj user-msg)
+                   (update :llm-history conj {:role "user" :content message})
                    (assoc :updated-at (System/currentTimeMillis)))
           chat (if (:title chat) chat (assoc chat :title (subs message 0 (min 50 (count message)))))]
       (save-chat chat)
@@ -302,10 +304,8 @@ a { color:#8ab4f8; text-decoration:none }
                                      "X-Accel-Buffering" "no"}} false)
              (future
                (try
-                 (let [history (mapv (fn [m] {:role (name (:role m)) :content (:content m)})
-                                    (:messages chat))
-                       max-steps 5]
-                   (loop [history history
+                 (let [max-steps 5]
+                   (loop [history (vec (:llm-history chat))
                           step-displays []
                           n 0]
                      (let [result (llm/generate ai nil {:tools agent-tools
@@ -326,6 +326,7 @@ a { color:#8ab4f8; text-decoration:none }
                                  result-msgs (mapv (fn [{:keys [call result]}]
                                                      (llm/tool-result (:id call) (str result)))
                                                    tool-results)
+                                 ;; Build LLM history: assistant tool-call msg + tool results
                                  new-history (into (conj history (:message result)) result-msgs)]
                              (hk/send! ch (sse-event "step" step-html) false)
                              (recur new-history
@@ -338,8 +339,10 @@ a { color:#8ab4f8; text-decoration:none }
                              (hk/send! ch (sse-event "chunk" (apply str chunk)) false)
                              (Thread/sleep 12))
                            (let [assistant-msg {:role :assistant :content text :tool-steps step-displays}
+                                 final-history (conj history {:role "assistant" :content text})
                                  final-chat (-> chat
                                                 (update :messages conj assistant-msg)
+                                                (assoc :llm-history final-history)
                                                 (assoc :updated-at (System/currentTimeMillis)))
                                  _ (save-chat final-chat)
                                  all-html (apply str (map render-message (:messages final-chat)))]
