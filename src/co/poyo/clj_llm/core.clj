@@ -300,6 +300,54 @@
   [tool-call-id content]
   {:role :tool :tool_call_id tool-call-id :content (str content)})
 
+(defn run-agent
+  "Run an agentic tool-calling loop. Calls the LLM, executes any requested
+   tools via execute-fn, feeds results back, repeats until the LLM returns
+   text (no more tool calls).
+
+   execute-fn: (fn [tool-call] result-string)
+     tool-call is {:id ... :name ... :arguments ...}
+
+   Returns {:text ... :history ... :steps [...]}
+     :text    - final text response
+     :history - full message history (reusable)
+     :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
+
+   (run-agent ai \"Weather in Tokyo\" [weather-tool] my-executor)
+   (run-agent ai \"Weather in Tokyo\" [weather-tool] my-executor {:max-steps 5})"
+  ([provider prompt-input tools execute-fn]
+   (run-agent provider prompt-input tools execute-fn {}))
+  ([provider prompt-input tools execute-fn opts]
+   (let [max-steps (or (:max-steps opts) 10)
+         base-opts (dissoc opts :max-steps)]
+     (loop [history [{:role :user :content prompt-input}]
+            steps []
+            n 0]
+       (let [result (generate provider nil
+                              (merge base-opts
+                                     {:tools tools
+                                      :message-history history}))]
+         (if-let [tool-calls (seq (:tool-calls result))]
+           (if (>= (inc n) max-steps)
+             {:text (:text result) :history history :steps steps
+              :truncated true}
+             (let [tool-results (mapv (fn [tc]
+                                       {:call tc
+                                        :result (execute-fn tc)})
+                                     tool-calls)
+                   result-msgs (mapv (fn [{:keys [call result]}]
+                                      (tool-result (:id call) (str result)))
+                                    tool-results)
+                   new-history (into (conj history (:message result))
+                                    result-msgs)]
+               (recur new-history
+                      (conj steps {:tool-calls (vec tool-calls)
+                                   :tool-results (mapv :result tool-results)})
+                      (inc n))))
+           {:text (:text result)
+            :history (conj history (:message result))
+            :steps steps}))))))
+
 (defn stream
   "Returns a channel of text chunks as they stream from the LLM."
   ([provider prompt-input]
