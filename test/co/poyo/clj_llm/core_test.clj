@@ -156,6 +156,23 @@
         (is (= "function" (:type (first (:tool_calls msg)))))
         (is (= "ping" (get-in msg [:tool_calls 0 :function :name])))))))
 
+(deftest test-tool-calls-with-text
+  (testing "when model returns both text and tool calls, text is in metadata"
+    (let [tool-schema [:map {:name "ping" :description "Ping"} [:host :string]]
+          provider (mock-provider [{:type :content :content "Let me ping that"}
+                                   {:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}
+                                   {:type :usage :prompt-tokens 10 :completion-tokens 5}])
+          result (llm/generate provider {:tools [tool-schema]} "ping example.com")]
+      ;; Primary return is tool calls
+      (is (vector? result))
+      (is (= 1 (count result)))
+      (is (= "ping" (:name (first result))))
+      ;; Text is preserved in metadata
+      (is (= "Let me ping that" (:text (meta result))))
+      ;; :message also in metadata
+      (is (some? (:message (meta result)))))))
+
 (deftest test-tool-result
   (testing "tool-result creates correct message map"
     (let [msg (llm/tool-result "call_abc" "Sunny, 22°C")]
