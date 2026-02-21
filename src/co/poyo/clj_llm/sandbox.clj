@@ -19,21 +19,27 @@
   ;; Basic text
   ;; ══════════════════════════════════════
 
-  (llm/generate ai-mini "What is 2+2?")
+  (:text (llm/generate ai-mini "What is 2+2?"))
+  ;; => "2+2 equals 4."
 
-  (llm/generate ai-mini "Write a haiku"
-                {:system-prompt "You are a poet"})
+  (:text (llm/generate ai-mini "Write a haiku"
+                              {:system-prompt "You are a poet"}))
+
+  ;; Full result map
+  (llm/generate ai-mini "What is 2+2?")
+  ;; => {:text "2+2 equals 4."}
 
   ;; ══════════════════════════════════════
   ;; Structured output
   ;; ══════════════════════════════════════
 
-  (llm/generate ai-mini
-                "Extract: Marie Curie was a 66 year old physicist"
-                {:schema [:map
-                          [:name :string]
-                          [:age :int]
-                          [:occupation :string]]})
+  (:structured (llm/generate ai-mini
+                             "Extract: Marie Curie was a 66 year old physicist"
+                             {:schema [:map
+                                       [:name :string]
+                                       [:age :int]
+                                       [:occupation :string]]}))
+  ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
   (def company-schema
     [:map
@@ -73,7 +79,15 @@
 
   (llm/generate ai-mini "What's the weather in Tokyo?"
                 {:tools [weather-tool]})
-  ;; => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+  ;; => {:text ""
+  ;;     :tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+  ;;     :message {:role :assistant :tool_calls [...]}}
+
+  ;; Round-trip tool results back
+  (let [{:keys [tool-calls message]} (llm/generate ai-mini "Weather?" {:tools [weather-tool]})
+        results (mapv #(llm/tool-result (:id %) (str "Sunny in " (:city (:arguments %)))) tool-calls)
+        history (into [{:role :user :content "Weather?"} message] results)]
+    (:text (llm/generate ai-mini nil {:message-history history})))
 
   ;; ══════════════════════════════════════
   ;; Full response (prompt)
@@ -97,10 +111,11 @@
                 [:cat-answer :string]
                 [:emojis [:vector :string]]]}))
 
-  (llm/generate cat-agent "What is 2+2?")
+  (:structured (llm/generate cat-agent "What is 2+2?"))
+  ;; => {:cat-answer "Meow 4!" :emojis ["🐱" "4⃣"]}
 
   ;; Override per-call
-  (llm/generate cat-agent "What is 2+2?" {:model "gpt-4o"})
+  (:structured (llm/generate cat-agent "What is 2+2?" {:model "gpt-4o"}))
 
   ;; ══════════════════════════════════════
   ;; Conversations
@@ -111,9 +126,9 @@
 
   (defn chat! [msg]
     (swap! conversation conj {:role :user :content msg})
-    (let [response (llm/generate ai-mini nil {:message-history @conversation})]
-      (swap! conversation conj {:role :assistant :content response})
-      response))
+    (let [text (:text (llm/generate ai-mini nil {:message-history @conversation}))]
+      (swap! conversation conj {:role :assistant :content text})
+      text))
 
   (chat! "How do I reverse a list in Clojure?")
   (chat! "What about in Python?")

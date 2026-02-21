@@ -15,8 +15,8 @@
 
 ;; Easy way — prints as it streams, returns full text
 (println "--- stream-print ---")
-(def full-text (llm/stream-print ai "Tell me a very short story about a robot."))
-(println "(returned" (count full-text) "chars)")
+(def result (llm/stream-print ai "Tell me a very short story about a robot."))
+(println "(returned" (count (:text result)) "chars)")
 
 ;; Channel way — for custom processing
 (println "\n--- raw channel ---")

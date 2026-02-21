@@ -32,7 +32,9 @@
 
 (defrecord Response [chunks events text usage structured tool-calls]
   clojure.lang.IDeref
-  (deref [_] @text))
+  (deref [_]
+    (let [v @text]
+      (if (instance? Exception v) (throw v) v))))
 
 (defmethod print-method Response [r writer]
   (.write writer "#Response{:text ")
@@ -225,33 +227,78 @@
 
      (->Response text-chunks events text-p usage-p structured-p tool-calls-p))))
 
+(defn- parse-tool-calls
+  "Parse JSON argument strings in tool calls."
+  [raw-tool-calls]
+  (when raw-tool-calls
+    (mapv (fn [t]
+            (let [args (try (json/parse-string (:arguments t) true)
+                           (catch Exception _ (:arguments t)))]
+              {:id (:id t) :name (:name t) :arguments args}))
+          raw-tool-calls)))
+
+(defn- tool-calls->assistant-message
+  "Build the assistant message for tool call history round-tripping."
+  [tool-calls]
+  {:role :assistant
+   :tool_calls (mapv (fn [{:keys [id name arguments]}]
+                      {:id id :type "function"
+                       :function {:name name
+                                  :arguments (if (string? arguments)
+                                               arguments
+                                               (json/generate-string arguments))}})
+                    tool-calls)})
+
 (defn generate
-  "Blocking generation. Returns depend on what you asked for:
-   - Text by default: \"Hello!\"
-   - Structured data with :schema: {:name \"Alice\"}
-   - Tool calls with :tools: [{:name \"get_weather\" :arguments {:city \"Tokyo\"}}]
+  "Blocking generation. Always returns a map:
 
    (generate ai \"hello\")
+   ;; => {:text \"Hello!\"}
+
    (generate ai \"extract\" {:schema person-schema})
-   (generate ai \"weather in tokyo\" {:tools [weather-tool]})"
+   ;; => {:text \"{...}\" :structured {:name \"Alice\"}}
+
+   (generate ai \"weather\" {:tools [weather-tool]})
+   ;; => {:text \"\" :tool-calls [{:id \"...\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
+   ;;      :message {:role :assistant :tool_calls [...]}}
+
+   :text       - always present
+   :structured - present when :schema provided
+   :tool-calls - present when tools were called
+   :message    - assistant message formatted for history (present with tool calls)
+   :usage      - token usage (when provider reports it)"
   ([provider prompt-input]
    (generate provider prompt-input {}))
   ([provider prompt-input opts]
    (let [response (prompt provider prompt-input opts)
          merged   (helpers/deep-merge (:defaults provider) opts)
-         result   (cond
-                    (:schema merged) @(:structured response)
-                    (:tools merged)  (let [tc @(:tool-calls response)]
-                                       (when tc
-                                         (mapv (fn [t]
-                                                 (let [args (try (json/parse-string (:arguments t) true)
-                                                                 (catch Exception _ (:arguments t)))]
-                                                   {:id (:id t) :name (:name t) :arguments args}))
-                                               tc)))
-                    :else            @(:text response))]
-     (if (instance? Exception result)
-       (throw result)
-       result))))
+         text     @(:text response)
+         _        (when (instance? Exception text) (throw text))
+         usage    (when (realized? (:usage response)) @(:usage response))
+         result   {:text text}]
+     (cond-> result
+       usage
+       (assoc :usage usage)
+
+       (:schema merged)
+       (assoc :structured
+              (let [s @(:structured response)]
+                (if (instance? Exception s) (throw s) s)))
+
+       (:tools merged)
+       ((fn [r]
+          (let [tc (parse-tool-calls @(:tool-calls response))]
+            (cond-> r
+              tc (assoc :tool-calls tc
+                       :message (tool-calls->assistant-message tc))))))))))
+
+(defn tool-result
+  "Create a tool result message for feeding back into message history.
+
+   (tool-result \"call_abc\" \"Sunny, 22°C\")
+   ;; => {:role :tool :tool_call_id \"call_abc\" :content \"Sunny, 22°C\"}"
+  [tool-call-id content]
+  {:role :tool :tool_call_id tool-call-id :content (str content)})
 
 (defn stream
   "Returns a channel of text chunks as they stream from the LLM."
@@ -261,7 +308,7 @@
    (:chunks (prompt provider prompt-input opts))))
 
 (defn stream-print
-  "Stream text to *out*, printing chunks as they arrive. Returns the full text.
+  "Stream text to *out*, printing chunks as they arrive. Returns {:text ...}.
    Great for REPL use.
 
    (stream-print ai \"Tell me a story\")"
@@ -277,7 +324,7 @@
          (flush)
          (recur)))
      (println)
-     (.toString sb))))
+     {:text (.toString sb)})))
 
 (defn events
   "Returns a channel of raw events from the LLM."
