@@ -24,37 +24,28 @@
 
 ;; Single tool call
 (println "--- single tool ---")
-(println (llm/generate ai "What's the weather in Tokyo?"
-                       {:tools [get-weather]}))
+(let [result (llm/generate ai "What's the weather in Tokyo?"
+                           {:tools [get-weather]})]
+  (println (:tool-calls result)))
 
 ;; Multiple tools — model picks which to call
 (println "\n--- multiple tools ---")
-(println (llm/generate ai "Weather in Paris and find Italian restaurants there"
-                       {:tools [get-weather search-restaurants]}))
+(let [result (llm/generate ai "Weather in Paris and find Italian restaurants there"
+                           {:tools [get-weather search-restaurants]})]
+  (println (:tool-calls result)))
 
 ;; Agentic loop — call tools and feed results back
 (println "\n--- agentic loop ---")
-(defn fake-weather [city] (str "Sunny, 22°C in " city))
-(defn fake-restaurants [city cuisine] (str "Found: " cuisine " place in " city))
-
-(defn run-tools [tool-calls]
-  (mapv (fn [{:keys [id name arguments]}]
-          {:role :tool
-           :tool_call_id id
-           :content (case name
-                      "get_weather" (fake-weather (:city arguments))
-                      "search_restaurants" (fake-restaurants (:city arguments) (:cuisine arguments))
-                      (str "Unknown tool: " name))})
-        tool-calls))
+(defn execute-tool [{:keys [id name arguments]}]
+  (llm/tool-result id
+    (case name
+      "get_weather"        (str "Sunny, 22°C in " (:city arguments))
+      "search_restaurants" (str "Found: " (:cuisine arguments) " place in " (:city arguments))
+      (str "Unknown tool: " name))))
 
 (let [question "Weather in Tokyo and find ramen there"
-      tool-calls (llm/generate ai question {:tools [get-weather search-restaurants]})
-      tool-results (run-tools tool-calls)
-      ;; Feed results back for final answer
-      history (into [{:role :user :content question}
-                     {:role :assistant :tool_calls
-                      (mapv (fn [tc] {:id (:id tc) :type "function"
-                                       :function {:name (:name tc)
-                                                  :arguments (pr-str (:arguments tc))}}) tool-calls)}]
-                    tool-results)]
-  (println (llm/generate ai nil {:message-history history})))
+      {:keys [tool-calls message]} (llm/generate ai question {:tools [get-weather search-restaurants]})
+      tool-results (mapv execute-tool tool-calls)
+      ;; Feed results back — :message is pre-formatted for history
+      history (into [{:role :user :content question} message] tool-results)]
+  (println (:text (llm/generate ai nil {:message-history history}))))

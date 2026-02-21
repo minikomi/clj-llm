@@ -14,25 +14,25 @@
 
 ;; Simple text
 (println "--- text ---")
-(println (llm/generate ai "What is the capital of France?"))
+(println (:text (llm/generate ai "What is the capital of France?")))
 
 ;; With system prompt
 (println "\n--- system prompt ---")
-(println (llm/generate ai "What is 2+2?"
-                       {:system-prompt "You are a pirate. Be brief."}))
+(println (:text (llm/generate ai "What is 2+2?"
+                              {:system-prompt "You are a pirate. Be brief."})))
 
 ;; Structured output
 (println "\n--- structured ---")
-(println (llm/generate ai
+(println (:structured (llm/generate ai
                        "Extract: Marie Curie was a 66 year old physicist"
                        {:schema [:map
                                 [:name :string]
                                 [:age :int]
-                                [:occupation :string]]}))
+                                [:occupation :string]]})))
 
 ;; Nested schema
 (println "\n--- nested schema ---")
-(println (llm/generate ai
+(println (:structured (llm/generate ai
                        "TechCorp founded 2010. Alice CEO $200k, Bob Engineer $120k. NYC and SF."
                        {:schema [:map
                                 [:name :string]
@@ -41,4 +41,8 @@
                                                      [:name :string]
                                                      [:role :string]
                                                      [:salary :int]]]]
-                                [:locations [:vector :string]]]}))
+                                [:locations [:vector :string]]]})))
+
+;; Show full result map
+(println "\n--- full result ---")
+(println (llm/generate ai "Say hi briefly"))
