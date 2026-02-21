@@ -61,9 +61,14 @@
 * { box-sizing:border-box; margin:0; padding:0 }
 body { font-family:-apple-system,system-ui,sans-serif; background:#0a0a0a; color:#e0e0e0; height:100vh; display:flex }
 a { color:#8ab4f8; text-decoration:none }
-.sidebar { width:260px; background:#111; border-right:1px solid #222; display:flex; flex-direction:column; flex-shrink:0; height:100vh }
-.sidebar-hdr { padding:16px; border-bottom:1px solid #222 }
+.hamburger { display:none; position:fixed; top:12px; left:12px; z-index:200; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:20px; width:40px; height:40px; border-radius:8px; cursor:pointer; line-height:1 }
+.hamburger:hover { background:#252525; color:#fff }
+.overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:98 }
+.sidebar { width:260px; background:#111; border-right:1px solid #222; display:flex; flex-direction:column; flex-shrink:0; height:100vh; z-index:99 }
+.sidebar-hdr { padding:16px; border-bottom:1px solid #222; display:flex; align-items:center; justify-content:space-between }
 .sidebar-hdr h2 { font-size:14px; font-weight:600; color:#888; text-transform:uppercase; letter-spacing:.05em }
+.sidebar-close { display:none; background:none; border:none; color:#666; font-size:20px; cursor:pointer; padding:4px }
+.sidebar-close:hover { color:#fff }
 .new-chat { display:block; padding:10px; margin:8px; border-radius:8px; background:#1a1a1a; border:1px solid #333; color:#ccc; font-size:13px; text-align:center }
 .new-chat:hover { background:#252525; color:#fff }
 .chat-list { flex:1; overflow-y:auto; padding:8px }
@@ -74,7 +79,7 @@ a { color:#8ab4f8; text-decoration:none }
 .ci .x { visibility:hidden; color:#666; font-size:16px; padding:0 4px; cursor:pointer; border:none; background:none }
 .ci:hover .x { visibility:visible }
 .ci .x:hover { color:#f44 }
-.main { flex:1; display:flex; flex-direction:column; height:100vh }
+.main { flex:1; display:flex; flex-direction:column; height:100vh; min-width:0 }
 #messages { flex:1; overflow-y:auto; padding:24px }
 .m { margin-bottom:20px; max-width:768px; margin-left:auto; margin-right:auto }
 .m.user .b { background:#1e3a5f; border-radius:16px 16px 4px 16px; padding:12px 16px; display:inline-block; max-width:80%; float:right }
@@ -82,19 +87,29 @@ a { color:#8ab4f8; text-decoration:none }
 .m .r { font-size:11px; color:#666; margin-bottom:4px; text-transform:uppercase; letter-spacing:.05em }
 .m.user .r { text-align:right }
 .m::after { content:''; display:table; clear:both }
-.b pre { white-space:pre-wrap; font-family:'SF Mono',Monaco,monospace; font-size:13px; background:#000; padding:10px; border-radius:6px; margin:6px 0 }
+.b pre { white-space:pre-wrap; font-family:'SF Mono',Monaco,monospace; font-size:13px; background:#000; padding:10px; border-radius:6px; margin:6px 0; overflow-x:auto }
 .b code { font-family:'SF Mono',Monaco,monospace; font-size:13px; background:#000; padding:2px 5px; border-radius:3px }
 .b pre code { background:none; padding:0 }
 .b p { margin:6px 0 } .b p:first-child { margin-top:0 } .b p:last-child { margin-bottom:0 }
-.input-area { padding:16px 24px 24px; max-width:816px; margin:0 auto; width:100% }
+.input-area { padding:12px 16px 16px; max-width:816px; margin:0 auto; width:100% }
 .input-row { display:flex; gap:8px }
-.input-row textarea { flex:1; padding:12px 16px; border-radius:12px; border:1px solid #333; background:#111; color:#e0e0e0; font-size:14px; font-family:inherit; resize:none; outline:none; min-height:48px; max-height:200px }
+.input-row textarea { flex:1; padding:12px 16px; border-radius:12px; border:1px solid #333; background:#111; color:#e0e0e0; font-size:16px; font-family:inherit; resize:none; outline:none; min-height:48px; max-height:200px }
 .input-row textarea:focus { border-color:#555 }
-.input-row button { padding:12px 20px; border-radius:12px; border:none; background:#1e3a5f; color:#fff; font-size:14px; cursor:pointer }
+.input-row button { padding:12px 20px; border-radius:12px; border:none; background:#1e3a5f; color:#fff; font-size:14px; cursor:pointer; flex-shrink:0 }
 .input-row button:hover { background:#2a4a6f }
 .dot { display:inline-block; width:8px; height:8px; background:#8ab4f8; border-radius:50%; animation:pulse 1s infinite; vertical-align:middle; margin-left:4px }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 .empty { display:flex; align-items:center; justify-content:center; flex:1; color:#444; font-size:18px }
+@media(max-width:768px){
+  .hamburger { display:flex; align-items:center; justify-content:center }
+  .sidebar { position:fixed; left:-280px; top:0; bottom:0; transition:left .2s ease; width:280px }
+  .sidebar.open { left:0 }
+  .sidebar.open ~ .overlay { display:block }
+  .sidebar-close { display:block }
+  #messages { padding:16px; padding-top:56px }
+  .m.user .b, .m.assistant .b { max-width:95% }
+  .ci .x { visibility:visible }
+}
 ")
 
 (defn hic [& body] (str (h/html body)))
@@ -111,7 +126,7 @@ a { color:#8ab4f8; text-decoration:none }
 
 (defn render-sidebar [chats active-id]
   (hic
-    [:div.sidebar-hdr [:h2 "Chats"]]
+    [:div.sidebar-hdr [:h2 "Chats"] [:button.sidebar-close {:onclick "closeSidebar()"} "×"]]
     [:a.new-chat {:href "/"} "+ New chat"]
     [:div.chat-list
      (for [{:keys [id title]} chats]
@@ -139,7 +154,9 @@ a { color:#8ab4f8; text-decoration:none }
     "es.addEventListener('done',function(e){es.close();document.getElementById('sidebar').innerHTML=e.data;});"
     "es.onerror=function(){es.close();};"
     "});}"
-    "function scrollDown(){var el=document.getElementById('messages');el.scrollTop=el.scrollHeight;}"))
+    "function scrollDown(){var el=document.getElementById('messages');el.scrollTop=el.scrollHeight;}"
+    "function toggleSidebar(){var s=document.getElementById('sidebar');s.classList.toggle('open');}"
+    "function closeSidebar(){var s=document.getElementById('sidebar');s.classList.remove('open');}"))
 
 (defn page [chat-id]
   (let [chat (when chat-id (load-chat chat-id))
@@ -153,7 +170,9 @@ a { color:#8ab4f8; text-decoration:none }
         [:title "clj-llm chat"]
         [:style (raw-string css)]]
        [:body
+        [:button.hamburger {:onclick "toggleSidebar()"} "☰"]
         [:div#sidebar.sidebar (raw-string (render-sidebar (list-chats) chat-id))]
+        [:div.overlay {:onclick "closeSidebar()"}]
         [:div.main
          [:div#messages (raw-string (render-msgs messages))]
          [:div.input-area
