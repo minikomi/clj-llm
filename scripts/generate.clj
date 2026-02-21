@@ -4,35 +4,36 @@
          '[co.poyo.clj-llm.backends.openai :as openai])
 
 ;; Works with OPENAI_API_KEY or OPENROUTER_KEY
-(def ai
+(def provider
   (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
-    (-> (if openrouter-key
-          (openai/->openai {:api-key openrouter-key
-                            :api-base "https://openrouter.ai/api/v1"})
-          (openai/->openai))
-        (llm/with-defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))))
+    (if openrouter-key
+      (openai/->openai {:api-key openrouter-key
+                        :api-base "https://openrouter.ai/api/v1"})
+      (openai/->openai))))
 
-;; Simple text
+(def ai (assoc provider :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))
+
+;; Simple text — returns a string
 (println "--- text ---")
-(println (:text (llm/generate ai "What is the capital of France?")))
+(println (llm/generate ai "What is the capital of France?"))
 
 ;; With system prompt
 (println "\n--- system prompt ---")
-(println (:text (llm/generate ai "What is 2+2?"
-                              {:system-prompt "You are a pirate. Be brief."})))
+(println (llm/generate ai "What is 2+2?"
+                        {:system-prompt "You are a pirate. Be brief."}))
 
-;; Structured output
+;; Structured output — returns a map
 (println "\n--- structured ---")
-(println (:structured (llm/generate ai
+(println (llm/generate ai
                        "Extract: Marie Curie was a 66 year old physicist"
                        {:schema [:map
                                 [:name :string]
                                 [:age :int]
-                                [:occupation :string]]})))
+                                [:occupation :string]]}))
 
 ;; Nested schema
 (println "\n--- nested schema ---")
-(println (:structured (llm/generate ai
+(println (llm/generate ai
                        "TechCorp founded 2010. Alice CEO $200k, Bob Engineer $120k. NYC and SF."
                        {:schema [:map
                                 [:name :string]
@@ -41,8 +42,13 @@
                                                      [:name :string]
                                                      [:role :string]
                                                      [:salary :int]]]]
-                                [:locations [:vector :string]]]})))
+                                [:locations [:vector :string]]]}))
 
-;; Show full result map
-(println "\n--- full result ---")
-(println (llm/generate ai "Say hi briefly"))
+;; Layer config with update+merge
+(println "\n--- layered defaults ---")
+(def extractor
+  (update ai :defaults merge {:system-prompt "Extract structured data."
+                                  :schema [:map [:name :string] [:age :int] [:occupation :string]]}))
+
+(println (llm/generate extractor "Marie Curie was a 66 year old physicist"))
+(println (llm/generate extractor "Albert Einstein was a 76 year old theoretical physicist"))

@@ -22,7 +22,7 @@
     (-> (if k
           (openai/->openai {:api-key k :api-base "https://openrouter.ai/api/v1"})
           (openai/->openai))
-        (llm/with-defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))))
+        (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))))
 
 ;; ══════ Persistence ══════
 
@@ -243,7 +243,7 @@ a { color:#8ab4f8; text-decoration:none }
                (future
                  (try
                    (let [{:keys [chat messages llm-history message]} state
-                         llm-ch (llm/stream ai nil {:message-history llm-history})
+                         llm-ch (llm/stream ai llm-history)
                          sb (StringBuilder.)
                          send-sse! (fn [evt data]
                                      (hk/send! ch

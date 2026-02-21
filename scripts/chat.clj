@@ -15,7 +15,7 @@
           (openai/->openai {:api-key openrouter-key
                             :api-base "https://openrouter.ai/api/v1"})
           (openai/->openai))
-        (llm/with-defaults {:model model}))))
+        (assoc :defaults {:model model}))))
 
 (def history (atom [{:role :system :content "You are a helpful assistant. Be concise."}]))
 
@@ -28,7 +28,7 @@
   (when-let [input (read-line)]
     (when-not (empty? input)
       (swap! history conj {:role :user :content input})
-      (let [ch (llm/stream ai nil {:message-history @history})
+      (let [ch (llm/stream ai @history)
             sb (StringBuilder.)]
         (loop []
           (when-let [chunk (<!! ch)]

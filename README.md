@@ -1,30 +1,32 @@
 # clj-llm
 
-Finally, an LLM library that doesn't get in your way.
+An LLM library that doesn't get in your way.
 
-Built for Clojure developers who want maximum flexibility without sacrificing simplicity. clj-llm is minimal opinionated glue that lets you work with any LLM provider using the same clean interface—from OpenAI to your local Ollama setup.
+Built for Clojure developers who want maximum flexibility without sacrificing simplicity. Minimal opinionated glue for any LLM provider — from OpenAI to your local Ollama setup.
 
 ## Why clj-llm?
 
-**You're in control.** No magic configuration, no hidden behavior. Everything is explicit data that you can inspect, transform, and compose with standard Clojure functions.
+**You're in control.** No magic configuration, no hidden behavior. Everything is explicit data.
 
-**Scales with complexity.** Start simple with one-liner text generation, then add structured output, streaming, conversations, and error handling exactly when you need them.
+**Composable.** Input-last design means `generate` threads naturally with `->>`. Config is just `assoc`/`merge`.
 
-**Future-proof.** New provider features work without library updates because we stay out of your way.
+**Natural returns.** `generate` returns the value you want — a string, a parsed map, a tool-call vector — not a wrapper you have to unwrap.
 
 ```clojure
 ;; Same interface, any provider
 (def openai (openai/backend {:api-key-env "OPENAI_API_KEY"}))
-(def local (openai/backend {:api-base "http://localhost:11434/v1"}))
+(def local  (openai/backend {:api-base "http://localhost:11434/v1"}))
 (def claude (anthropic/backend {:api-key-env "ANTHROPIC_API_KEY"}))
 
-;; Your code doesn't change
-(llm/generate any-provider "Explain quantum computing")
+;; Put defaults on the provider
+(def ai (assoc openai :defaults {:model "gpt-4o-mini"}))
+
+;; Generate — returns a string
+(llm/generate ai "Explain quantum computing")
+;; => "Quantum computing uses quantum mechanical phenomena..."
 ```
 
 ## Installation
-
-Add to your `deps.edn`:
 
 ```clojure
 {:deps {co.poyo/clj-llm {:git/url "https://github.com/poyo-ai/clj-llm"
@@ -37,118 +39,175 @@ Add to your `deps.edn`:
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
-;; Create a backend (just data, no side effects)
-(def ai (openai/backend {:api-key-env "OPENAI_API_KEY"}))
+;; Provider = connection details
+(def provider (openai/->openai))
+
+;; Task = provider + configuration
+(def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
 
 ;; Generate text
 (llm/generate ai "What is the meaning of life?")
 ;; => "The meaning of life is a profound philosophical question..."
 ```
 
-## Core Philosophy: Just Data
+## Core Design
 
-Everything in clj-llm is plain data. Backends are maps. Options are maps. Responses are maps. This means you can:
+### Input-last, threads with `->>`
 
-- Compose with any Clojure function
-- Serialize/deserialize configuration
-- Transform responses with standard tools
-- Debug by printing everything
-- Test without mocking
-
-**Explicit boundaries** keep things clear:
-- `:llm/*` options control the library (schemas, message history)
-- `:provider/opts` passes through directly to the provider
-
-## Show Me: From Simple to Sophisticated
-
-### Type-safe Data Extraction
+The input (string or message history) is always the last argument:
 
 ```clojure
-;; Define what you want with Malli
+;; Pipeline — output flows naturally
+(->> "Raw technical document with errors"
+     (llm/generate ai {:system-prompt "Fix grammar and spelling"})
+     (llm/generate ai {:system-prompt "Simplify for a general audience"})
+     (llm/generate ai {:system-prompt "Translate to French"}))
+```
+
+### Natural returns
+
+`generate` returns the value you actually want:
+
+```clojure
+;; Text → string
+(llm/generate ai "hello")
+;; => "Hello! How can I help?"
+
+;; Schema → parsed map
+(llm/generate ai {:schema person-schema} "Marie Curie was a 66yo physicist")
+;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
+
+;; Tools → vector of calls (with metadata for history)
+(llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")
+;; => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+```
+
+### Providers are just maps
+
+```clojure
+;; Provider = just the connection
+(def provider (openai/->openai))
+
+;; Defaults = what you want it to do
+(def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
+
+;; Layer more config with merge
+(def extractor (update ai :defaults merge
+                        {:system-prompt "Extract structured data"
+                         :schema person-schema}))
+
+;; Use it
+(llm/generate extractor "Marie Curie was a 66yo physicist")
+;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
+
+;; Override per-call when needed
+(llm/generate extractor {:model "gpt-4o"} "Albert Einstein...")
+```
+
+## Structured Output
+
+```clojure
 (def invoice-schema
   [:map
    [:invoice-number :string]
    [:total [:double {:min 0}]]
    [:items [:vector [:map [:name :string] [:price :double]]]]])
 
-;; Extract it reliably
-(llm/generate ai invoice-text {:llm/schema invoice-schema})
+(llm/generate ai {:schema invoice-schema} invoice-text)
 ;; => {:invoice-number "INV-001" :total 150.0 :items [...]}
 ```
 
-### Streaming That Actually Works
+## Streaming
 
 ```clojure
-;; Stream text as it arrives
-(doseq [chunk (llm/stream ai "Write a long story")]
-  (print chunk) (flush))
+;; Print as it streams, get full text back
+(llm/stream-print ai "Write a long story")
 
-;; Or access the full response object
-(let [response (llm/prompt ai "Analyze this data")]
-  @(:text response)      ; Complete text when ready
-  @(:usage response)     ; Token usage stats
-  (:chunks response))    ; Stream of chunks
+;; Channel for custom processing
+(let [ch (llm/stream ai "Count to 10")]
+  (loop []
+    (when-let [chunk (<!! ch)]
+      (print chunk) (flush)
+      (recur))))
 ```
 
-### Provider Flexibility
+## Conversations
+
+Message history is just a vector you pass as input:
 
 ```clojure
-;; OpenAI
-(def openai (openai/backend {:api-key-env "OPENAI_API_KEY"}))
-
-;; Local models (Ollama, LM Studio, etc)
-(def local (openai/backend {:api-base "http://localhost:11434/v1"
-                           :api-key "not-needed"}))
-
-;; OpenRouter (access 100+ models)
-(def router (openai/backend {:api-key-env "OPENROUTER_API_KEY"
-                            :api-base "https://openrouter.ai/api/v1"}))
-
-;; Switch providers without changing your code
-(llm/generate any-of-them "Same interface everywhere")
-```
-
-## Real-world Examples
-
-### Document Analysis Pipeline
-
-```clojure
-(def analysis-schema
-  [:map
-   [:key-points [:vector :string]]
-   [:sentiment [:enum "positive" "negative" "neutral"]]
-   [:action-items [:vector :string]]
-   [:confidence [:double {:min 0 :max 1}]]])
-
-(defn analyze-document [doc]
-  (llm/generate ai doc {:llm/schema analysis-schema
-                        :llm/system-prompt "You are a document analyst."}))
-```
-
-### Conversational AI with Memory
-
-```clojure
-(def conversation (atom [{:role :system :content "You are a helpful coding assistant"}]))
+(def conversation
+  (atom [{:role :system :content "You are a helpful coding assistant"}]))
 
 (defn chat! [message]
   (swap! conversation conj {:role :user :content message})
-  (let [response (llm/generate ai nil {:llm/messages @conversation})]
+  (let [response (llm/generate ai @conversation)]
     (swap! conversation conj {:role :assistant :content response})
     response))
 
 (chat! "How do I reverse a list in Clojure?")
-(chat! "What about in Python?") ; Remembers context
+(chat! "What about in Python?")  ;; remembers context
 ```
 
-## Error Handling That Doesn't Suck
+## Tool Calling
 
-Comprehensive error categorization with helpful context:
+```clojure
+(def weather-tool
+  [:map {:name "get_weather" :description "Get weather for a city"}
+   [:city {:description "City name"} :string]])
+
+;; Returns a vector of tool calls
+(let [calls (llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")]
+  ;; calls => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+  ;; (meta calls) => {:message {:role :assistant :tool_calls [...]}}
+
+  ;; Build history and feed results back
+  (let [msg     (:message (meta calls))
+        results (mapv #(llm/tool-result (:id %) "Sunny, 22°C") calls)
+        history (into [{:role :user :content "Weather in Tokyo?"} msg] results)]
+    (llm/generate ai history)))
+;; => "It's sunny and 22°C in Tokyo!"
+```
+
+### Agentic Loop
+
+```clojure
+(defn execute [{:keys [name arguments]}]
+  (case name
+    "get_weather" (str "Sunny, 22°C in " (:city arguments))))
+
+(llm/run-agent ai {:tools [weather-tool]} execute "Weather in Tokyo?")
+;; => {:text "It's sunny and 22°C in Tokyo!"
+;;     :history [...]
+;;     :steps [{:tool-calls [...] :tool-results [...]}]}
+```
+
+## Provider Flexibility
+
+```clojure
+;; OpenAI
+(def openai (openai/->openai))
+
+;; Local models (Ollama, LM Studio, etc)
+(def local (openai/->openai {:api-base "http://localhost:11434/v1"
+                             :api-key "not-needed"}))
+
+;; OpenRouter (access 100+ models)
+(def router (openai/->openai {:api-key-env "OPENROUTER_API_KEY"
+                              :api-base "https://openrouter.ai/api/v1"}))
+
+;; Same code, any provider
+(def ai (assoc any-provider :defaults {:model "gpt-4o-mini"}))
+(llm/generate ai "Same interface everywhere")
+```
+
+## Error Handling
 
 ```clojure
 (require '[co.poyo.clj-llm.errors :as errors])
 
 (try
-  (llm/generate ai "Hello" {:model "invalid-model"})
+  (llm/generate ai {:model "invalid-model"} "Hello")
   (catch Exception e
     (case (errors/error-type e)
       :llm/rate-limit    (println "Rate limited, retry in" (errors/retry-after e) "ms")
@@ -157,38 +216,34 @@ Comprehensive error categorization with helpful context:
       (throw e))))
 ```
 
-## Advanced Features
+## Full Response Access
 
-**Cross-platform:** Same code works in Clojure and Babashka—develop with rich tooling, deploy lightweight.
+When you need token usage or raw events, use `prompt` directly:
 
-**Composable:** Integrate with core.async, transducers, or any Clojure library without friction.
+```clojure
+(def resp (llm/prompt ai "Explain AI briefly"))
 
-**Observable:** Built-in access to token usage, timing, and raw events for monitoring and debugging.
+@resp              ;; block for text (IDeref)
+@(:text resp)      ;; same
+@(:usage resp)     ;; token counts
+(:chunks resp)     ;; channel of text chunks
+(:events resp)     ;; channel of raw events
+```
 
 ## Try It Now
 
 ```bash
 # Interactive chat REPL
-./scripts/chat_repl.clj gpt-4o-mini
+./scripts/chat.clj gpt-4o-mini
 
-# See structured output in action
-./scripts/malli_schemas_example.clj
+# See structured output in action  
+./scripts/generate.clj
 
 # Test streaming
-./scripts/test_streaming.clj
+./scripts/streaming.clj
+
+# Tool calling
+./scripts/tools.clj
 ```
 
-## What's Next?
-
-- Browse [examples.md](examples.md) for comprehensive code samples
-- Check the `/scripts` directory for working examples
-- Start with `llm/generate` for simple cases
-- Add schemas when you need structured data
-- Use streaming for long responses
-- Access the full response object for advanced control
-
 Built with ❤️ for Clojure developers who value simplicity and control.
-
----
-
-*Questions? Issues? Check out our [docs](doc/) or open an issue.*

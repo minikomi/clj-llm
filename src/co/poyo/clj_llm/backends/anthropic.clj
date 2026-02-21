@@ -110,14 +110,14 @@
     :api-base    - API base URL (default: https://api.anthropic.com)
     :api-version - API version (default: 2023-06-01)
 
-   Use llm/with-defaults to set model, system-prompt, schema, etc."
+   Set :defaults on the provider to configure model, system-prompt, schema, etc."
   ([] (->anthropic {}))
   ([config]
    (let [unknown (seq (remove anthropic-config-keys (keys config)))]
      (when unknown
        (throw (errors/error
                (str "Unknown provider config keys: " (pr-str (vec unknown))
-                    ". Use llm/with-defaults for prompt options.")
+                    ". Set :defaults on the provider for prompt options.")
                {:unknown-keys (vec unknown)
                 :valid-keys anthropic-config-keys}))))
    (let [api-env     (or (:api-key-env config) (:api-key-env default-config))

@@ -106,14 +106,14 @@
     :api-key-env - env var name (default: OPENAI_API_KEY)
     :api-base    - API base URL (default: https://api.openai.com/v1)
 
-   Use llm/with-defaults to set model, system-prompt, schema, etc."
+   Set :defaults on the provider to configure model, system-prompt, schema, etc."
   ([] (->openai {}))
   ([config]
    (let [unknown (seq (remove openai-config-keys (keys config)))]
      (when unknown
        (throw (errors/error
                (str "Unknown provider config keys: " (pr-str (vec unknown))
-                    ". Use llm/with-defaults for prompt options.")
+                    ". Set :defaults on the provider for prompt options.")
                {:unknown-keys (vec unknown)
                 :valid-keys openai-config-keys}))))
    (let [api-env  (or (:api-key-env config) (:api-key-env default-config))

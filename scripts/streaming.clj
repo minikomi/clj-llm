@@ -5,18 +5,19 @@
          '[clojure.core.async :refer [<!!]])
 
 ;; Works with OPENAI_API_KEY or OPENROUTER_KEY
-(def ai
+(def provider
   (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
-    (-> (if openrouter-key
-          (openai/->openai {:api-key openrouter-key
-                            :api-base "https://openrouter.ai/api/v1"})
-          (openai/->openai))
-        (llm/with-defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))))
+    (if openrouter-key
+      (openai/->openai {:api-key openrouter-key
+                        :api-base "https://openrouter.ai/api/v1"})
+      (openai/->openai))))
 
-;; Easy way — prints as it streams, returns full text
+(def ai (assoc provider :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))
+
+;; Easy way — prints as it streams, returns full text string
 (println "--- stream-print ---")
 (def result (llm/stream-print ai "Tell me a very short story about a robot."))
-(println "(returned" (count (:text result)) "chars)")
+(println "(returned" (count result) "chars)")
 
 ;; Channel way — for custom processing
 (println "\n--- raw channel ---")
