@@ -237,16 +237,18 @@
           raw-tool-calls)))
 
 (defn- tool-calls->assistant-message
-  "Build the assistant message for tool call history round-tripping."
-  [tool-calls]
-  {:role :assistant
-   :tool_calls (mapv (fn [{:keys [id name arguments]}]
-                      {:id id :type "function"
-                       :function {:name name
-                                  :arguments (if (string? arguments)
-                                               arguments
-                                               (json/generate-string arguments))}})
-                    tool-calls)})
+  "Build the assistant message for tool call history round-tripping.
+   Includes :content when the model returned text alongside tool calls."
+  [tool-calls text]
+  (cond-> {:role :assistant
+           :tool_calls (mapv (fn [{:keys [id name arguments]}]
+                              {:id id :type "function"
+                               :function {:name name
+                                          :arguments (if (string? arguments)
+                                                       arguments
+                                                       (json/generate-string arguments))}})
+                            tool-calls)}
+    (not (empty? text)) (assoc :content text)))
 
 (defn generate
   "Blocking generation. Returns the natural value:
@@ -276,11 +278,12 @@
          text     @(:text response)
          _        (when (instance? Exception text) (throw text))]
      (cond
-       ;; Tools mode: return tool-calls vector with :message in meta, or text if no calls
+       ;; Tools mode: return tool-calls vector with meta, or text if no calls
        (:tools merged)
        (let [tc (parse-tool-calls @(:tool-calls response))]
          (if (seq tc)
-           (with-meta tc {:message (tool-calls->assistant-message tc)})
+           (with-meta tc (cond-> {:message (tool-calls->assistant-message tc text)}
+                          (not (empty? text)) (assoc :text text)))
            text))
 
        ;; Schema mode: return structured data directly
