@@ -1,94 +1,40 @@
 (ns co.poyo.clj-llm.sandbox
-  "REPL-friendly commands for testing all features of clj-llm"
+  "REPL-friendly examples for clj-llm"
   (:require [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.backends.openai :as openai]
-            [co.poyo.clj-llm.errors :as errors]
-            [clojure.core.async :refer [<!!]]
-            [clojure.pprint :as pp]
-            [cheshire.core :as json]))
+            [clojure.core.async :refer [<!!]]))
 
 (comment
-  ;; ==========================================
-  ;; SETUP - Create backends for testing
-  ;; ==========================================
 
-  ;; OpenAI backend
-  (def openai-backend
-    (openai/->openai))
+  ;; ══════════════════════════════════════
+  ;; Setup
+  ;; ══════════════════════════════════════
 
-  (:defaults openai-backend)
+  (def ai (openai/->openai))
 
-  @(llm/prompt openai-backend "hi" {:model "gpt-5-nano"
-                                    :provider-opts {:verbosity "low"
-                                                         :reasoning-effort "minimal"}})
+  (def ai-mini
+    (llm/with-defaults ai {:model "gpt-4o-mini"}))
 
-  (def gpt-5-nano-backend
-    (llm/with-defaults openai-backend
-      {:model "gpt-5-nano"
-       :provider-opts {:verbosity "high"
-                       :reasoning-effort "minimal"}}))
+  ;; ══════════════════════════════════════
+  ;; Basic text
+  ;; ══════════════════════════════════════
 
-  @(llm/prompt gpt-5-nano-backend "hi")
+  (llm/generate ai-mini "What is 2+2?")
 
-  (def CatResponse)
+  (llm/generate ai-mini "Write a haiku"
+                {:system-prompt "You are a poet"})
 
-  @(-> (openai/->openai)
-       (llm/with-defaults
-         {:model "gpt-4o-mini"
-          :system-prompt "you are a cat you love emojis, and hate dogs"
-          :schema [:map
-                   [:cat-like-answer
-                    {:description "lots of meows answer to the question. but make it CAT like. no emojis"}
-                    :string]
-                   [:emojis [:vector :string]]]})
-       (llm/prompt "What is 2+2?")
-       :structured)
+  ;; ══════════════════════════════════════
+  ;; Structured output
+  ;; ══════════════════════════════════════
 
-  @(:text a)
-
-  (def evts (drain-channel (:events a)))
-
-  evts
-
-  ;; ==========================================
-  ;; BASIC TEXT GENERATION
-  ;; ==========================================
-
-  ;; Simple text generation
-  @(:text (llm/prompt openai-backend "What is 2+2?"))
-
-  ;; With temperature control
-  (llm/generate openai-backend
-                "Write a creative story opening"
-                {:temperature 0.9})
-
-  ;; With specific model
-  (llm/generate openai-backend
-                "Explain quantum computing"
-                {:model "gpt-4.1-nano"
-                 :max-tokens 200})
-
-  ;; With system prompt
-  (llm/generate openai-backend
-                "How do I make a flat white?"
-                {:system-prompt "You are a cat pretending to be a professional barista but failing"})
-
-  ;; ==========================================
-  ;; STRUCTURED OUTPUT WITH MALLI SCHEMAS
-  ;; ==========================================
-
-  ;; Simple person extraction
-  (def person-schema
-    [:map
-     [:name :string]
-     [:age :int]
-     [:occupation :string]])
-
-  (llm/generate openai-backend
+  (llm/generate ai-mini
                 "Extract: Marie Curie was a 66 year old physicist"
-                {:schema person-schema})
+                {:schema [:map
+                          [:name :string]
+                          [:age :int]
+                          [:occupation :string]]})
 
-  ;; Complex nested schema
   (def company-schema
     [:map
      [:name :string]
@@ -99,212 +45,87 @@
                            [:salary :int]]]]
      [:locations [:vector :string]]])
 
-  (llm/generate openai-backend
-                "Extract: TechCorp was founded in 2010. Employees: Alice (CEO, $200k), Bob (Engineer, $120k). Offices in NYC and SF."
+  (llm/generate ai-mini
+                "TechCorp founded 2010. Alice CEO $200k, Bob Engineer $120k. NYC and SF."
                 {:schema company-schema})
 
-  ;; ==========================================
-  ;; STREAMING RESPONSES
-  ;; ==========================================
+  ;; ══════════════════════════════════════
+  ;; Streaming
+  ;; ══════════════════════════════════════
 
-  ;; Basic streaming
-  (let [chunks (llm/stream openai-backend "Tell me a story about a robot." {:model "gpt-4.1-mini"})]
+  (llm/stream-print ai-mini "Tell me a story about a robot.")
+
+  ;; Raw channel if you need it
+  (let [ch (llm/stream ai-mini "Count to 5")]
     (loop []
-      (when-let [chunk (<!! chunks)]
+      (when-let [chunk (<!! ch)]
         (print chunk)
         (flush)
         (recur))))
 
-  ;; Stream with error handling
-  (let [chunks (llm/stream openai-backend "Invalid model test" {:model "fake-model"})]
-    (println chunks)
-    (loop []
-      (when-let [chunk (<!! chunks)]
-        (if (map? chunk)
-          (println "\nError received:" (:error chunk))
-          (print chunk))
-        (recur))))
+  ;; ══════════════════════════════════════
+  ;; Tool calling
+  ;; ══════════════════════════════════════
 
-  ;; ==========================================
-  ;; RAW EVENTS STREAM
-  ;; ==========================================
+  (def weather-tool
+    [:map {:name "get_weather" :description "Get weather for a city"}
+     [:city {:description "City name"} :string]])
 
-  ;; Monitor all events
-  (let [events (llm/events openai-backend "Hello world")]
-    (loop []
-      (when-let [event (<!! events)]
-        (println "Event:" (:type event))
-        (when (= :usage (:type event))
-          (println "Token usage:" (dissoc event :type)))
-        (when (= :content (:type event))
-          (print (:content event)))
-        (recur))))
+  (llm/generate ai-mini "What's the weather in Tokyo?"
+                {:tools [weather-tool]})
+  ;; => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
 
-  ;; ==========================================
-  ;; ADVANCED PROMPT FUNCTION
-  ;; ==========================================
+  ;; ══════════════════════════════════════
+  ;; Full response (prompt)
+  ;; ══════════════════════════════════════
 
-  ;; Rich response object
-  (def resp (llm/prompt openai-backend "Explain artificial intelligence"))
+  (def resp (llm/prompt ai-mini "Explain AI briefly"))
 
-  ;; Deref for text
-  @resp
+  @resp              ;; text (IDeref)
+  @(:text resp)      ;; same
+  @(:usage resp)     ;; token counts
 
-  ;; Access different aspects
-  @(:text resp)       ;; Full text promise
-  @(:usage resp)      ;; Token usage info
-  (:chunks resp)      ;; Text chunks channel
-  (:events resp)      ;; Raw events channel
+  ;; ══════════════════════════════════════
+  ;; Building agents
+  ;; ══════════════════════════════════════
 
-  ;; With structured output
-  (def structured-resp
-    (llm/prompt openai-backend
-                "Extract: John is 30 years old"
-                {:schema person-schema}))
+  (def cat-agent
+    (llm/with-defaults ai
+      {:model "gpt-4o-mini"
+       :system-prompt "You are a cat. Be brief. Love emojis."
+       :schema [:map
+                [:cat-answer :string]
+                [:emojis [:vector :string]]]}))
 
-  @(:structured structured-resp)  ;; Structured data
+  (llm/generate cat-agent "What is 2+2?")
 
-  ;; ==========================================
-  ;; CONVERSATION HANDLING
-  ;; ==========================================
+  ;; Override per-call
+  (llm/generate cat-agent "What is 2+2?" {:model "gpt-4o"})
 
-  ;; Simple conversation
-  (def messages
-    [{:role :system :content "You are a helpful assistant"}
-     {:role :user :content "My name is Alice"}
-     {:role :assistant :content "Nice to meet you, Alice!"}
-     {:role :user :content "What's my name?"}])
+  ;; ══════════════════════════════════════
+  ;; Conversations
+  ;; ══════════════════════════════════════
 
-  (llm/generate openai-backend nil {:messages messages})
+  (def conversation
+    (atom [{:role :system :content "You are a helpful coding assistant"}]))
 
-  ;; Building conversation incrementally
-  (def conversation (atom []))
+  (defn chat! [msg]
+    (swap! conversation conj {:role :user :content msg})
+    (let [response (llm/generate ai-mini nil {:message-history @conversation})]
+      (swap! conversation conj {:role :assistant :content response})
+      response))
 
-  ;; Add system message
-  (swap! conversation conj {:role :system :content "You are a poet"})
+  (chat! "How do I reverse a list in Clojure?")
+  (chat! "What about in Python?")
 
-  ;; Add user message and get response
-  (swap! conversation conj {:role :user :content "Write a haiku about code"})
-  (def response (llm/generate openai-backend nil {:messages @conversation}))
-  (swap! conversation conj {:role :assistant :content response})
+  ;; ══════════════════════════════════════
+  ;; Error handling
+  ;; ══════════════════════════════════════
 
-  ;; Continue conversation
-  (swap! conversation conj {:role :user :content "Now write one about bugs"})
-  (llm/generate openai-backend nil {:messages @conversation})
-
-  ;; ==========================================
-  ;; ERROR HANDLING TESTING
-  ;; ==========================================
-
-  ;; Test invalid API key
   (try
-    (let [bad-backend (openai/backend {:api-key "invalid-key"})]
-      (llm/generate bad-backend "test"))
+    (llm/generate ai-mini "test" {:model "fake-model"})
     (catch Exception e
-      (println "Retryable?" (errors/retryable? e))
-      (println "Message:" (.getMessage e))
+      (println "Error:" (.getMessage e))
       (println "Data:" (ex-data e))))
 
-  ;; Test invalid model
-  (try
-    (llm/generate openai-backend "test" {:model "fake-model"})
-    (catch Exception e
-      (println "Message:" (.getMessage e))
-      (pp/pprint (ex-data e))))
-
-  ;; Test network timeout (if backend supports it)
-  (try
-    (llm/generate openai-backend "test" {:timeout-ms 1})
-    (catch Exception e
-      (println "Timeout error:" (.getMessage e))))
-
-  ;; ==========================================
-  ;; BACKEND COMPARISON
-  ;; ==========================================
-
-  ;; Same prompt with different backends
-  (def test-prompt "Write a one-sentence summary of machine learning")
-
-  ;; OpenAI
-  (println "OpenAI:")
-  (println (llm/generate openai-backend test-prompt))
-
-  ;; To test with other backends, create them first:
-  ;; (def anthropic-backend (anthropic/backend))
-  ;; (println "\nAnthropic:")
-  ;; (println (llm/generate anthropic-backend test-prompt))
-
-  ;; ==========================================
-  ;; PERFORMANCE TESTING
-  ;; ==========================================
-
-  ;; Time a simple generation
-  (time (llm/generate openai-backend "Hello" {:model "gpt-4o-mini"}))
-
-  ;; Concurrent requests
-  (def futures
-    (doall
-     (for [i (range 3)]
-       (future (llm/generate openai-backend (str "Count to " (inc i)))))))
-
-  ;; Wait for all and collect results
-  (doseq [f futures]
-    (println @f))
-
-  ;; ==========================================
-  ;; CONFIGURATION TESTING
-  ;; ==========================================
-
-  ;; Test all configuration options
-  (llm/generate openai-backend
-                "Be creative"
-                {:model "gpt-4o-mini"
-                 :temperature 0.7
-                 :max-tokens 100
-                 :top-p 0.9
-                 :frequency-penalty 0.1
-                 :presence-penalty 0.1
-                 :stop ["END" "\n\n"]
-                 :seed 12345})
-
-  ;; Test with custom headers (backend-specific)
-  (llm/generate openai-backend
-                "Hello"
-                {:headers {"X-Custom-Header" "test-value"}})
-
-  ;; ==========================================
-  ;; UTILITY FUNCTIONS FOR TESTING
-  ;; ==========================================
-
-  ;; Helper to test streaming with timing
-  (defn time-stream [backend prompt]
-    (let [start (System/currentTimeMillis)
-          chunks (llm/stream backend prompt)
-          collected (atom [])]
-      (loop []
-        (when-let [chunk (<!! chunks)]
-          (swap! collected conj chunk)
-          (recur)))
-      {:duration-ms (- (System/currentTimeMillis) start)
-       :chunks @collected
-       :total-chars (reduce + (map count @collected))}))
-
-  ;; Test streaming performance
-  (time-stream openai-backend "Write a short paragraph about AI")
-
-  ;; Helper to validate schema results
-  (defn test-schema-extraction [backend text schema]
-    (try
-      (let [result (llm/generate backend text {:schema schema})]
-        {:success true :result result})
-      (catch Exception e
-        {:success false :error (ex-message e) :data (ex-data e)})))
-
-  ;; Test schema validation
-  (test-schema-extraction
-   openai-backend
-   "John is 25 years old and works as a teacher"
-   person-schema)
-
-  ;; End of comment block - all commands above are ready to eval in REPL
   )

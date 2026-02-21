@@ -1,6 +1,5 @@
 (ns co.poyo.clj-llm.schema
   (:require [malli.core :as m]
-            [clojure.repl]
             [clojure.string :as str]))
 
 (declare malli->json-schema)
@@ -101,48 +100,3 @@
 
          (assoc base-schema :type "object"))))))
 
-;; sometimes we have this kind of abstract function
-;; (meta f)
-;; #:malli.instrument{:original #function[co.poyo.clj-llm.sandbox/transfer-money]}
-(defn f->meta [f]
-  (let [str-f (str (or (:malli.instrument/original (meta f)) f))]
-    (try
-      (-> str-f
-          (clojure.repl/demunge)
-          (clojure.string/replace #"@.*$" "")
-          (clojure.string/replace #"^#'" "")
-          (symbol)
-          (find-var)
-          (meta))
-      (catch Exception e
-        ;; Fallback for Babashka/SCI environments where find-var might fail
-        (when (System/getProperty "babashka.version")
-          (throw (ex-info "Malli instrumented function extraction not supported in Babashka"
-                          {:function f
-                           :suggestion "Use the malli_schemas_example.clj instead"}
-                          e)))
-        (throw e)))))
-
-(defn get-schema-from-malli-function-registry
-  [f]
-  (let [f-meta (f->meta f)
-        fn-namespace-sym (-> f-meta :ns str symbol)
-        fn-name-sym (-> f-meta :name)]
-    (m/deref (get-in (m/function-schemas) [fn-namespace-sym fn-name-sym :schema]))))
-
-(defn instrumented-function->malli-schema
-  [f]
-  (let [f-meta (f->meta f)
-        f-name (or (-> f-meta :name str) "unnamed-function")
-        full-f-schema (get-schema-from-malli-function-registry f)]
-    (when-not full-f-schema
-        (throw (ex-info "No schema found via m/=> registry" {:fn f-name})))
-    (when-not
-        (and (= :=> (first (m/form full-f-schema))) (>= (count (m/form full-f-schema)) 3))
-      (throw (ex-info "Schema is not a valid :=> schema" {:fn f-name :schema full-f-schema})))
-    (let [input-cat-schema (second (m/form full-f-schema))]
-      (when-not (and (vector? input-cat-schema)
-                     (= :cat (first input-cat-schema))
-                     (= 2 (count input-cat-schema)))
-        (throw (ex-info "Input schema structure not [:cat [:map ...]]" {:fn f-name :schema full-f-schema})))
-       (second input-cat-schema))))
