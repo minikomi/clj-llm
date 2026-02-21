@@ -28,3 +28,4 @@
 /.env
 working.org
 /.clj-kondo/
+.chat-data/
