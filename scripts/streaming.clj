@@ -14,14 +14,14 @@
 
 (def ai (assoc provider :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))
 
-;; Easy way — prints as it streams, returns full text string
+;; stream-print: prints chunks live, returns full text
 (println "--- stream-print ---")
-(def result (llm/stream-print ai "Tell me a very short story about a robot."))
-(println "(returned" (count result) "chars)")
+(let [text (llm/stream-print ai "Write a haiku about Clojure")]
+  (println "\nGot back:" (count text) "chars"))
 
-;; Channel way — for custom processing
-(println "\n--- raw channel ---")
-(let [ch (llm/stream ai "Count to 5, one per line.")]
+;; stream: returns a channel of text chunks
+(println "\n--- stream channel ---")
+(let [ch (llm/stream ai "Count from 1 to 5, one per line")]
   (loop []
     (when-let [chunk (<!! ch)]
       (print chunk)
@@ -29,11 +29,12 @@
       (recur)))
   (println))
 
-;; Events — see everything the provider sends
-(println "\n--- events ---")
-(let [ch (llm/events ai "Say hi.")]
+;; stream with opts
+(println "\n--- stream with system prompt ---")
+(let [ch (llm/stream ai {:system-prompt "Respond only in ALL CAPS"} "Say hello")]
   (loop []
-    (when-let [event (<!! ch)]
-      (println event)
-      (when-not (= :done (:type event))
-        (recur)))))
+    (when-let [chunk (<!! ch)]
+      (print chunk)
+      (flush)
+      (recur)))
+  (println))

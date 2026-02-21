@@ -25,14 +25,13 @@
 
 ;; Single tool call — returns a vector of tool calls
 (println "--- single tool ---")
-(let [result (llm/generate ai "What's the weather in Tokyo?"
-                           {:tools [get-weather]})]
+(let [result (llm/generate ai {:tools [get-weather]} "What's the weather in Tokyo?")]
   (println result))
 
 ;; Multiple tools — model picks which to call
 (println "\n--- multiple tools ---")
-(let [result (llm/generate ai "Weather in Paris and find Italian restaurants there"
-                           {:tools [get-weather search-restaurants]})]
+(let [result (llm/generate ai {:tools [get-weather search-restaurants]}
+                           "Weather in Paris and find Italian restaurants there")]
   (println result))
 
 ;; Agentic loop — call tools and feed results back
@@ -44,10 +43,9 @@
     (str "Unknown tool: " name)))
 
 ;; Using run-agent for the full loop
-(let [{:keys [text steps]} (llm/run-agent ai
-                                          "Weather in Tokyo and find ramen there"
-                                          [get-weather search-restaurants]
-                                          execute-tool)]
+(let [{:keys [text steps]} (llm/run-agent ai {:tools [get-weather search-restaurants]}
+                                          execute-tool
+                                          "Weather in Tokyo and find ramen there")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls tool-results]} steps]
     (doseq [tc tool-calls]
