@@ -288,45 +288,42 @@
            (if (instance? Exception s) (throw s) s))
          text)))))
 
-(defn tool
-  "Create a tool — a function with schema metadata. run-agent reads the schema
-   and calls the function when the model invokes it.
 
-   (def get-weather
-     (llm/tool
-       [:map {:name \"get_weather\" :description \"Get weather for a city\"}
-        [:city {:description \"City name\"} :string]]
-       (fn [{:keys [city]}]
-         (http/get (str \"https://weather.api/\" city)))))
 
-   ;; It's a regular function
-   (get-weather {:city \"Tokyo\"})
-   ;; => \"Sunny, 22°C\"
+(defn- resolve-tool-schema
+  "Get the Malli function schema ([:=> ...] or [:-> ...]) from a tool.
+   Supports:
+   - var with :malli/schema metadata (defn + {:malli/schema ...})
+   - var with :schema metadata (mx/defn)
+   - fn with :malli/schema metadata (with-meta)"
+  [tool]
+  (let [m (meta tool)]
+    (or (:malli/schema m)
+        (:schema m) ;; mx/defn puts :schema on var meta
+        (throw (errors/error
+                "Tool missing :malli/schema metadata. Use defn {:malli/schema ...} or mx/defn."
+                {:tool tool})))))
 
-   ;; run-agent reads the schema from metadata
-   (llm/run-agent ai [get-weather] \"Weather in Tokyo?\")
-
-   You can also put :tool/schema directly on any fn via defn metadata:
-
-   (defn get-weather
-     {:tool/schema [:map {:name \"get_weather\" :description \"...\"} [:city :string]]}
-     [{:keys [city]}]
-     (str \"Sunny in \" city))"
-  [schema f]
-  (with-meta f {:tool/schema schema}))
-
-(defn- tool-fn?
-  "Is x a function with :tool/schema metadata?"
-  [x]
-  (and (fn? x) (:tool/schema (meta x))))
-
-(defn- extract-tool-schema
-  "Get the Malli schema from a tool function."
-  [tool-fn]
-  (or (:tool/schema (meta tool-fn))
+(defn- extract-input-schema
+  "Extract the input map schema from a Malli function schema.
+   Supports [:=> [:cat <map-schema>] <ret>] and [:-> <map-schema> <ret>]."
+  [fn-schema]
+  (let [s (m/schema fn-schema)
+        t (m/type s)
+        ;; :-> is a flat proxy for :=> — deref to normalize
+        resolved (if (= :-> t) (m/deref s) s)
+        resolved-type (m/type resolved)]
+    (when-not (= :=> resolved-type)
       (throw (errors/error
-              "Tool missing :tool/schema metadata. Use llm/tool to create tools."
-              {:tool tool-fn}))))
+              "Tool schema must be [:=> [:cat ...] <return>] or [:-> <input> <return>]"
+              {:schema fn-schema})))
+    (let [input-schema (first (m/children resolved))
+          args (m/children (m/schema input-schema))]
+      (when (empty? args)
+        (throw (errors/error
+                "Tool function schema has no input arguments"
+                {:schema fn-schema})))
+      (first args))))
 
 (defn- extract-tool-name
   "Get the tool name from a Malli schema's properties."
@@ -346,11 +343,30 @@
   {:role :tool :tool-call-id tool-call-id :content (str content)})
 
 (defn run-agent
-  "Run an agentic tool-calling loop. Tools are functions created with `llm/tool`
-   or any fn with :tool/schema metadata. run-agent calls the model, executes
-   requested tools, feeds results back, repeats until the model returns text.
+  "Run an agentic tool-calling loop. Tools are plain functions with standard
+   Malli function schemas attached via metadata. Define tools with:
 
-   tools: vector of tool functions (each carries its own schema in metadata)
+   ;; defn + :malli/schema (recommended)
+   (defn get-weather
+     {:malli/schema [:=> [:cat [:map {:name \"get_weather\"
+                                      :description \"Get weather for a city\"}
+                                [:city :string]]]
+                        :string]}
+     [{:keys [city]}]
+     (str \"Sunny in \" city))
+
+   ;; Or mx/defn (malli.experimental)
+   (mx/defn get-weather :- :string
+     [args :- [:map {:name \"get_weather\" :description \"Get weather\"}
+                [:city :string]]]
+     (str \"Sunny in \" (:city args)))
+
+   The input :map schema carries :name and :description for the LLM.
+   Pass tool vars to run-agent:
+
+   (run-agent ai [#'get-weather] \"Weather in Tokyo?\")
+
+   tools: vector of tool vars or fns (each carries its schema in metadata)
 
    opts (optional):
      :max-steps  - max iterations (default 10)
@@ -362,9 +378,9 @@
      :history - full message history (reusable)
      :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
 
-   (run-agent ai [get-weather] \"Weather in Tokyo?\")
-   (run-agent ai [get-weather search] {:max-steps 5} \"Weather in Tokyo?\")
-   (run-agent ai [lookup] {:schema result-schema} \"find user 123\")"
+   (run-agent ai [#'get-weather] \"Weather in Tokyo?\")
+   (run-agent ai [#'get-weather #'search] {:max-steps 5} \"Weather in Tokyo?\")
+   (run-agent ai [#'lookup] {:schema result-schema} \"find user 123\")"
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
@@ -376,13 +392,14 @@
          _          (when-not (and (sequential? tools) (seq tools))
                       (throw (errors/error "run-agent requires a non-empty tools vector"
                                           {:tools tools})))
-         schemas    (mapv extract-tool-schema tools)
-         name->fn   (into {} (map (fn [t s] [(extract-tool-name s) t]) tools schemas))
+         fn-schemas (mapv resolve-tool-schema tools)
+         input-schemas (mapv extract-input-schema fn-schemas)
+         name->fn   (into {} (map (fn [t s] [(extract-tool-name s) t]) tools input-schemas))
          max-steps  (or (:max-steps opts) 10)
          schema     (:schema opts)
          base-opts  (-> opts
                         (dissoc :max-steps :schema)
-                        (assoc :tools schemas))]
+                        (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
             n 0]

@@ -13,30 +13,32 @@
 
 (def ai (assoc provider :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))
 
-;; Tools are functions with schema metadata.
-;; llm/tool attaches a Malli schema to a function.
+;; Tools are plain functions with standard Malli function schemas.
+;; The :malli/schema on the var tells run-agent what the LLM sees.
 
-(def get-weather
-  (llm/tool
-    [:map {:name "get_weather" :description "Get weather for a city"}
-     [:city {:description "City name"} :string]]
-    (fn [{:keys [city]}]
-      (str "Sunny, 22°C in " city))))
+(defn get-weather
+  {:malli/schema [:=> [:cat [:map {:name "get_weather"
+                                   :description "Get weather for a city"}
+                             [:city {:description "City name"} :string]]]
+                      :string]}
+  [{:keys [city]}]
+  (str "Sunny, 22°C in " city))
 
-(def search-restaurants
-  (llm/tool
-    [:map {:name "search_restaurants" :description "Search restaurants in a city"}
-     [:city {:description "City"} :string]
-     [:cuisine {:description "Cuisine type"} :string]]
-    (fn [{:keys [city cuisine]}]
-      (str "Found: " cuisine " place in " city))))
+(defn search-restaurants
+  {:malli/schema [:=> [:cat [:map {:name "search_restaurants"
+                                   :description "Search restaurants in a city"}
+                             [:city {:description "City"} :string]
+                             [:cuisine {:description "Cuisine type"} :string]]]
+                      :string]}
+  [{:keys [city cuisine]}]
+  (str "Found: " cuisine " place in " city))
 
 ;; Tools are regular functions — test them directly
 (println "Direct call:" (get-weather {:city "Tokyo"}))
 
-;; run-agent reads schemas from metadata, calls the fns when the model invokes them
+;; run-agent reads schemas from var metadata, calls the fns when the model invokes them
 (println "\n--- single tool agent ---")
-(let [{:keys [text steps]} (llm/run-agent ai [get-weather] "What's the weather in Tokyo?")]
+(let [{:keys [text steps]} (llm/run-agent ai [#'get-weather] "What's the weather in Tokyo?")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls]} steps]
     (doseq [tc tool-calls]
@@ -46,7 +48,7 @@
 ;; Multiple tools
 (println "\n--- multi-tool agent ---")
 (let [{:keys [text steps]} (llm/run-agent ai
-                             [get-weather search-restaurants]
+                             [#'get-weather #'search-restaurants]
                              "Weather in Tokyo and find ramen there")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls]} steps]
@@ -56,7 +58,7 @@
 
 ;; With options
 (println "\n--- with max-steps ---")
-(let [{:keys [text steps truncated]} (llm/run-agent ai [get-weather]
+(let [{:keys [text steps truncated]} (llm/run-agent ai [#'get-weather]
                                        {:max-steps 2}
                                        "Weather in Tokyo?")]
   (println "Steps:" (count steps) (when truncated "(truncated)"))
