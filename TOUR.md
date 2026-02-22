@@ -218,6 +218,27 @@ The schema lives in var metadata — standard Malli, nothing custom:
 ;; => [:=> [:cat [:map {:name "get_weather" ...} ...]] :string]
 ```
 
+All three standard Malli approaches work. You can also use `m/=>` to keep the schema separate:
+
+```clojure
+(defn get-weather [{:keys [city]}] (str "Sunny in " city))
+(m/=> get-weather [:=> [:cat [:map {:name "get_weather"
+                                    :description "Get weather"}
+                              [:city :string]]]
+                       :string])
+```
+
+Or `mx/defn` for inline schema hints:
+
+```clojure
+(require '[malli.experimental :as mx])
+
+(mx/defn get-weather :- :string
+  [args :- [:map {:name "get_weather" :description "Get weather"}
+             [:city :string]]]
+  (str "Sunny in " (:city args)))
+```
+
 ## 10. Running agents
 
 Pass tool vars to `run-agent`. It reads their `:malli/schema`, sends the input schemas to the model, and calls the functions when the model invokes them. The loop repeats until the model gives a final text response.
@@ -234,13 +255,13 @@ Pass tool vars to `run-agent`. It reads their `:malli/schema`, sends the input s
 Options go in an opts map between tools and input:
 
 ```clojure
-(llm/run-agent ai [get-weather] {:max-steps 3} "Weather in Tokyo?")
+(llm/run-agent ai [#'get-weather] {:max-steps 3} "Weather in Tokyo?")
 ```
 
 If your agent should return structured data, pass `:schema`:
 
 ```clojure
-(llm/run-agent ai [lookup] {:schema [:map [:name :string] [:status :string]]}
+(llm/run-agent ai [#'lookup] {:schema [:map [:name :string] [:status :string]]}
   "Look up user 123")
 ;; => {:text {:name "Alice" :status "active"} :history [...] :steps [...]}
 ```
@@ -315,10 +336,9 @@ The same code works with any provider. Only the connection changes.
 | Text generation | `(generate ai "prompt")` → string |
 | With options | `(generate ai {:system-prompt "..."} "prompt")` |
 | Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
-| Tool calling | `(run-agent ai [tool-fns] "prompt")` → `{:text ... :steps ...}` |
+| Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
 | Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
 | Conversations | `(generate ai history-vector)` |
-| Agent loop | `(run-agent ai {:tools t :execute exec-fn} "prompt")` |
 | Full access | `(prompt ai "prompt")` → Response record |
 
 Everything is data. Providers are maps. Options are maps. History is a vector. Compose with the tools Clojure already gives you.
