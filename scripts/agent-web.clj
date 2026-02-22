@@ -332,13 +332,12 @@ a { color:#8ab4f8; text-decoration:none }
                           step-displays []
                           n 0]
                      (let [result (llm/generate ai {:tools agent-tools} history)]
-                       (if (vector? result)
+                       (if-let [tool-calls (:tool-calls result)]
                          ;; Tool calls — execute and loop
                          (if (>= (inc n) max-steps)
                            (do (hk/send! ch (sse-event "chunk" "(max tool steps reached)") false)
                                (hk/close ch))
-                           (let [tool-calls result
-                                 tool-results (mapv (fn [tc] {:call tc :result (execute-tool tc)}) tool-calls)
+                           (let [tool-results (mapv (fn [tc] {:call tc :result (execute-tool tc)}) tool-calls)
                                  step-html (str "<div class='tool-step'>"
                                                (apply str
                                                  (map (fn [{:keys [call result]}]
@@ -350,7 +349,7 @@ a { color:#8ab4f8; text-decoration:none }
                                  result-msgs (mapv (fn [{:keys [call result]}]
                                                      (llm/tool-result (:id call) (str result)))
                                                    tool-results)
-                                 new-history (into (conj history (:message (meta result))) result-msgs)]
+                                 new-history (into (conj history (:message result)) result-msgs)]
                              (hk/send! ch (sse-event "step" step-html) false)
                              (recur new-history
                                     (conj step-displays {:calls (vec tool-calls)

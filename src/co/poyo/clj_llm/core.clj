@@ -278,12 +278,13 @@
          text     @(:text response)
          _        (when (instance? Exception text) (throw text))]
      (cond
-       ;; Tools mode: return tool-calls vector with meta, or text if no calls
+       ;; Tools mode: return map with :tool-calls, :text, :message — or plain string if no calls
        (:tools merged)
        (let [tc (parse-tool-calls @(:tool-calls response))]
          (if (seq tc)
-           (with-meta tc (cond-> {:message (tool-calls->assistant-message tc text)}
-                          (not (empty? text)) (assoc :text text)))
+           (cond-> {:tool-calls tc
+                    :message (tool-calls->assistant-message tc text)}
+             (not (empty? text)) (assoc :text text))
            text))
 
        ;; Schema mode: return structured data directly
@@ -328,10 +329,9 @@
             steps []
             n 0]
        (let [result (generate provider base-opts history)]
-         (if (vector? result)
+         (if-let [tool-calls (:tool-calls result)]
            ;; Tool calls - execute and loop
-           (let [tool-calls result
-                 msg (:message (meta tool-calls))]
+           (let [msg (:message result)]
              (if (>= (inc n) max-steps)
                {:text "" :history history :steps steps :truncated true}
                (let [tool-results (mapv (fn [tc]
@@ -346,7 +346,7 @@
                         (conj steps {:tool-calls (vec tool-calls)
                                      :tool-results (mapv :result tool-results)})
                         (inc n)))))
-           ;; Text response - done
+           ;; Text response - done (result is a plain string)
            {:text result
             :history (conj history {:role :assistant :content result})
             :steps steps}))))))
