@@ -20,6 +20,16 @@
          x))
      opts)))
 
+(defn normalize-messages
+  "Convert kebab-case keys in messages to snake_case for API compatibility.
+   Handles :tool-calls -> :tool_calls, :tool-call-id -> :tool_call_id."
+  [messages]
+  (mapv (fn [msg]
+          (cond-> msg
+            (:tool-calls msg)  (-> (assoc :tool_calls (:tool-calls msg)) (dissoc :tool-calls))
+            (:tool-call-id msg) (-> (assoc :tool_call_id (:tool-call-id msg)) (dissoc :tool-call-id))))
+        messages))
+
 (defn handle-error-response
   "Parse error response from API and create appropriate error event.
    provider-name is a string like \"openai\" or \"anthropic\"."

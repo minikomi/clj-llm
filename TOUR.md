@@ -205,7 +205,7 @@ Pass tools as an option. When the model wants to call tools, `generate` returns 
 ```clojure
 (def result (llm/generate ai {:tools [get-weather]} "What's the weather in Tokyo?"))
 ;; => {:tool-calls [{:id "call_abc123" :name "get_weather" :arguments {:city "Tokyo"}}]
-;;     :message {:role :assistant :tool_calls [{:id "call_abc123" :type "function" ...}]}}
+;;     :message {:role :assistant :tool-calls [{:id "call_abc123" :type "function" ...}]}}
 ```
 
 Everything you need is right there — `:tool-calls` to act on, `:message` for history round-tripping. If the model also returned text alongside tool calls, it's in `:text`.

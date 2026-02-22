@@ -80,7 +80,7 @@ The input (string or message history) is always the last argument:
 ;; Tools → map with :tool-calls, :text, :message
 (llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")
 ;; => {:tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
-;;     :message {:role :assistant :tool_calls [...]}}
+;;     :message {:role :assistant :tool-calls [...]}}
 ```
 
 ### Providers are just maps
@@ -161,7 +161,7 @@ Message history is just a vector you pass as input:
 (let [result (llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")]
   ;; result => {:tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
   ;;            :text nil
-  ;;            :message {:role :assistant :tool_calls [...]}}
+  ;;            :message {:role :assistant :tool-calls [...]}}
 
   ;; Build history and feed results back
   (let [{:keys [tool-calls message]} result

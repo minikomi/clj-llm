@@ -11,16 +11,24 @@
       (is (= "Test error" (ex-message err)))
       (is (= "bar" (:foo (ex-data err)))))))
 
-;; Retryable functionality removed during simplification
-#_(deftest test-retryable
-  (testing "Retryable errors"
-    (is (errors/retryable? (errors/error "test" {:status 429})))
-    (is (errors/retryable? (errors/error "test" {:status 500})))
-    (is (errors/retryable? (errors/error "test" {:status 502})))
-    (is (errors/retryable? (errors/error "test" {:status 503})))
-    (is (not (errors/retryable? (errors/error "test" {:status 401}))))
-    (is (not (errors/retryable? (errors/error "test" {:status 404}))))
-    (is (not (errors/retryable? (Exception. "regular"))))))
+(deftest test-error-type
+  (testing "error-type returns correct keyword for HTTP status codes"
+    (is (= :llm/rate-limit (errors/error-type (errors/error "test" {:status 429}))))
+    (is (= :llm/invalid-key (errors/error-type (errors/error "test" {:status 401}))))
+    (is (= :llm/invalid-key (errors/error-type (errors/error "test" {:status 403}))))
+    (is (= :llm/server-error (errors/error-type (errors/error "test" {:status 500}))))
+    (is (= :llm/server-error (errors/error-type (errors/error "test" {:status 503}))))
+    (is (= :llm/invalid-request (errors/error-type (errors/error "test" {:status 400}))))
+    (is (= :llm/unknown (errors/error-type (errors/error "test" {})))))
+  (testing "error-type returns nil for non-ExceptionInfo"
+    (is (nil? (errors/error-type (Exception. "regular"))))))
+
+(deftest test-retry-after
+  (testing "retry-after extracts value from error"
+    (let [err (errors/parse-http-error "openai" 429 {:error {:retry_after 60}})]
+      (is (= 60 (errors/retry-after err)))))
+  (testing "retry-after returns nil when not present"
+    (is (nil? (errors/retry-after (errors/error "test" {}))))))
 
 (deftest test-http-error-parsing
   (testing "401 Unauthorized"

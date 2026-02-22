@@ -152,9 +152,9 @@
       ;; :message for history round-tripping
       (let [msg (:message result)]
         (is (= :assistant (:role msg)))
-        (is (= 2 (count (:tool_calls msg))))
-        (is (= "function" (:type (first (:tool_calls msg)))))
-        (is (= "ping" (get-in msg [:tool_calls 0 :function :name])))))))
+        (is (= 2 (count (:tool-calls msg))))
+        (is (= "function" (:type (first (:tool-calls msg)))))
+        (is (= "ping" (get-in msg [:tool-calls 0 :function :name])))))))
 
 (deftest test-tool-calls-with-text
   (testing "when model returns both text and tool calls, text is in metadata"
@@ -177,7 +177,7 @@
   (testing "tool-result creates correct message map"
     (let [msg (llm/tool-result "call_abc" "Sunny, 22°C")]
       (is (= :tool (:role msg)))
-      (is (= "call_abc" (:tool_call_id msg)))
+      (is (= "call_abc" (:tool-call-id msg)))
       (is (= "Sunny, 22°C" (:content msg))))))
 
 (deftest test-generate-return-consistency

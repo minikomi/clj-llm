@@ -13,8 +13,7 @@
   [& maps]
   (apply merge-with
          (fn [v1 v2]
-           (cond
-             (and (map? v1) (map? v2)) (deep-merge v1 v2)
-             (and (vector? v1) (vector? v2)) (into v1 v2)
-             :else v2))
+           (if (and (map? v1) (map? v2))
+             (deep-merge v1 v2)
+             v2))
          (filter map? maps)))
