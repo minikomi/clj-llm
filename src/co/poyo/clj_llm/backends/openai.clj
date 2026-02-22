@@ -101,14 +101,14 @@
 
 (def ^:private openai-config-keys #{:api-key :api-key-env :api-base})
 
-(defn ->openai
+(defn backend
   "Create an OpenAI provider. Config keys:
     :api-key     - API key string
     :api-key-env - env var name (default: OPENAI_API_KEY)
     :api-base    - API base URL (default: https://api.openai.com/v1)
 
    Set :defaults on the provider to configure model, system-prompt, schema, etc."
-  ([] (->openai {}))
+  ([] (backend {}))
   ([config]
    (let [unknown (seq (remove openai-config-keys (keys config)))]
      (when unknown

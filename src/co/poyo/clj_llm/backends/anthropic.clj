@@ -104,7 +104,7 @@
 
 (def ^:private anthropic-config-keys #{:api-key :api-key-env :api-base :api-version})
 
-(defn ->anthropic
+(defn backend
   "Create an Anthropic provider. Config keys:
     :api-key     - API key string
     :api-key-env - env var name (default: ANTHROPIC_API_KEY)
@@ -112,7 +112,7 @@
     :api-version - API version (default: 2023-06-01)
 
    Set :defaults on the provider to configure model, system-prompt, schema, etc."
-  ([] (->anthropic {}))
+  ([] (backend {}))
   ([config]
    (let [unknown (seq (remove anthropic-config-keys (keys config)))]
      (when unknown

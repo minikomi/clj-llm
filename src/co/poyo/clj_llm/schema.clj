@@ -1,4 +1,14 @@
 (ns co.poyo.clj-llm.schema
+  "Malli schema → JSON Schema conversion for LLM tool/function calling.
+   
+   NOTE: Structured output is currently implemented by sending the schema
+   as a tool with tool_choice=required. This works across all providers
+   (OpenAI, Anthropic, OpenAI-compatible) but means:
+   - The model thinks it's calling a function, not filling a schema
+   - OpenAI's native response_format JSON mode is not used
+   - Tool names are auto-generated when not provided explicitly
+   
+   This is a pragmatic choice for provider-agnostic behavior."
   (:require [malli.core :as m]
             [clojure.string :as str]))
 

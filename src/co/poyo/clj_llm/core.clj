@@ -4,7 +4,7 @@
    [co.poyo.clj-llm.errors :as errors]
    [co.poyo.clj-llm.helpers :as helpers]
    [cheshire.core :as json]
-   [clojure.core.async :as a :refer [go-loop <! <!! chan]]
+   [clojure.core.async :as a :refer [go-loop <! <!! >! chan]]
    [malli.core :as m]
    [malli.error :as me]
    [malli.transform :as mt]))
@@ -14,19 +14,24 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (def ^:private known-keys
-  #{:model :system-prompt :schema :tools :tool-choice :timeout-ms :provider-opts})
+  #{:model :system-prompt :schema :tools :tool-choice :temperature :max-tokens :top-p :provider-opts})
 
 (def ^:private agent-keys
   "Additional keys accepted by run-agent."
   #{:tools :tool-choice :max-steps})
+
+;; Keys that get forwarded to the provider API (not consumed by clj-llm itself)
+(def ^:private api-forward-keys
+  #{:temperature :max-tokens :top-p})
 
 (defn- validate-opts [opts]
   (let [unknown (remove known-keys (keys opts))]
     (when (seq unknown)
       (throw (errors/error
               (str "Unknown options: " (pr-str (vec unknown)))
-              {:unknown-keys (vec unknown)
-               :valid-keys known-keys}))))
+              {:error-type   :llm/invalid-request
+               :unknown-keys (vec unknown)
+               :valid-keys   known-keys}))))
   opts)
 
 ;; ════════════════════════════════════════════════════════════════════
@@ -51,7 +56,7 @@
 ;; ════════════════════════════════════════════════════════════════════
 ;; Provider defaults — just data on the :defaults key.
 ;;
-;;   (def ai (assoc (openai/->openai) :defaults {:model "gpt-4o-mini"}))
+;;   (def ai (assoc (openai/backend) :defaults {:model "gpt-4o-mini"}))
 ;;   (def extractor (update ai :defaults merge {:schema person-schema}))
 ;;
 ;; generate merges :defaults with per-call opts (per-call wins).
@@ -71,14 +76,16 @@
         result
         (throw (errors/error
                 "Schema validation failed"
-                {:schema schema
+                {:error-type :llm/invalid-request
+                 :schema schema
                  :value result
                  :errors (me/humanize (m/explain schema result))}))))
     (catch clojure.lang.ExceptionInfo e (throw e))
     (catch Exception e
       (throw (errors/error
               "Failed to parse structured output"
-              {:schema schema :input text})))))
+              {:error-type :llm/invalid-request
+               :schema schema :input text})))))
 
 (defn- build-messages
   "Coerce input to a messages vector.
@@ -92,7 +99,22 @@
     (nil? input)    []
     :else (throw (errors/error
                   (str "Input must be a string, vector, or nil — got " (type input))
-                  {:input input}))))
+                  {:error-type :llm/invalid-request
+                   :input input}))))
+
+(defn- extract-provider-opts
+  "Pull :temperature, :max-tokens, :top-p and :provider-opts from merged opts.
+   Promoted keys are merged into :provider-opts (explicit :provider-opts wins on conflict)."
+  [opts]
+  (let [promoted (select-keys opts api-forward-keys)
+        explicit (:provider-opts opts)
+        ;; rename :max-tokens -> :max_tokens for the API
+        promoted (if (contains? promoted :max-tokens)
+                   (-> promoted
+                       (assoc :max_tokens (:max-tokens promoted))
+                       (dissoc :max-tokens))
+                   promoted)]
+    (merge promoted explicit)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Event stream consumer
@@ -119,10 +141,10 @@
               tc-index {}] ;; maps provider index -> position in tool-calls vec
       (if-let [event (<! source-chan)]
         (do
-          (a/offer! events-chan event)
+          (>! events-chan event)
           (case (:type event)
             :content
-            (do (a/offer! text-chunks-chan (:content event))
+            (do (>! text-chunks-chan (:content event))
                 (recur (conj chunks (:content event)) tool-calls tc-index))
 
             :tool-call
@@ -152,7 +174,8 @@
             :error
             (do (when-not (realized? structured-promise)
                   (deliver structured-promise (Exception. (str (:error event)))))
-                (finalize! (errors/error "LLM request failed" {:event event}) nil))
+                (finalize! (errors/error "LLM request failed" {:error-type :llm/server-error
+                                                               :event event}) nil))
 
             :done
             (finalize! (apply str chunks) (not-empty tool-calls))
@@ -179,8 +202,8 @@
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn prompt
-  "Send a prompt to the LLM provider. Returns a Response record with:
+(defn request
+  "Send a request to the LLM provider. Returns a Response record with:
     :text        - promise of full text string
     :chunks      - channel of text chunks as they stream
     :events      - channel of raw events
@@ -188,29 +211,30 @@
     :structured  - promise of parsed structured data (when :schema provided)
     :tool-calls  - promise of tool calls vector (when :tools provided)
 
-   Supports @(prompt ...) via IDeref to block and get text.
+   Supports @(request ...) via IDeref to block and get text.
 
    Input is the last arg — a string (prompt) or vector (message history).
 
-   (prompt ai \"hello\")                              ; simple
-   (prompt ai {:schema s} \"extract this\")            ; with opts
-   (prompt ai {:tools t} [{:role :user ...} ...])    ; with history"
+   (request ai \"hello\")                              ; simple
+   (request ai {:schema s} \"extract this\")            ; with opts
+   (request ai {:tools t} [{:role :user ...} ...])    ; with history"
   ([provider input]
-   (prompt provider {} input))
+   (request provider {} input))
   ([provider opts input]
    (let [merged (validate-opts (helpers/deep-merge (:defaults provider) opts))
-         {:keys [model system-prompt schema tools tool-choice
-                 provider-opts]} merged
+         {:keys [model system-prompt schema tools tool-choice]} merged
 
          _ (when-not model
-             (throw (errors/error "No model specified" {:opts merged})))
+             (throw (errors/error "No model specified"
+                                  {:error-type :llm/invalid-request :opts merged})))
 
+         provider-opts (extract-provider-opts merged)
          messages      (build-messages input)
          source-chan    (proto/request-stream provider model system-prompt messages
                                              schema tools tool-choice
                                              (or provider-opts {}))
-         text-chunks   (chan (a/dropping-buffer 1024))
-         events        (chan (a/dropping-buffer 1024))
+         text-chunks   (chan 1024)
+         events        (chan 1024)
          text-p        (promise)
          usage-p       (promise)
          structured-p  (promise)
@@ -265,13 +289,22 @@
    (generate ai {:schema person-schema} \"extract this\")
    ;; => {:name \"Alice\" :age 30}
 
+   Common options:
+     :model          - model name string
+     :system-prompt   - system message string
+     :schema          - Malli schema for structured output
+     :temperature     - float, e.g. 0.7
+     :max-tokens      - int, max tokens to generate
+     :top-p           - float, nucleus sampling
+     :provider-opts   - map of additional provider-specific API params
+
    Input is last — string or message-history vector. Threads with ->>:
 
    (->> \"raw text\"
         (llm/generate ai {:system-prompt \"Fix grammar\"})
         (llm/generate ai {:system-prompt \"Translate to French\"}))
 
-   For tool calling, use `run-agent`. For streaming/usage, use `prompt`."
+   For tool calling, use `run-agent`. For streaming/usage, use `request`."
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
@@ -279,8 +312,8 @@
      (when (:tools merged)
        (throw (errors/error
                (str "generate does not support :tools — use run-agent for tool calling")
-               {:opts opts})))
-     (let [response (prompt provider opts input)
+               {:error-type :llm/invalid-request :opts opts})))
+     (let [response (request provider opts input)
            text     @(:text response)
            _        (when (instance? Exception text) (throw text))]
        (if (:schema merged)
@@ -305,7 +338,7 @@
           (:schema (get-in (m/function-schemas) [ns-sym (:name m)])))
         (throw (errors/error
                 "Tool missing Malli schema. Use {:malli/schema ...}, mx/defn, or m/=>."
-                {:tool tool})))))
+                {:error-type :llm/invalid-request :tool tool})))))
 
 (defn- extract-input-schema
   "Extract the input map schema from a Malli function schema.
@@ -319,13 +352,13 @@
     (when-not (= :=> resolved-type)
       (throw (errors/error
               "Tool schema must be [:=> [:cat ...] <return>] or [:-> <input> <return>]"
-              {:schema fn-schema})))
+              {:error-type :llm/invalid-request :schema fn-schema})))
     (let [input-schema (first (m/children resolved))
           args (m/children (m/schema input-schema))]
       (when (empty? args)
         (throw (errors/error
                 "Tool function schema has no input arguments"
-                {:schema fn-schema})))
+                {:error-type :llm/invalid-request :schema fn-schema})))
       (first args))))
 
 (defn- extract-tool-name
@@ -335,7 +368,7 @@
     (or (:name props)
         (throw (errors/error
                 "Tool schema missing :name in properties"
-                {:schema schema})))))
+                {:error-type :llm/invalid-request :schema schema})))))
 
 (defn tool-result
   "Create a tool result message for feeding back into message history.
@@ -377,18 +410,25 @@
    tools: vector of tool vars or fns (each carries its schema in metadata)
 
    opts (optional):
-     :max-steps  - max iterations (default 10)
-     :schema     - if set, final response is parsed as structured data
-     + any prompt opts (:model, :system-prompt, etc.)
+     :max-steps      - max iterations (default 10)
+     :temperature     - float, e.g. 0.7
+     :max-tokens      - int, max tokens to generate
+     :top-p           - float, nucleus sampling
+     :provider-opts   - map of additional provider-specific API params
+     + any request opts (:model, :system-prompt, etc.)
 
    Returns {:text ... :history ... :steps [...]}
-     :text    - final response (string, or parsed data if :schema given)
-     :history - full message history (reusable)
+     :text    - final text response (string)
+     :history - full message history (reusable — feed into generate for structured extraction)
      :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
 
+   For structured output after tool use, compose with generate:
+
+     (let [{:keys [history]} (run-agent ai tools \"find user 123\")]
+       (generate ai {:schema result-schema} history))
+
    (run-agent ai [#'get-weather] \"Weather in Tokyo?\")
-   (run-agent ai [#'get-weather #'search] {:max-steps 5} \"Weather in Tokyo?\")
-   (run-agent ai [#'lookup] {:schema result-schema} \"find user 123\")"
+   (run-agent ai [#'get-weather #'search] {:max-steps 5} \"Weather in Tokyo?\")"
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
@@ -396,22 +436,23 @@
                       (when (seq unknown)
                         (throw (errors/error
                                 (str "Unknown options: " (pr-str (vec unknown)))
-                                {:unknown-keys (vec unknown)}))))
+                                {:error-type   :llm/invalid-request
+                                 :unknown-keys (vec unknown)}))))
          _          (when-not (and (sequential? tools) (seq tools))
                       (throw (errors/error "run-agent requires a non-empty tools vector"
-                                          {:tools tools})))
+                                          {:error-type :llm/invalid-request
+                                           :tools tools})))
          fn-schemas (mapv resolve-tool-schema tools)
          input-schemas (mapv extract-input-schema fn-schemas)
          name->fn   (into {} (map (fn [t s] [(extract-tool-name s) t]) tools input-schemas))
          max-steps  (or (:max-steps opts) 10)
-         schema     (:schema opts)
          base-opts  (-> opts
-                        (dissoc :max-steps :schema)
+                        (dissoc :max-steps)
                         (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
             n 0]
-       (let [response   (prompt provider base-opts history)
+       (let [response   (request provider base-opts history)
              text       @(:text response)
              _          (when (instance? Exception text) (throw text))
              tc         (parse-tool-calls @(:tool-calls response))]
@@ -424,7 +465,8 @@
                                         (let [f (or (get name->fn (:name t))
                                                     (throw (errors/error
                                                             (str "Unknown tool: " (:name t))
-                                                            {:name (:name t)
+                                                            {:error-type :llm/invalid-request
+                                                             :name (:name t)
                                                              :available (keys name->fn)})))]
                                           {:call t :result (f (:arguments t))}))
                                       tc)
@@ -437,21 +479,25 @@
                                      :tool-results (mapv :result results)})
                         (inc n)))))
            ;; No tool calls — done
-           (let [final-value (if schema
-                               (parse-structured-output text schema)
-                               text)]
-             {:text final-value
-              :history (conj history {:role :assistant :content text})
-              :steps steps})))))))
+           {:text    text
+            :history (conj history {:role :assistant :content text})
+            :steps   steps}))))))
+
 
 
 (defn stream
   "Returns a channel of text chunks as they stream from the LLM.
-   Input is last — string or message-history vector."
+   Input is last — string or message-history vector.
+
+   (let [ch (llm/stream ai \"Count to 10\")]
+     (loop []
+       (when-let [chunk (<!! ch)]
+         (print chunk) (flush)
+         (recur))))"
   ([provider input]
    (stream provider {} input))
   ([provider opts input]
-   (:chunks (prompt provider opts input))))
+   (:chunks (request provider opts input))))
 
 (defn stream-print
   "Stream text to *out*, printing chunks as they arrive. Returns the full text string.
@@ -473,9 +519,15 @@
      (.toString sb))))
 
 (defn events
-  "Returns a channel of raw events from the LLM.
+  "Returns a channel of raw SSE events from the LLM.
+   Each event is a map with :type (:content, :tool-call, :tool-call-delta,
+   :usage, :error, :done, :finish) and type-specific keys.
+
+   Use this when you need fine-grained control over the event stream.
+   For most cases, prefer `stream` (text chunks) or `request` (full response).
+
    Input is last — string or message-history vector."
   ([provider input]
    (events provider {} input))
   ([provider opts input]
-   (:events (prompt provider opts input))))
+   (:events (request provider opts input))))

@@ -11,7 +11,7 @@
   ;; ======================================
 
   ;; Provider = connection
-  (def provider (openai/->openai))
+  (def provider (openai/backend))
 
   ;; Defaults = just data on the map
   (def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
@@ -83,7 +83,7 @@
   ;; Full response (prompt)
   ;; ======================================
 
-  (def resp (llm/prompt ai "Explain AI briefly"))
+  (def resp (llm/request ai "Explain AI briefly"))
   @resp              ;; text (IDeref)
   @(:text resp)      ;; same
   @(:usage resp)     ;; token counts

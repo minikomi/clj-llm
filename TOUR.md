@@ -2,6 +2,22 @@
 
 This walks through the library piece by piece. Every example is real code.
 
+## Summary
+
+| Concept | How |
+|---|---|
+| Provider | `(openai/backend)` — a map |
+| Config | `(assoc provider :defaults {...})` |
+| Text generation | `(generate ai "prompt")` → string |
+| With options | `(generate ai {:system-prompt "..."} "prompt")` |
+| Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
+| Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
+| Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
+| Conversations | `(generate ai history-vector)` |
+| Full access | `(request ai "prompt")` → Response record |
+
+Everything is data. Providers are maps. Options are maps. History is a vector. Compose with the tools Clojure already gives you.
+
 ## 1. Connect to a provider
 
 A provider is a map that knows how to talk to an LLM API.
@@ -11,14 +27,14 @@ A provider is a map that knows how to talk to an LLM API.
          '[co.poyo.clj-llm.backends.openai :as openai])
 
 ;; OpenAI (reads OPENAI_API_KEY from env by default)
-(def provider (openai/->openai))
+(def provider (openai/backend))
 
 ;; Or point at anything with an OpenAI-compatible API
-(def ollama (openai/->openai {:api-base "http://localhost:11434/v1"
-                              :api-key "not-needed"}))
+(def ollama (openai/backend {:api-base "http://localhost:11434/v1"
+                             :api-key "not-needed"}))
 
-(def openrouter (openai/->openai {:api-key-env "OPENROUTER_API_KEY"
-                                  :api-base "https://openrouter.ai/api/v1"}))
+(def openrouter (openai/backend {:api-key-env "OPENROUTER_API_KEY"
+                                 :api-base "https://openrouter.ai/api/v1"}))
 ```
 
 A provider is just a map. You can print it, store it, pass it around.
@@ -54,6 +70,25 @@ Pass options as a map before the input:
 ```
 
 Per-call options merge on top of `:defaults`. Per-call wins.
+
+### Common options
+
+```clojure
+(llm/generate ai {:model         "gpt-4o"          ;; override model
+                  :system-prompt "Be concise."      ;; system message
+                  :temperature   0.2                ;; lower = more deterministic
+                  :max-tokens    500                ;; cap output length
+                  :top-p         0.9}               ;; nucleus sampling
+  "Explain quantum computing")
+```
+
+For provider-specific parameters not listed above, use `:provider-opts`:
+
+```clojure
+(llm/generate ai {:provider-opts {:frequency_penalty 0.5
+                                  :presence_penalty 0.3}}
+  "Write something creative")
+```
 
 ## 4. Threading
 
@@ -250,7 +285,7 @@ Pass tool vars to `run-agent`. It reads their `:malli/schema`, sends the input s
 ;;     :steps   [{:tool-calls [...] :tool-results [...]}]}
 ```
 
-`:text` is the final answer. `:history` is the full conversation (reusable). `:steps` records each tool-calling iteration.
+`:text` is the final answer (always a string). `:history` is the full conversation (reusable). `:steps` records each tool-calling iteration.
 
 Options go in an opts map between tools and input:
 
@@ -258,13 +293,15 @@ Options go in an opts map between tools and input:
 (llm/run-agent ai [#'get-weather] {:max-steps 3} "Weather in Tokyo?")
 ```
 
-If your agent should return structured data, pass `:schema`:
+For structured output after tool use, compose with `generate`:
 
 ```clojure
-(llm/run-agent ai [#'lookup] {:schema [:map [:name :string] [:status :string]]}
-  "Look up user 123")
-;; => {:text {:name "Alice" :status "active"} :history [...] :steps [...]}
+(let [{:keys [history]} (llm/run-agent ai [#'lookup] "Look up user 123")]
+  (llm/generate ai {:schema [:map [:name :string] [:status :string]]} history))
+;; => {:name "Alice" :status "active"}
 ```
+
+This keeps `run-agent` focused on the tool loop and `generate` as the single place structured output happens.
 
 ## 11. Why `generate` doesn't do tools
 
@@ -279,10 +316,10 @@ The name tells you the execution model.
 
 ## 12. Full response access
 
-When you need token usage, raw SSE events, or fine-grained streaming control, use `prompt` directly:
+When you need token usage, raw SSE events, or fine-grained streaming control, use `request` directly:
 
 ```clojure
-(def resp (llm/prompt ai "Explain AI briefly"))
+(def resp (llm/request ai "Explain AI briefly"))
 
 @resp              ;; block for text (Response implements IDeref)
 @(:text resp)      ;; same thing, explicit
@@ -291,9 +328,27 @@ When you need token usage, raw SSE events, or fine-grained streaming control, us
 (:events resp)     ;; core.async channel of raw events
 ```
 
-`prompt` returns a `Response` record. `generate` is built on top of it — it calls `prompt` and extracts the natural value.
+`request` returns a `Response` record. `generate` is built on top of it — it calls `request` and extracts the natural value.
+
+For raw events only (without the full Response record), use `events`:
+
+```clojure
+(let [ch (llm/events ai "Count to 5")]
+  (loop []
+    (when-let [event (<!! ch)]
+      (println (:type event) event)
+      (when-not (= :done (:type event))
+        (recur)))))
+;; :content {:type :content :content "1"}
+;; :content {:type :content :content ", 2"}
+;; ...
+;; :usage {:type :usage :prompt-tokens 10 :completion-tokens 20 ...}
+;; :done {:type :done}
+```
 
 ## 13. Error handling
+
+Errors are `ex-info` exceptions with an `:error-type` keyword in `ex-data` for programmatic dispatch:
 
 ```clojure
 (require '[co.poyo.clj-llm.errors :as errors])
@@ -305,8 +360,22 @@ When you need token usage, raw SSE events, or fine-grained streaming control, us
       :llm/rate-limit    (println "Rate limited, retry in" (errors/retry-after e) "ms")
       :llm/network-error (println "Network issue")
       :llm/invalid-key   (println "Bad API key")
+      :llm/server-error  (println "Server error, try again")
+      :llm/invalid-request (println "Bad request:" (ex-message e))
       (throw e))))
 ```
+
+Error types:
+
+| Keyword | Meaning |
+|---|---|
+| `:llm/rate-limit` | 429 — too many requests |
+| `:llm/invalid-key` | 401/403 — authentication failed |
+| `:llm/invalid-request` | 400/404/422 — bad input |
+| `:llm/server-error` | 500/502/503/504 — provider issue |
+| `:llm/unknown` | Other errors |
+
+The library does not do automatic retries. Use your own retry logic or a library like `again`.
 
 ## 14. Multiple providers
 
@@ -315,10 +384,10 @@ The same code works with any provider. Only the connection changes.
 ```clojure
 (require '[co.poyo.clj-llm.backends.anthropic :as anthropic])
 
-(def openai-ai  (assoc (openai/->openai)     :defaults {:model "gpt-4o-mini"}))
-(def claude-ai  (assoc (anthropic/->anthropic) :defaults {:model "claude-sonnet-4-20250514"}))
-(def local-ai   (assoc (openai/->openai {:api-base "http://localhost:11434/v1"
-                                         :api-key "x"})
+(def openai-ai  (assoc (openai/backend)     :defaults {:model "gpt-4o-mini"}))
+(def claude-ai  (assoc (anthropic/backend) :defaults {:model "claude-sonnet-4-20250514"}))
+(def local-ai   (assoc (openai/backend {:api-base "http://localhost:11434/v1"
+                                        :api-key "x"})
                        :defaults {:model "llama3"}))
 
 ;; Same call, any provider
@@ -326,19 +395,3 @@ The same code works with any provider. Only the connection changes.
 (llm/generate claude-ai "Explain monads in one sentence.")
 (llm/generate local-ai  "Explain monads in one sentence.")
 ```
-
-## Summary
-
-| Concept | How |
-|---|---|
-| Provider | `(openai/->openai)` — a map |
-| Config | `(assoc provider :defaults {...})` |
-| Text generation | `(generate ai "prompt")` → string |
-| With options | `(generate ai {:system-prompt "..."} "prompt")` |
-| Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
-| Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
-| Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
-| Conversations | `(generate ai history-vector)` |
-| Full access | `(prompt ai "prompt")` → Response record |
-
-Everything is data. Providers are maps. Options are maps. History is a vector. Compose with the tools Clojure already gives you.

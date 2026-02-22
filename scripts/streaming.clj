@@ -8,9 +8,9 @@
 (def provider
   (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
     (if openrouter-key
-      (openai/->openai {:api-key openrouter-key
+      (openai/backend {:api-key openrouter-key
                         :api-base "https://openrouter.ai/api/v1"})
-      (openai/->openai))))
+      (openai/backend))))
 
 (def ai (assoc provider :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))
 

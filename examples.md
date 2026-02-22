@@ -10,7 +10,7 @@ Progressive examples showing how to use clj-llm—from simple prompts to advance
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
-(def ai (openai/->openai {:api-key-env "OPENAI_API_KEY"}))
+(def ai (openai/backend {:api-key-env "OPENAI_API_KEY"}))
 ```
 
 Backends are just data. No side effects, no hidden state.
@@ -20,7 +20,7 @@ Backends are just data. No side effects, no hidden state.
 ## Your First Prompt
 
 ```clojure
-@(:text (llm/prompt ai "What is 2+2?"))
+@(:text (llm/request ai "What is 2+2?"))
 ;; => "2 + 2 equals 4."
 ```
 
@@ -35,7 +35,7 @@ Backends are just data. No side effects, no hidden state.
 Guide the AI's behavior:
 
 ```clojure
-@(:text (llm/prompt ai
+@(:text (llm/request ai
                     "Explain recursion"
                     {:llm/system-prompt "You are a patient teacher. Use simple analogies."}))
 ```
@@ -45,7 +45,7 @@ Guide the AI's behavior:
 Control model parameters:
 
 ```clojure
-@(:text (llm/prompt ai
+@(:text (llm/request ai
                     "Invent a programming language"
                     {:provider/opts {:temperature 0.9
                                      :max_tokens 200
@@ -62,15 +62,15 @@ Same interface, any provider:
 
 ```clojure
 ;; OpenAI
-(def openai (openai/->openai {:api-key-env "OPENAI_API_KEY"}))
+(def openai (openai/backend {:api-key-env "OPENAI_API_KEY"}))
 
 ;; Local Ollama
-(def local (openai/->openai
+(def local (openai/backend
              {:api-base "http://localhost:11434/v1"
               :defaults {:provider/opts {:model "llama2"}}}))
 
 ;; OpenRouter (100+ models)
-(def router (openai/->openai
+(def router (openai/backend
               {:api-key-env "OPENROUTER_API_KEY"
                :api-base "https://openrouter.ai/api/v1"}))
 ```
@@ -79,7 +79,7 @@ Your code doesn't change:
 
 ```clojure
 (defn explain [backend concept]
-  @(:text (llm/prompt backend (str "Explain " concept))))
+  @(:text (llm/request backend (str "Explain " concept))))
 
 (explain openai "closures")
 (explain local "closures")
@@ -101,7 +101,7 @@ Extract validated, typed data using Malli schemas:
    [:age pos-int?]
    [:occupation :string]])
 
-@(:structured (llm/prompt ai
+@(:structured (llm/request ai
                           "Extract: Marie Curie was a 66 year old physicist"
                           {:llm/schema person-schema}))
 ;; => {:name "Marie Curie", :age 66, :occupation "physicist"}
@@ -123,7 +123,7 @@ Schemas compose:
                      [:quantity pos-int?]
                      [:price [:double {:min 0}]]]]]])
 
-@(:structured (llm/prompt ai invoice-text {:llm/schema invoice-schema}))
+@(:structured (llm/request ai invoice-text {:llm/schema invoice-schema}))
 ;; => {:invoice-number "INV-2024-001"
 ;;     :total 150.0
 ;;     :items [{:description "Widget A", :quantity 2, :price 25.0}
@@ -139,7 +139,7 @@ Schemas compose:
    [:confidence [:double {:min 0 :max 1}]]
    [:keywords [:vector :string]]])
 
-@(:structured (llm/prompt ai
+@(:structured (llm/request ai
                           "Analyze: This product exceeded expectations!"
                           {:llm/schema sentiment-schema}))
 ;; => {:sentiment "positive"
@@ -156,7 +156,7 @@ Get text as it arrives:
 ```clojure
 (require '[clojure.core.async :refer [<!!]])
 
-(let [response (llm/prompt ai "Write a short story about a robot")
+(let [response (llm/request ai "Write a short story about a robot")
       chunks (:chunks response)]
   (loop []
     (when-let [chunk (<!! chunks)]
@@ -170,7 +170,7 @@ Get text as it arrives:
 The `:text` promise resolves even while streaming:
 
 ```clojure
-(let [response (llm/prompt ai "Explain neural networks")
+(let [response (llm/request ai "Explain neural networks")
       chunks (:chunks response)]
   ;; Start streaming - consume a few chunks
   (dotimes [_ 5]
@@ -185,7 +185,7 @@ The `:text` promise resolves even while streaming:
 ### Streaming with Options
 
 ```clojure
-(let [response (llm/prompt ai
+(let [response (llm/request ai
                            "Write a creative story"
                            {:provider/opts {:temperature 0.9}
                             :llm/system-prompt "You are a novelist."})
@@ -210,7 +210,7 @@ Build interactive experiences with message history:
    {:role :assistant :content "2+2 equals 4."}
    {:role :user :content "What about 2+3?"}])
 
-@(:text (llm/prompt ai nil {:llm/message-history messages}))
+@(:text (llm/request ai nil {:llm/message-history messages}))
 ;; => "2+3 equals 5."
 ```
 
@@ -224,7 +224,7 @@ Pass `nil` as the prompt when using message history.
 
 (defn chat! [message]
   (swap! conversation conj {:role :user :content message})
-  (let [response @(:text (llm/prompt ai nil
+  (let [response @(:text (llm/request ai nil
                                      {:llm/message-history @conversation}))]
     (swap! conversation conj {:role :assistant :content response})
     response))
@@ -256,7 +256,7 @@ Keep recent messages to control token usage:
 The response object gives you complete control:
 
 ```clojure
-(let [response (llm/prompt ai "Explain quantum computing")]
+(let [response (llm/request ai "Explain quantum computing")]
   ;; Available fields:
   (:text response)       ; Promise - complete text
   (:structured response) ; Promise - structured data (if schema provided)
@@ -268,7 +268,7 @@ The response object gives you complete control:
 ### Token Usage
 
 ```clojure
-(let [response (llm/prompt ai "Write an analysis")
+(let [response (llm/request ai "Write an analysis")
       usage @(:usage response)]
   (println "Prompt tokens:" (:prompt-tokens usage))
   (println "Completion tokens:" (:completion-tokens usage))
@@ -278,7 +278,7 @@ The response object gives you complete control:
 ### Raw Events
 
 ```clojure
-(let [response (llm/prompt ai "Test")
+(let [response (llm/request ai "Test")
       events (:events response)]
   (loop []
     (when-let [event (<!! events)]
@@ -305,7 +305,7 @@ The response object gives you complete control:
 
 ```clojure
 (try
-  @(:text (llm/prompt ai "Hello" {:provider/opts {:model "invalid"}}))
+  @(:text (llm/request ai "Hello" {:provider/opts {:model "invalid"}}))
   (catch Exception e
     (println "Error:" (ex-message e))
     (println "Data:" (ex-data e))))
@@ -314,7 +314,7 @@ The response object gives you complete control:
 Streaming errors come through events:
 
 ```clojure
-(let [response (llm/prompt ai "Test" {:provider/opts {:model "bad"}})
+(let [response (llm/request ai "Test" {:provider/opts {:model "bad"}})
       events (:events response)]
   (loop []
     (when-let [event (<!! events)]
@@ -338,7 +338,7 @@ Streaming errors come through events:
    [:confidence [:double {:min 0 :max 1}]]])
 
 (defn analyze [backend doc]
-  @(:structured (llm/prompt backend doc
+  @(:structured (llm/request backend doc
                             {:llm/schema analysis-schema
                              :llm/system-prompt "Extract key information."})))
 
@@ -352,7 +352,7 @@ Streaming errors come through events:
   (loop [remaining providers]
     (when-let [provider (first remaining)]
       (try
-        @(:text (llm/prompt provider prompt opts))
+        @(:text (llm/request provider prompt opts))
         (catch Exception e
           (if-let [next-providers (seq (rest remaining))]
             (recur next-providers)
@@ -376,7 +376,7 @@ Streaming errors come through events:
   {:status :sent})
 
 (def cmd "Send urgent email to john@example.com about Q4 report")
-(def params @(:structured (llm/prompt ai cmd {:llm/schema send-email-schema})))
+(def params @(:structured (llm/request ai cmd {:llm/schema send-email-schema})))
 
 (send-email params)
 ```
@@ -388,7 +388,7 @@ Streaming errors come through events:
   (let [msgs (atom [{:role :system :content system-prompt}])]
     {:send! (fn [user-msg callback]
               (swap! msgs conj {:role :user :content user-msg})
-              (let [response (llm/prompt backend nil {:llm/message-history @msgs})
+              (let [response (llm/request backend nil {:llm/message-history @msgs})
                     collected (atom "")]
                 (loop []
                   (when-let [chunk (<!! (:chunks response))]
