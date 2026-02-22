@@ -47,11 +47,11 @@
     (let [provider (mock-provider [{:type :error :error "API Error"}])]
       (is (thrown? Exception (llm/generate provider "test"))))))
 
-(deftest test-prompt
+(deftest test-request
   (testing "Rich response object"
     (let [provider (mock-provider [{:type :content :content "Response text"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 20}])
-          resp (llm/prompt provider "test")]
+          resp (llm/request provider "test")]
       ;; IDeref gives text
       (is (= "Response text" @resp))
       ;; Direct promise access
@@ -124,12 +124,12 @@
             (llm/generate provider {:bogus true} "test"))))))
 
 (deftest test-tool-calls
-  (testing "Tool call accumulation via prompt"
+  (testing "Tool call accumulation via request"
     (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
                                    {:type :tool-call-delta :index 0 :arguments "{\"host\":"}
                                    {:type :tool-call-delta :index 0 :arguments "\"example.com\"}"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 5}])
-          resp (llm/prompt provider "test")]
+          resp (llm/request provider "test")]
       (let [tool-calls @(:tool-calls resp)]
         (is (= 1 (count tool-calls)))
         (is (= "ping" (:name (first tool-calls))))
@@ -220,7 +220,7 @@
       (is (thrown? clojure.lang.ExceptionInfo
             (llm/run-agent provider [] "test")))))
 
-  (testing "run-agent with :schema parses final response"
+  (testing "run-agent returns text, compose with generate for structured output"
     (let [provider (->MockProvider
                     (atom [{:type :tool-call :index 0 :id "call_1"
                             :name "lookup" :arguments ""}
@@ -230,15 +230,17 @@
           lookup (with-meta
                    (fn [{:keys [id]}]
                      (reset! (.responses provider)
-                             [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
+                             [{:type :content :content "Alice is 30 years old"}])
                      (str "found user " id))
                    {:malli/schema [:=> [:cat [:map {:name "lookup" :description "Lookup"}
                                               [:id :string]]]
                                        :string]})
-          result (llm/run-agent provider [lookup]
-                   {:schema [:map [:name :string] [:age pos-int?]]}
-                   "find user 123")]
-      (is (= {:name "Alice" :age 30} (:text result))))))
+          result (llm/run-agent provider [lookup] "find user 123")]
+      ;; run-agent always returns text as a string
+      (is (string? (:text result)))
+      (is (= "Alice is 30 years old" (:text result)))
+      ;; history is reusable for structured extraction via generate
+      (is (vector? (:history result))))))
 
 (deftest test-tool-result
   (testing "tool-result creates correct message map"

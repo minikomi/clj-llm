@@ -12,9 +12,9 @@
 (def ai
   (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
     (-> (if openrouter-key
-          (openai/->openai {:api-key openrouter-key
+          (openai/backend {:api-key openrouter-key
                             :api-base "https://openrouter.ai/api/v1"})
-          (openai/->openai))
+          (openai/backend))
         (assoc :defaults {:model model}))))
 
 (def history (atom [{:role :system :content "You are a helpful assistant. Be concise."}]))

@@ -4,6 +4,20 @@ An LLM library that doesn't get in your way.
 
 Built for Clojure developers who want maximum flexibility without sacrificing simplicity. Minimal opinionated glue for any LLM provider — from OpenAI to your local Ollama setup.
 
+## Summary
+
+| Concept | How |
+|---|---|
+| Provider | `(openai/backend)` — a map |
+| Config | `(assoc provider :defaults {...})` |
+| Text generation | `(generate ai "prompt")` → string |
+| With options | `(generate ai {:system-prompt "..."} "prompt")` |
+| Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
+| Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
+| Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
+| Conversations | `(generate ai history-vector)` |
+| Full access | `(request ai "prompt")` → Response record |
+
 ## Why clj-llm?
 
 **You're in control.** No magic configuration, no hidden behavior. Everything is explicit data.
@@ -40,7 +54,7 @@ Built for Clojure developers who want maximum flexibility without sacrificing si
          '[co.poyo.clj-llm.backends.openai :as openai])
 
 ;; Provider = connection details
-(def provider (openai/->openai))
+(def provider (openai/backend))
 
 ;; Task = provider + configuration
 (def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
@@ -83,7 +97,7 @@ The input (string or message history) is always the last argument:
 
 ```clojure
 ;; Provider = just the connection
-(def provider (openai/->openai))
+(def provider (openai/backend))
 
 ;; Defaults = what you want it to do
 (def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
@@ -99,6 +113,20 @@ The input (string or message history) is always the last argument:
 
 ;; Override per-call when needed
 (llm/generate extractor {:model "gpt-4o"} "Albert Einstein...")
+```
+
+### Common options
+
+```clojure
+(llm/generate ai {:model         "gpt-4o"
+                  :system-prompt "Be concise."
+                  :temperature   0.2
+                  :max-tokens    500
+                  :top-p         0.9}
+  "Explain quantum computing")
+
+;; For provider-specific params not listed above:
+(llm/generate ai {:provider-opts {:frequency_penalty 0.5}} "hello")
 ```
 
 ## Structured Output
@@ -181,21 +209,29 @@ All three standard Malli approaches work — `{:malli/schema ...}` metadata, `mx
 (m/=> get-weather [:=> [:cat [:map {:name "get_weather"} [:city :string]]] :string])
 ```
 
+For structured output after tool use, compose with `generate`:
+
+```clojure
+(let [{:keys [history]} (llm/run-agent ai [#'lookup] "find user 123")]
+  (llm/generate ai {:schema user-schema} history))
+;; => {:name "Alice" :status "active"}
+```
+
 `generate` does not accept tools — it's a pure value function. If getting the value requires tool calls, use `run-agent`.
 
 ## Provider Flexibility
 
 ```clojure
 ;; OpenAI
-(def openai (openai/->openai))
+(def openai (openai/backend))
 
 ;; Local models (Ollama, LM Studio, etc)
-(def local (openai/->openai {:api-base "http://localhost:11434/v1"
-                             :api-key "not-needed"}))
+(def local (openai/backend {:api-base "http://localhost:11434/v1"
+                            :api-key "not-needed"}))
 
 ;; OpenRouter (access 100+ models)
-(def router (openai/->openai {:api-key-env "OPENROUTER_API_KEY"
-                              :api-base "https://openrouter.ai/api/v1"}))
+(def router (openai/backend {:api-key-env "OPENROUTER_API_KEY"
+                             :api-base "https://openrouter.ai/api/v1"}))
 
 ;; Same code, any provider
 (def ai (assoc any-provider :defaults {:model "gpt-4o-mini"}))
@@ -203,6 +239,8 @@ All three standard Malli approaches work — `{:malli/schema ...}` metadata, `mx
 ```
 
 ## Error Handling
+
+Errors are `ex-info` exceptions with `:error-type` in `ex-data`:
 
 ```clojure
 (require '[co.poyo.clj-llm.errors :as errors])
@@ -214,15 +252,18 @@ All three standard Malli approaches work — `{:malli/schema ...}` metadata, `mx
       :llm/rate-limit    (println "Rate limited, retry in" (errors/retry-after e) "ms")
       :llm/network-error (println "Network issue, retrying...")
       :llm/invalid-key   (println "Check your API key")
+      :llm/server-error  (println "Server error, try again")
       (throw e))))
 ```
 
+The library does not do automatic retries. Use your own retry logic or a library like `again`.
+
 ## Full Response Access
 
-When you need token usage or raw events, use `prompt` directly:
+When you need token usage or raw events, use `request` directly:
 
 ```clojure
-(def resp (llm/prompt ai "Explain AI briefly"))
+(def resp (llm/request ai "Explain AI briefly"))
 
 @resp              ;; block for text (IDeref)
 @(:text resp)      ;; same

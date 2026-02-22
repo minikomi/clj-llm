@@ -3,7 +3,7 @@
 ## What We Changed
 
 ### 1. Simplified API
-- **Before**: `@(:text (llm/prompt backend "Hello" opts))` 
+- **Before**: `@(:text (llm/request backend "Hello" opts))` 
 - **After**: `(llm/generate provider "Hello")`
 - No more delays, derefs, or complex return maps for simple cases
 
@@ -53,7 +53,7 @@
   (run! print (take-while some? (repeatedly #(<!! chunks)))))
 
 ;; Full control
-(def resp (llm/prompt ai "Complex task"))
+(def resp (llm/request ai "Complex task"))
 @resp                ;; Text via IDeref
 @(:usage resp)       ;; Token usage
 (:chunks resp)       ;; Streaming channel

@@ -21,9 +21,9 @@
 (def ai
   (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
     (-> (if openrouter-key
-          (openai/->openai {:api-key openrouter-key
+          (openai/backend {:api-key openrouter-key
                             :api-base "https://openrouter.ai/api/v1"})
-          (openai/->openai))
+          (openai/backend))
         (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "openai/gpt-4.1-mini")}))))
 
 ;; ══════ Tools ══════
@@ -331,7 +331,7 @@ a { color:#8ab4f8; text-decoration:none }
                    (loop [history (vec (:llm-history chat))
                           step-displays []
                           n 0]
-                     (let [resp     (llm/prompt ai {:tools agent-tools} history)
+                     (let [resp     (llm/request ai {:tools agent-tools} history)
                            text     @(:text resp)
                            raw-tc   @(:tool-calls resp)
                            tc       (when raw-tc

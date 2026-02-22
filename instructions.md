@@ -19,7 +19,7 @@ Refactor the AI provider wrapper library to use a clean, composable Clojure desi
 (defn prompt
   "Send a prompt to an AI provider and receive a stream.
    
-   provider - A provider instance (created with ->openai, ->anthropic, etc)
+   provider - A provider instance (created with openai/backend, anthropic/backend, etc)
    input    - The user's input string
    opts     - Options map with:
               :mylib/system   - System prompt
@@ -102,7 +102,7 @@ Add these Malli schemas to define and validate options:
       )))
 
 ;; Constructor with validation
-(defn ->openai 
+(defn backend 
   "Create OpenAI provider with optional defaults.
    
    config map:
@@ -120,13 +120,13 @@ Add these Malli schemas to define and validate options:
 
 ```clojure
 ;; Basic usage
-(def openai (->openai {:api-key (env "OPENAI_KEY")}))
+(def openai (backend {:api-key (env "OPENAI_KEY")}))
 
 (prompt openai "Hello" {})
 
 ;; With defaults
 (def openai-with-defaults
-  (->openai {:api-key (env "OPENAI_KEY")
+  (backend {:api-key (env "OPENAI_KEY")
              :defaults {:mylib/system "You are helpful"
                        :provider/opts {:openai/model "gpt-4o"
                                       :openai/temperature 0.7}}}))

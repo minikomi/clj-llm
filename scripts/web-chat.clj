@@ -20,8 +20,8 @@
 (def ai
   (let [k (System/getenv "OPENROUTER_KEY")]
     (-> (if k
-          (openai/->openai {:api-key k :api-base "https://openrouter.ai/api/v1"})
-          (openai/->openai))
+          (openai/backend {:api-key k :api-base "https://openrouter.ai/api/v1"})
+          (openai/backend))
         (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))))
 
 ;; ══════ Persistence ══════

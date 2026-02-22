@@ -7,21 +7,29 @@
   (testing "Basic error creation"
     (let [err (errors/error "Test error" {:foo "bar"})]
       (is (instance? clojure.lang.ExceptionInfo err))
-      (is (= :llm-error (:type (ex-data err))))
+      (is (= :llm/unknown (:error-type (ex-data err))))
       (is (= "Test error" (ex-message err)))
       (is (= "bar" (:foo (ex-data err)))))))
 
 (deftest test-error-type
   (testing "error-type returns correct keyword for HTTP status codes"
-    (is (= :llm/rate-limit (errors/error-type (errors/error "test" {:status 429}))))
-    (is (= :llm/invalid-key (errors/error-type (errors/error "test" {:status 401}))))
-    (is (= :llm/invalid-key (errors/error-type (errors/error "test" {:status 403}))))
-    (is (= :llm/server-error (errors/error-type (errors/error "test" {:status 500}))))
-    (is (= :llm/server-error (errors/error-type (errors/error "test" {:status 503}))))
-    (is (= :llm/invalid-request (errors/error-type (errors/error "test" {:status 400}))))
+    (is (= :llm/rate-limit (errors/error-type (errors/error "test" {:error-type :llm/rate-limit}))))
+    (is (= :llm/invalid-key (errors/error-type (errors/error "test" {:error-type :llm/invalid-key}))))
+    (is (= :llm/server-error (errors/error-type (errors/error "test" {:error-type :llm/server-error}))))
+    (is (= :llm/invalid-request (errors/error-type (errors/error "test" {:error-type :llm/invalid-request}))))
     (is (= :llm/unknown (errors/error-type (errors/error "test" {})))))
   (testing "error-type returns nil for non-ExceptionInfo"
     (is (nil? (errors/error-type (Exception. "regular"))))))
+
+(deftest test-error-type-from-http
+  (testing "parse-http-error tags the right error-type"
+    (is (= :llm/rate-limit (errors/error-type (errors/parse-http-error "openai" 429 {}))))
+    (is (= :llm/invalid-key (errors/error-type (errors/parse-http-error "openai" 401 {}))))
+    (is (= :llm/invalid-key (errors/error-type (errors/parse-http-error "openai" 403 {}))))
+    (is (= :llm/server-error (errors/error-type (errors/parse-http-error "openai" 500 {}))))
+    (is (= :llm/server-error (errors/error-type (errors/parse-http-error "openai" 503 {}))))
+    (is (= :llm/invalid-request (errors/error-type (errors/parse-http-error "openai" 400 {}))))
+    (is (= :llm/invalid-request (errors/error-type (errors/parse-http-error "openai" 404 {}))))))
 
 (deftest test-retry-after
   (testing "retry-after extracts value from error"
