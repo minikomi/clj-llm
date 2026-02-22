@@ -178,7 +178,7 @@ Message history is just a vector you pass as input:
   (case name
     "get_weather" (str "Sunny, 22°C in " (:city arguments))))
 
-(llm/run-agent ai {:tools [weather-tool]} execute "Weather in Tokyo?")
+(llm/run-agent ai {:tools [weather-tool] :execute execute} "Weather in Tokyo?")
 ;; => {:text "It's sunny and 22°C in Tokyo!"
 ;;     :history [...]
 ;;     :steps [{:tool-calls [...] :tool-results [...]}]}

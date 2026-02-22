@@ -43,9 +43,9 @@
     (str "Unknown tool: " name)))
 
 ;; Using run-agent for the full loop
-(let [{:keys [text steps]} (llm/run-agent ai {:tools [get-weather search-restaurants]}
-                                          execute-tool
-                                          "Weather in Tokyo and find ramen there")]
+(let [{:keys [text steps]} (llm/run-agent ai {:tools [get-weather search-restaurants]
+                       :execute execute-tool}
+                   "Weather in Tokyo and find ramen there")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls tool-results]} steps]
     (doseq [tc tool-calls]
