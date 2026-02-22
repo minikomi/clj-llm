@@ -10,7 +10,7 @@ Built for Clojure developers who want maximum flexibility without sacrificing si
 
 **Composable.** Input-last design means `generate` threads naturally with `->>`. Config is just `assoc`/`merge`.
 
-**Natural returns.** `generate` returns the value you want — a string for text, a parsed map for structured output, a keyed map for tool calls — not a wrapper you have to unwrap.
+**Natural returns.** `generate` returns the value you want — a string for text, a parsed map for structured output — not a wrapper you have to unwrap.
 
 ```clojure
 ;; Same interface, any provider
@@ -77,10 +77,6 @@ The input (string or message history) is always the last argument:
 (llm/generate ai {:schema person-schema} "Marie Curie was a 66yo physicist")
 ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
-;; Tools → map with :tool-calls, :text, :message
-(llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")
-;; => {:tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
-;;     :message {:role :assistant :tool-calls [...]}}
 ```
 
 ### Providers are just maps
@@ -152,28 +148,13 @@ Message history is just a vector you pass as input:
 
 ## Tool Calling
 
+Tools live in `run-agent`. You define tools, provide an executor, and `run-agent` handles the loop — calling the model, executing tools, feeding results back, repeating until done.
+
 ```clojure
 (def weather-tool
   [:map {:name "get_weather" :description "Get weather for a city"}
    [:city {:description "City name"} :string]])
 
-;; Returns a map with :tool-calls, :text, :message
-(let [result (llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")]
-  ;; result => {:tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
-  ;;            :text nil
-  ;;            :message {:role :assistant :tool-calls [...]}}
-
-  ;; Build history and feed results back
-  (let [{:keys [tool-calls message]} result
-        results (mapv #(llm/tool-result (:id %) "Sunny, 22°C") tool-calls)
-        history (into [{:role :user :content "Weather in Tokyo?"} message] results)]
-    (llm/generate ai history)))
-;; => "It's sunny and 22°C in Tokyo!"
-```
-
-### Agentic Loop
-
-```clojure
 (defn execute [{:keys [name arguments]}]
   (case name
     "get_weather" (str "Sunny, 22°C in " (:city arguments))))
@@ -183,6 +164,8 @@ Message history is just a vector you pass as input:
 ;;     :history [...]
 ;;     :steps [{:tool-calls [...] :tool-results [...]}]}
 ```
+
+`generate` does not accept `:tools` — it's a pure value function. If getting the value requires tool calls, use `run-agent`.
 
 ## Provider Flexibility
 

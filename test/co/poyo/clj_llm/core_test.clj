@@ -134,44 +134,63 @@
         (is (= "ping" (:name (first tool-calls))))
         (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls)))))))
 
-  (testing "generate with :tools returns vector with :message in meta"
+  (testing "generate rejects :tools — use run-agent instead"
     (let [tool-schema [:map {:name "ping" :description "Ping a host"}
                        [:host :string]]
-          provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
-                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}
-                                   {:type :tool-call :index 1 :id "call_2" :name "ping" :arguments ""}
-                                   {:type :tool-call-delta :index 1 :arguments "{\"host\":\"test.com\"}"}
-                                   {:type :usage :prompt-tokens 10 :completion-tokens 5}])
-          result (llm/generate provider {:tools [tool-schema]} "ping both")]
-      ;; Returns a map with :tool-calls
-      (is (map? result))
-      (is (= 2 (count (:tool-calls result))))
-      (is (= "ping" (:name (first (:tool-calls result)))))
-      (is (= {:host "example.com"} (:arguments (first (:tool-calls result)))))
-      (is (= {:host "test.com"} (:arguments (second (:tool-calls result)))))
-      ;; :message for history round-tripping
-      (let [msg (:message result)]
-        (is (= :assistant (:role msg)))
-        (is (= 2 (count (:tool-calls msg))))
-        (is (= "function" (:type (first (:tool-calls msg)))))
-        (is (= "ping" (get-in msg [:tool-calls 0 :function :name])))))))
+          provider (mock-provider [{:type :content :content "hi"}])]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support :tools"
+            (llm/generate provider {:tools [tool-schema]} "ping both"))))))
 
-(deftest test-tool-calls-with-text
-  (testing "when model returns both text and tool calls, text is in metadata"
-    (let [tool-schema [:map {:name "ping" :description "Ping"} [:host :string]]
-          provider (mock-provider [{:type :content :content "Let me ping that"}
-                                   {:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
-                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}
-                                   {:type :usage :prompt-tokens 10 :completion-tokens 5}])
-          result (llm/generate provider {:tools [tool-schema]} "ping example.com")]
-      ;; Returns a map with :tool-calls and :text
-      (is (map? result))
-      (is (= 1 (count (:tool-calls result))))
-      (is (= "ping" (:name (first (:tool-calls result)))))
-      ;; Text is on the map
-      (is (= "Let me ping that" (:text result)))
-      ;; :message for history round-tripping
-      (is (some? (:message result))))))
+(deftest test-run-agent
+  (testing "run-agent executes tool calls and returns final text"
+    (let [call-count (atom 0)
+          tool-schema [:map {:name "get_weather" :description "Get weather"}
+                       [:city :string]]
+          ;; First call returns tool call, second returns text
+          provider (->MockProvider
+                    (atom [{:type :tool-call :index 0 :id "call_1"
+                            :name "get_weather" :arguments ""}
+                           {:type :tool-call-delta :index 0
+                            :arguments "{\"city\":\"Tokyo\"}"}])
+                    {:model "test-model"})
+          execute-fn (fn [tc]
+                       ;; After first execution, swap to text response
+                       (reset! (.responses provider)
+                               [{:type :content :content "It's sunny in Tokyo!"}])
+                       (str "Sunny, 22C in " (:city (:arguments tc))))
+          result (llm/run-agent provider
+                   {:tools [tool-schema] :execute execute-fn}
+                   "Weather in Tokyo?")]
+      (is (= "It's sunny in Tokyo!" (:text result)))
+      (is (vector? (:history result)))
+      (is (= 1 (count (:steps result))))
+      (is (= 1 (count (:tool-calls (first (:steps result))))))
+      (is (= "get_weather" (:name (first (:tool-calls (first (:steps result)))))))))
+
+  (testing "run-agent requires :execute in opts"
+    (let [provider (mock-provider [{:type :content :content "hi"}])]
+      (is (thrown? clojure.lang.ExceptionInfo
+            (llm/run-agent provider {:tools []} "test")))))
+
+  (testing "run-agent with :schema parses final response"
+    (let [tool-schema [:map {:name "lookup" :description "Lookup"}
+                       [:id :string]]
+          provider (->MockProvider
+                    (atom [{:type :tool-call :index 0 :id "call_1"
+                            :name "lookup" :arguments ""}
+                           {:type :tool-call-delta :index 0
+                            :arguments "{\"id\":\"123\"}"}])
+                    {:model "test-model"})
+          execute-fn (fn [tc]
+                       (reset! (.responses provider)
+                               [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
+                       "found it")
+          result (llm/run-agent provider
+                   {:tools [tool-schema]
+                    :execute execute-fn
+                    :schema [:map [:name :string] [:age pos-int?]]}
+                   "find user 123")]
+      (is (= {:name "Alice" :age 30} (:text result))))))
 
 (deftest test-tool-result
   (testing "tool-result creates correct message map"

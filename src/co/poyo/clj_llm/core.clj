@@ -14,8 +14,11 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (def ^:private known-keys
-  #{:model :system-prompt :schema :tools :tool-choice
-    :timeout-ms :provider-opts})
+  #{:model :system-prompt :schema :tools :tool-choice :timeout-ms :provider-opts})
+
+(def ^:private agent-keys
+  "Additional keys accepted by run-agent."
+  #{:tools :tool-choice :execute :max-steps})
 
 (defn- validate-opts [opts]
   (let [unknown (remove known-keys (keys opts))]
@@ -253,16 +256,14 @@
 (defn generate
   "Blocking generation. Returns the natural value:
 
+   - String input → string back
+   - With :schema → parsed structured data
+
    (generate ai \"hello\")
    ;; => \"Hello!\"
 
    (generate ai {:schema person-schema} \"extract this\")
    ;; => {:name \"Alice\" :age 30}
-
-   (generate ai {:tools [weather-tool]} \"weather in Tokyo\")
-   ;; => {:tool-calls [{:id \"...\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
-   ;;     :text nil
-   ;;     :message {:role :assistant :tool-calls [...]}}
 
    Input is last — string or message-history vector. Threads with ->>:
 
@@ -270,31 +271,22 @@
         (llm/generate ai {:system-prompt \"Fix grammar\"})
         (llm/generate ai {:system-prompt \"Translate to French\"}))
 
-   For streaming/usage, use `prompt` directly."
+   For tool calling, use `run-agent`. For streaming/usage, use `prompt`."
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
-   (let [response (prompt provider opts input)
-         merged   (helpers/deep-merge (:defaults provider) opts)
-         text     @(:text response)
-         _        (when (instance? Exception text) (throw text))]
-     (cond
-       ;; Tools mode: return map with :tool-calls, :text, :message — or plain string if no calls
-       (:tools merged)
-       (let [tc (parse-tool-calls @(:tool-calls response))]
-         (if (seq tc)
-           {:tool-calls tc
-            :text (when (not (empty? text)) text)
-            :message (tool-calls->assistant-message tc text)}
-           text))
-
-       ;; Schema mode: return structured data directly
-       (:schema merged)
-       (let [s @(:structured response)]
-         (if (instance? Exception s) (throw s) s))
-
-       ;; Text mode: return string
-       :else text))))
+   (let [merged (helpers/deep-merge (:defaults provider) opts)]
+     (when (:tools merged)
+       (throw (errors/error
+               (str "generate does not support :tools — use run-agent for tool calling")
+               {:opts opts})))
+     (let [response (prompt provider opts input)
+           text     @(:text response)
+           _        (when (instance? Exception text) (throw text))]
+       (if (:schema merged)
+         (let [s @(:structured response)]
+           (if (instance? Exception s) (throw s) s))
+         text)))))
 
 (defn tool-result
   "Create a tool result message for feeding back into message history.
@@ -314,45 +306,58 @@
      :execute    - (fn [tool-call] result-string), required
                    tool-call is {:id ... :name ... :arguments ...}
      :max-steps  - max iterations (default 10)
-     + any generate opts (:model, :system-prompt, etc.)
+     :schema     - if set, final response is parsed as structured data
+     + any prompt opts (:model, :system-prompt, etc.)
 
    Returns {:text ... :history ... :steps [...]}
-     :text    - final text response
+     :text    - final response (string, or parsed data if :schema given)
      :history - full message history (reusable)
      :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
 
    (run-agent ai {:tools [weather-tool] :execute executor} \"Weather in Tokyo\")
-   (run-agent ai {:tools [t] :execute exec :max-steps 5} \"Weather in Tokyo\")"
+   (run-agent ai {:tools [t] :execute exec :max-steps 5} \"Weather in Tokyo\")
+   (run-agent ai {:tools [t] :execute exec :schema s} \"extract something\")"
   ([provider opts input]
-   (let [execute-fn (or (:execute opts)
+   (let [_          (let [unknown (remove (into known-keys agent-keys) (keys opts))]
+                        (when (seq unknown)
+                          (throw (errors/error
+                                  (str "Unknown options: " (pr-str (vec unknown)))
+                                  {:unknown-keys (vec unknown)}))))
+         execute-fn (or (:execute opts)
                         (throw (ex-info "run-agent requires :execute in opts" {:opts opts})))
-         max-steps (or (:max-steps opts) 10)
-         base-opts (dissoc opts :max-steps :execute)]
+         max-steps  (or (:max-steps opts) 10)
+         schema     (:schema opts)
+         base-opts  (-> opts
+                        (dissoc :max-steps :execute)
+                        (dissoc :schema))]  ;; schema applies to final response only
      (loop [history (build-messages input)
             steps []
             n 0]
-       (let [result (generate provider base-opts history)]
-         (if-let [tool-calls (:tool-calls result)]
+       (let [response   (prompt provider base-opts history)
+             text       @(:text response)
+             _          (when (instance? Exception text) (throw text))
+             tc         (parse-tool-calls @(:tool-calls response))]
+         (if (seq tc)
            ;; Tool calls - execute and loop
-           (let [msg (:message result)]
+           (let [msg (tool-calls->assistant-message tc text)]
              (if (>= (inc n) max-steps)
                {:text "" :history history :steps steps :truncated true}
-               (let [tool-results (mapv (fn [tc]
-                                         {:call tc
-                                          :result (execute-fn tc)})
-                                       tool-calls)
+               (let [results    (mapv (fn [t] {:call t :result (execute-fn t)}) tc)
                      result-msgs (mapv (fn [{:keys [call result]}]
                                         (tool-result (:id call) (str result)))
-                                      tool-results)
+                                      results)
                      new-history (into (conj history msg) result-msgs)]
                  (recur new-history
-                        (conj steps {:tool-calls (vec tool-calls)
-                                     :tool-results (mapv :result tool-results)})
+                        (conj steps {:tool-calls (vec tc)
+                                     :tool-results (mapv :result results)})
                         (inc n)))))
-           ;; Text response - done (result is a plain string)
-           {:text result
-            :history (conj history {:role :assistant :content result})
-            :steps steps}))))))
+           ;; No tool calls — done
+           (let [final-value (if schema
+                               (parse-structured-output text schema)
+                               text)]
+             {:text final-value
+              :history (conj history {:role :assistant :content text})
+              :steps steps})))))))
 
 
 (defn stream

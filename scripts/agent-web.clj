@@ -331,13 +331,22 @@ a { color:#8ab4f8; text-decoration:none }
                    (loop [history (vec (:llm-history chat))
                           step-displays []
                           n 0]
-                     (let [result (llm/generate ai {:tools agent-tools} history)]
-                       (if-let [tool-calls (:tool-calls result)]
+                     (let [resp     (llm/prompt ai {:tools agent-tools} history)
+                           text     @(:text resp)
+                           raw-tc   @(:tool-calls resp)
+                           tc       (when raw-tc
+                                      (mapv (fn [t]
+                                              (let [args (try (json/parse-string (:arguments t) true)
+                                                             (catch Exception _ (:arguments t)))]
+                                                {:id (:id t) :name (:name t) :arguments args}))
+                                            raw-tc))]
+                       (if (seq tc)
                          ;; Tool calls — execute and loop
                          (if (>= (inc n) max-steps)
                            (do (hk/send! ch (sse-event "chunk" "(max tool steps reached)") false)
                                (hk/close ch))
-                           (let [tool-results (mapv (fn [tc] {:call tc :result (execute-tool tc)}) tool-calls)
+                           (let [tool-calls tc
+                                 tool-results (mapv (fn [tc] {:call tc :result (execute-tool tc)}) tool-calls)
                                  step-html (str "<div class='tool-step'>"
                                                (apply str
                                                  (map (fn [{:keys [call result]}]
@@ -349,14 +358,22 @@ a { color:#8ab4f8; text-decoration:none }
                                  result-msgs (mapv (fn [{:keys [call result]}]
                                                      (llm/tool-result (:id call) (str result)))
                                                    tool-results)
-                                 new-history (into (conj history (:message result)) result-msgs)]
+                                 new-history (let [msg {:role :assistant
+                                                     :tool-calls (mapv (fn [{:keys [id name arguments]}]
+                                                                        {:id id :type "function"
+                                                                         :function {:name name
+                                                                                    :arguments (if (string? arguments)
+                                                                                                 arguments
+                                                                                                 (json/generate-string arguments))}})
+                                                                      tool-calls)}]
+                                   (into (conj history msg) result-msgs))]
                              (hk/send! ch (sse-event "step" step-html) false)
                              (recur new-history
                                     (conj step-displays {:calls (vec tool-calls)
                                                          :results (mapv :result tool-results)})
                                     (inc n))))
                          ;; Text response — stream char by char for effect
-                         (let [text (or result "")]
+                         (let [text (or text "")]
                            (doseq [chunk (partition-all 4 text)]
                              (hk/send! ch (sse-event "chunk" (apply str chunk)) false)
                              (Thread/sleep 12))

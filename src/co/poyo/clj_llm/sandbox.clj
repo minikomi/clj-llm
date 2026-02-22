@@ -57,24 +57,24 @@
         (recur))))
 
   ;; ══════════════════════════════════════
-  ;; Tool calling
+  ;; Tool calling — use run-agent
   ;; ══════════════════════════════════════
 
   (def weather-tool
     [:map {:name "get_weather" :description "Get weather for a city"}
      [:city {:description "City name"} :string]])
 
-  ;; Returns a vector of tool calls
-  (llm/generate ai {:tools [weather-tool]} "What's the weather in Tokyo?")
-  ;; => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
-  ;; (meta result) => {:message {:role :assistant :tool-calls [...]}}
+  (defn execute [{:keys [name arguments]}]
+    (case name
+      "get_weather" (str "Sunny, 22°C in " (:city arguments))))
 
-  ;; Round-trip: feed tool results back as history
-  (let [calls   (llm/generate ai {:tools [weather-tool]} "Weather?")
-        msg     (:message (meta calls))
-        results (mapv #(llm/tool-result (:id %) (str "Sunny in " (:city (:arguments %)))) calls)
-        history (into [{:role :user :content "Weather?"} msg] results)]
-    (llm/generate ai history))
+  ;; run-agent handles the full loop: call tools, feed results back, repeat
+  (llm/run-agent ai
+    {:tools [weather-tool] :execute execute}
+    "What's the weather in Tokyo?")
+  ;; => {:text "It's sunny and 22°C in Tokyo!"
+  ;;     :history [...]
+  ;;     :steps [{:tool-calls [...] :tool-results [...]}]}
 
   ;; ══════════════════════════════════════
   ;; Full response (prompt)
