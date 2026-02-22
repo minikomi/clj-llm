@@ -173,6 +173,14 @@ Tools are plain functions with standard [Malli function schemas](https://github.
 ;;     :steps [{:tool-calls [...] :tool-results [...]}]}
 ```
 
+All three standard Malli approaches work — `{:malli/schema ...}` metadata, `mx/defn`, and `m/=>`:
+
+```clojure
+;; m/=> annotation (schema separate from defn)
+(defn get-weather [{:keys [city]}] (str "Sunny in " city))
+(m/=> get-weather [:=> [:cat [:map {:name "get_weather"} [:city :string]]] :string])
+```
+
 `generate` does not accept tools — it's a pure value function. If getting the value requires tool calls, use `run-agent`.
 
 ## Provider Flexibility
