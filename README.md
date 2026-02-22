@@ -10,7 +10,7 @@ Built for Clojure developers who want maximum flexibility without sacrificing si
 
 **Composable.** Input-last design means `generate` threads naturally with `->>`. Config is just `assoc`/`merge`.
 
-**Natural returns.** `generate` returns the value you want — a string, a parsed map, a tool-call vector — not a wrapper you have to unwrap.
+**Natural returns.** `generate` returns the value you want — a string for text, a parsed map for structured output, a keyed map for tool calls — not a wrapper you have to unwrap.
 
 ```clojure
 ;; Same interface, any provider
@@ -77,9 +77,10 @@ The input (string or message history) is always the last argument:
 (llm/generate ai {:schema person-schema} "Marie Curie was a 66yo physicist")
 ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
-;; Tools → vector of calls (with metadata for history)
+;; Tools → map with :tool-calls, :text, :message
 (llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")
-;; => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+;; => {:tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+;;     :message {:role :assistant :tool_calls [...]}}
 ```
 
 ### Providers are just maps
@@ -156,15 +157,16 @@ Message history is just a vector you pass as input:
   [:map {:name "get_weather" :description "Get weather for a city"}
    [:city {:description "City name"} :string]])
 
-;; Returns a vector of tool calls
-(let [calls (llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")]
-  ;; calls => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
-  ;; (meta calls) => {:message {:role :assistant :tool_calls [...]}}
+;; Returns a map with :tool-calls, :text, :message
+(let [result (llm/generate ai {:tools [weather-tool]} "Weather in Tokyo?")]
+  ;; result => {:tool-calls [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
+  ;;            :text nil
+  ;;            :message {:role :assistant :tool_calls [...]}}
 
   ;; Build history and feed results back
-  (let [msg     (:message (meta calls))
-        results (mapv #(llm/tool-result (:id %) "Sunny, 22°C") calls)
-        history (into [{:role :user :content "Weather in Tokyo?"} msg] results)]
+  (let [{:keys [tool-calls message]} result
+        results (mapv #(llm/tool-result (:id %) "Sunny, 22°C") tool-calls)
+        history (into [{:role :user :content "Weather in Tokyo?"} message] results)]
     (llm/generate ai history)))
 ;; => "It's sunny and 22°C in Tokyo!"
 ```

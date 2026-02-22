@@ -143,14 +143,14 @@
                                    {:type :tool-call-delta :index 1 :arguments "{\"host\":\"test.com\"}"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 5}])
           result (llm/generate provider {:tools [tool-schema]} "ping both")]
-      ;; Returns a vector of tool calls
-      (is (vector? result))
-      (is (= 2 (count result)))
-      (is (= "ping" (:name (first result))))
-      (is (= {:host "example.com"} (:arguments (first result))))
-      (is (= {:host "test.com"} (:arguments (second result))))
-      ;; :message in meta for history round-tripping
-      (let [msg (:message (meta result))]
+      ;; Returns a map with :tool-calls
+      (is (map? result))
+      (is (= 2 (count (:tool-calls result))))
+      (is (= "ping" (:name (first (:tool-calls result)))))
+      (is (= {:host "example.com"} (:arguments (first (:tool-calls result)))))
+      (is (= {:host "test.com"} (:arguments (second (:tool-calls result)))))
+      ;; :message for history round-tripping
+      (let [msg (:message result)]
         (is (= :assistant (:role msg)))
         (is (= 2 (count (:tool_calls msg))))
         (is (= "function" (:type (first (:tool_calls msg)))))
@@ -164,14 +164,14 @@
                                    {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 5}])
           result (llm/generate provider {:tools [tool-schema]} "ping example.com")]
-      ;; Primary return is tool calls
-      (is (vector? result))
-      (is (= 1 (count result)))
-      (is (= "ping" (:name (first result))))
-      ;; Text is preserved in metadata
-      (is (= "Let me ping that" (:text (meta result))))
-      ;; :message also in metadata
-      (is (some? (:message (meta result)))))))
+      ;; Returns a map with :tool-calls and :text
+      (is (map? result))
+      (is (= 1 (count (:tool-calls result))))
+      (is (= "ping" (:name (first (:tool-calls result)))))
+      ;; Text is on the map
+      (is (= "Let me ping that" (:text result)))
+      ;; :message for history round-tripping
+      (is (some? (:message result))))))
 
 (deftest test-tool-result
   (testing "tool-result creates correct message map"
