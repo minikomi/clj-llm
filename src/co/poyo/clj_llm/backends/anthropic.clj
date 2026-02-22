@@ -15,7 +15,8 @@
 (defn- build-body
   "Build Anthropic API request body"
   [model system-prompt messages schema tools tool-choice opts]
-  (let [tools-config (cond
+  (let [messages (bh/normalize-messages messages)
+        tools-config (cond
                        tools
                        {:tools (mapv schema/malli->json-schema tools)
                         :tool_choice (cond

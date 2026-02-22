@@ -67,7 +67,7 @@
   ;; Returns a vector of tool calls
   (llm/generate ai {:tools [weather-tool]} "What's the weather in Tokyo?")
   ;; => [{:id "call_..." :name "get_weather" :arguments {:city "Tokyo"}}]
-  ;; (meta result) => {:message {:role :assistant :tool_calls [...]}}
+  ;; (meta result) => {:message {:role :assistant :tool-calls [...]}}
 
   ;; Round-trip: feed tool results back as history
   (let [calls   (llm/generate ai {:tools [weather-tool]} "Weather?")

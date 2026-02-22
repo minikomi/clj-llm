@@ -241,13 +241,13 @@
    Includes :content when the model returned text alongside tool calls."
   [tool-calls text]
   (cond-> {:role :assistant
-           :tool_calls (mapv (fn [{:keys [id name arguments]}]
-                              {:id id :type "function"
-                               :function {:name name
-                                          :arguments (if (string? arguments)
-                                                       arguments
-                                                       (json/generate-string arguments))}})
-                            tool-calls)}
+           :tool-calls (mapv (fn [{:keys [id name arguments]}]
+                               {:id id :type "function"
+                                :function {:name name
+                                           :arguments (if (string? arguments)
+                                                        arguments
+                                                        (json/generate-string arguments))}})
+                             tool-calls)}
     (not (empty? text)) (assoc :content text)))
 
 (defn generate
@@ -260,8 +260,9 @@
    ;; => {:name \"Alice\" :age 30}
 
    (generate ai {:tools [weather-tool]} \"weather in Tokyo\")
-   ;; => [{:id \"...\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
-   ;; (meta result) => {:message {:role :assistant :tool_calls [...]}}
+   ;; => {:tool-calls [{:id \"...\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
+   ;;     :text nil
+   ;;     :message {:role :assistant :tool-calls [...]}}
 
    Input is last — string or message-history vector. Threads with ->>:
 
@@ -282,9 +283,9 @@
        (:tools merged)
        (let [tc (parse-tool-calls @(:tool-calls response))]
          (if (seq tc)
-           (cond-> {:tool-calls tc
-                    :message (tool-calls->assistant-message tc text)}
-             (not (empty? text)) (assoc :text text))
+           {:tool-calls tc
+            :text (when (not (empty? text)) text)
+            :message (tool-calls->assistant-message tc text)}
            text))
 
        ;; Schema mode: return structured data directly
@@ -299,9 +300,9 @@
   "Create a tool result message for feeding back into message history.
 
    (tool-result \"call_abc\" \"Sunny, 22°C\")
-   ;; => {:role :tool :tool_call_id \"call_abc\" :content \"Sunny, 22°C\"}"
+   ;; => {:role :tool :tool-call-id \"call_abc\" :content \"Sunny, 22°C\"}"
   [tool-call-id content]
-  {:role :tool :tool_call_id tool-call-id :content (str content)})
+  {:role :tool :tool-call-id tool-call-id :content (str content)})
 
 (defn run-agent
   "Run an agentic tool-calling loop. Calls the LLM, executes any requested

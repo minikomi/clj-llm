@@ -16,7 +16,8 @@
 (defn- build-body
   "Build OpenAI API request body"
   [model system-prompt messages schema tools tool-choice opts]
-  (let [messages-with-system (if system-prompt
+  (let [messages (bh/normalize-messages messages)
+        messages-with-system (if system-prompt
                                (into [{:role "system" :content system-prompt}]
                                      messages)
                                messages)
