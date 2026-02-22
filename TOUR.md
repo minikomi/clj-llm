@@ -241,7 +241,7 @@ For the common pattern of "call tools until the model is done", there's `run-age
   (case name
     "get_weather" (str "Sunny, 22°C in " (:city arguments))))
 
-(llm/run-agent ai {:tools [get-weather]} execute "Weather in Tokyo?")
+(llm/run-agent ai {:tools [get-weather] :execute execute} "Weather in Tokyo?")
 ;; => {:text    "It's sunny and 22°C in Tokyo!"
 ;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]
 ;;     :steps   [{:tool-calls [...] :tool-results [...]}]}
@@ -252,7 +252,7 @@ For the common pattern of "call tools until the model is done", there's `run-age
 Limit iterations with `:max-steps`:
 
 ```clojure
-(llm/run-agent ai {:tools [get-weather] :max-steps 3} execute "Weather in Tokyo?")
+(llm/run-agent ai {:tools [get-weather] :execute execute :max-steps 3} "Weather in Tokyo?")
 ```
 
 ## 12. Full response access
@@ -317,7 +317,7 @@ The same code works with any provider. Only the connection changes.
 | Tool calling | `(generate ai {:tools t} "prompt")` → `{:tool-calls [...] :message ...}` |
 | Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
 | Conversations | `(generate ai history-vector)` |
-| Agent loop | `(run-agent ai {:tools t} exec-fn "prompt")` |
+| Agent loop | `(run-agent ai {:tools t :execute exec-fn} "prompt")` |
 | Full access | `(prompt ai "prompt")` → Response record |
 
 Everything is data. Providers are maps. Options are maps. History is a vector. Compose with the tools Clojure already gives you.

@@ -309,23 +309,25 @@
    tools via execute-fn, feeds results back, repeats until the LLM returns
    text (no more tool calls).
 
-   execute-fn: (fn [tool-call] result-string)
-     tool-call is {:id ... :name ... :arguments ...}
+   opts:
+     :tools      - tool schemas (required here or in provider :defaults)
+     :execute    - (fn [tool-call] result-string), required
+                   tool-call is {:id ... :name ... :arguments ...}
+     :max-steps  - max iterations (default 10)
+     + any generate opts (:model, :system-prompt, etc.)
 
    Returns {:text ... :history ... :steps [...]}
      :text    - final text response
      :history - full message history (reusable)
      :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
 
-   opts must include :tools (or have them in provider :defaults).
-
-   (run-agent ai {:tools [weather-tool]} executor \"Weather in Tokyo\")
-   (run-agent ai {:tools [t] :max-steps 5} executor \"Weather in Tokyo\")"
-  ([provider execute-fn input]
-   (run-agent provider {} execute-fn input))
-  ([provider opts execute-fn input]
-   (let [max-steps (or (:max-steps opts) 10)
-         base-opts (dissoc opts :max-steps)]
+   (run-agent ai {:tools [weather-tool] :execute executor} \"Weather in Tokyo\")
+   (run-agent ai {:tools [t] :execute exec :max-steps 5} \"Weather in Tokyo\")"
+  ([provider opts input]
+   (let [execute-fn (or (:execute opts)
+                        (throw (ex-info "run-agent requires :execute in opts" {:opts opts})))
+         max-steps (or (:max-steps opts) 10)
+         base-opts (dissoc opts :max-steps :execute)]
      (loop [history (build-messages input)
             steps []
             n 0]
