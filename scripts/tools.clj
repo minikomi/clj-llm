@@ -13,39 +13,40 @@
 
 (def ai (assoc provider :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))
 
-;; Define tools as Malli schemas
+;; Tools are functions with schema metadata.
+;; llm/tool attaches a Malli schema to a function.
+
 (def get-weather
-  [:map {:name "get_weather" :description "Get weather for a city"}
-   [:city {:description "City name"} :string]])
+  (llm/tool
+    [:map {:name "get_weather" :description "Get weather for a city"}
+     [:city {:description "City name"} :string]]
+    (fn [{:keys [city]}]
+      (str "Sunny, 22°C in " city))))
 
 (def search-restaurants
-  [:map {:name "search_restaurants" :description "Search restaurants in a city"}
-   [:city {:description "City"} :string]
-   [:cuisine {:description "Cuisine type"} :string]])
+  (llm/tool
+    [:map {:name "search_restaurants" :description "Search restaurants in a city"}
+     [:city {:description "City"} :string]
+     [:cuisine {:description "Cuisine type"} :string]]
+    (fn [{:keys [city cuisine]}]
+      (str "Found: " cuisine " place in " city))))
 
-;; Tool executor
-(defn execute-tool [{:keys [name arguments]}]
-  (case name
-    "get_weather"        (str "Sunny, 22°C in " (:city arguments))
-    "search_restaurants" (str "Found: " (:cuisine arguments) " place in " (:city arguments))
-    (str "Unknown tool: " name)))
+;; Tools are regular functions — test them directly
+(println "Direct call:" (get-weather {:city "Tokyo"}))
 
-;; Simple agent — one tool
-(println "--- single tool agent ---")
-(let [{:keys [text steps]} (llm/run-agent ai
-                             {:tools [get-weather] :execute execute-tool}
-                             "What's the weather in Tokyo?")]
+;; run-agent reads schemas from metadata, calls the fns when the model invokes them
+(println "\n--- single tool agent ---")
+(let [{:keys [text steps]} (llm/run-agent ai [get-weather] "What's the weather in Tokyo?")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls]} steps]
     (doseq [tc tool-calls]
       (println "  Called:" (:name tc) (:arguments tc))))
   (println "Final:" text))
 
-;; Multi-tool agent
+;; Multiple tools
 (println "\n--- multi-tool agent ---")
 (let [{:keys [text steps]} (llm/run-agent ai
-                             {:tools [get-weather search-restaurants]
-                              :execute execute-tool}
+                             [get-weather search-restaurants]
                              "Weather in Tokyo and find ramen there")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls]} steps]
@@ -53,12 +54,10 @@
       (println "  Called:" (:name tc) (:arguments tc))))
   (println "Final:" text))
 
-;; With max-steps limit
+;; With options
 (println "\n--- with max-steps ---")
-(let [{:keys [text steps truncated]} (llm/run-agent ai
-                                       {:tools [get-weather]
-                                        :execute execute-tool
-                                        :max-steps 2}
+(let [{:keys [text steps truncated]} (llm/run-agent ai [get-weather]
+                                       {:max-steps 2}
                                        "Weather in Tokyo?")]
   (println "Steps:" (count steps) (when truncated "(truncated)"))
   (println "Final:" text))

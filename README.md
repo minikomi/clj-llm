@@ -148,24 +148,31 @@ Message history is just a vector you pass as input:
 
 ## Tool Calling
 
-Tools live in `run-agent`. You define tools, provide an executor, and `run-agent` handles the loop — calling the model, executing tools, feeding results back, repeating until done.
+Tools are functions with schema metadata. `llm/tool` pairs a Malli schema with a handler:
 
 ```clojure
-(def weather-tool
-  [:map {:name "get_weather" :description "Get weather for a city"}
-   [:city {:description "City name"} :string]])
+(def get-weather
+  (llm/tool
+    [:map {:name "get_weather" :description "Get weather for a city"}
+     [:city {:description "City name"} :string]]
+    (fn [{:keys [city]}]
+      (str "Sunny, 22°C in " city))))
 
-(defn execute [{:keys [name arguments]}]
-  (case name
-    "get_weather" (str "Sunny, 22°C in " (:city arguments))))
+;; It's a regular function — call it, test it, compose it
+(get-weather {:city "Tokyo"})
+;; => "Sunny, 22°C in Tokyo"
+```
 
-(llm/run-agent ai {:tools [weather-tool] :execute execute} "Weather in Tokyo?")
+`run-agent` reads schemas from metadata and calls the functions when the model invokes them:
+
+```clojure
+(llm/run-agent ai [get-weather] "Weather in Tokyo?")
 ;; => {:text "It's sunny and 22°C in Tokyo!"
 ;;     :history [...]
 ;;     :steps [{:tool-calls [...] :tool-results [...]}]}
 ```
 
-`generate` does not accept `:tools` — it's a pure value function. If getting the value requires tool calls, use `run-agent`.
+`generate` does not accept tools — it's a pure value function. If getting the value requires tool calls, use `run-agent`.
 
 ## Provider Flexibility
 

@@ -18,7 +18,7 @@
 
 (def ^:private agent-keys
   "Additional keys accepted by run-agent."
-  #{:tools :tool-choice :execute :max-steps})
+  #{:tools :tool-choice :max-steps})
 
 (defn- validate-opts [opts]
   (let [unknown (remove known-keys (keys opts))]
@@ -288,6 +288,55 @@
            (if (instance? Exception s) (throw s) s))
          text)))))
 
+(defn tool
+  "Create a tool — a function with schema metadata. run-agent reads the schema
+   and calls the function when the model invokes it.
+
+   (def get-weather
+     (llm/tool
+       [:map {:name \"get_weather\" :description \"Get weather for a city\"}
+        [:city {:description \"City name\"} :string]]
+       (fn [{:keys [city]}]
+         (http/get (str \"https://weather.api/\" city)))))
+
+   ;; It's a regular function
+   (get-weather {:city \"Tokyo\"})
+   ;; => \"Sunny, 22°C\"
+
+   ;; run-agent reads the schema from metadata
+   (llm/run-agent ai [get-weather] \"Weather in Tokyo?\")
+
+   You can also put :tool/schema directly on any fn via defn metadata:
+
+   (defn get-weather
+     {:tool/schema [:map {:name \"get_weather\" :description \"...\"} [:city :string]]}
+     [{:keys [city]}]
+     (str \"Sunny in \" city))"
+  [schema f]
+  (with-meta f {:tool/schema schema}))
+
+(defn- tool-fn?
+  "Is x a function with :tool/schema metadata?"
+  [x]
+  (and (fn? x) (:tool/schema (meta x))))
+
+(defn- extract-tool-schema
+  "Get the Malli schema from a tool function."
+  [tool-fn]
+  (or (:tool/schema (meta tool-fn))
+      (throw (errors/error
+              "Tool missing :tool/schema metadata. Use llm/tool to create tools."
+              {:tool tool-fn}))))
+
+(defn- extract-tool-name
+  "Get the tool name from a Malli schema's properties."
+  [schema]
+  (let [props (try (m/properties (m/schema schema)) (catch Exception _ nil))]
+    (or (:name props)
+        (throw (errors/error
+                "Tool schema missing :name in properties"
+                {:schema schema})))))
+
 (defn tool-result
   "Create a tool result message for feeding back into message history.
 
@@ -297,14 +346,13 @@
   {:role :tool :tool-call-id tool-call-id :content (str content)})
 
 (defn run-agent
-  "Run an agentic tool-calling loop. Calls the LLM, executes any requested
-   tools via execute-fn, feeds results back, repeats until the LLM returns
-   text (no more tool calls).
+  "Run an agentic tool-calling loop. Tools are functions created with `llm/tool`
+   or any fn with :tool/schema metadata. run-agent calls the model, executes
+   requested tools, feeds results back, repeats until the model returns text.
 
-   opts:
-     :tools      - tool schemas (required here or in provider :defaults)
-     :execute    - (fn [tool-call] result-string), required
-                   tool-call is {:id ... :name ... :arguments ...}
+   tools: vector of tool functions (each carries its own schema in metadata)
+
+   opts (optional):
      :max-steps  - max iterations (default 10)
      :schema     - if set, final response is parsed as structured data
      + any prompt opts (:model, :system-prompt, etc.)
@@ -314,22 +362,27 @@
      :history - full message history (reusable)
      :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
 
-   (run-agent ai {:tools [weather-tool] :execute executor} \"Weather in Tokyo\")
-   (run-agent ai {:tools [t] :execute exec :max-steps 5} \"Weather in Tokyo\")
-   (run-agent ai {:tools [t] :execute exec :schema s} \"extract something\")"
-  ([provider opts input]
+   (run-agent ai [get-weather] \"Weather in Tokyo?\")
+   (run-agent ai [get-weather search] {:max-steps 5} \"Weather in Tokyo?\")
+   (run-agent ai [lookup] {:schema result-schema} \"find user 123\")"
+  ([provider tools input]
+   (run-agent provider tools {} input))
+  ([provider tools opts input]
    (let [_          (let [unknown (remove (into known-keys agent-keys) (keys opts))]
-                        (when (seq unknown)
-                          (throw (errors/error
-                                  (str "Unknown options: " (pr-str (vec unknown)))
-                                  {:unknown-keys (vec unknown)}))))
-         execute-fn (or (:execute opts)
-                        (throw (ex-info "run-agent requires :execute in opts" {:opts opts})))
+                      (when (seq unknown)
+                        (throw (errors/error
+                                (str "Unknown options: " (pr-str (vec unknown)))
+                                {:unknown-keys (vec unknown)}))))
+         _          (when-not (and (sequential? tools) (seq tools))
+                      (throw (errors/error "run-agent requires a non-empty tools vector"
+                                          {:tools tools})))
+         schemas    (mapv extract-tool-schema tools)
+         name->fn   (into {} (map (fn [t s] [(extract-tool-name s) t]) tools schemas))
          max-steps  (or (:max-steps opts) 10)
          schema     (:schema opts)
          base-opts  (-> opts
-                        (dissoc :max-steps :execute)
-                        (dissoc :schema))]  ;; schema applies to final response only
+                        (dissoc :max-steps :schema)
+                        (assoc :tools schemas))]
      (loop [history (build-messages input)
             steps []
             n 0]
@@ -338,11 +391,18 @@
              _          (when (instance? Exception text) (throw text))
              tc         (parse-tool-calls @(:tool-calls response))]
          (if (seq tc)
-           ;; Tool calls - execute and loop
+           ;; Tool calls - look up and execute
            (let [msg (tool-calls->assistant-message tc text)]
              (if (>= (inc n) max-steps)
                {:text "" :history history :steps steps :truncated true}
-               (let [results    (mapv (fn [t] {:call t :result (execute-fn t)}) tc)
+               (let [results    (mapv (fn [t]
+                                        (let [f (or (get name->fn (:name t))
+                                                    (throw (errors/error
+                                                            (str "Unknown tool: " (:name t))
+                                                            {:name (:name t)
+                                                             :available (keys name->fn)})))]
+                                          {:call t :result (f (:arguments t))}))
+                                      tc)
                      result-msgs (mapv (fn [{:keys [call result]}]
                                         (tool-result (:id call) (str result)))
                                       results)
