@@ -148,25 +148,26 @@ Message history is just a vector you pass as input:
 
 ## Tool Calling
 
-Tools are functions with schema metadata. `llm/tool` pairs a Malli schema with a handler:
+Tools are plain functions with standard [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md):
 
 ```clojure
-(def get-weather
-  (llm/tool
-    [:map {:name "get_weather" :description "Get weather for a city"}
-     [:city {:description "City name"} :string]]
-    (fn [{:keys [city]}]
-      (str "Sunny, 22°C in " city))))
+(defn get-weather
+  {:malli/schema [:=> [:cat [:map {:name "get_weather"
+                                   :description "Get weather for a city"}
+                             [:city {:description "City name"} :string]]]
+                      :string]}
+  [{:keys [city]}]
+  (str "Sunny, 22°C in " city))
 
 ;; It's a regular function — call it, test it, compose it
 (get-weather {:city "Tokyo"})
 ;; => "Sunny, 22°C in Tokyo"
 ```
 
-`run-agent` reads schemas from metadata and calls the functions when the model invokes them:
+`run-agent` reads `:malli/schema` from var metadata and calls the functions when the model invokes them:
 
 ```clojure
-(llm/run-agent ai [get-weather] "Weather in Tokyo?")
+(llm/run-agent ai [#'get-weather] "Weather in Tokyo?")
 ;; => {:text "It's sunny and 22°C in Tokyo!"
 ;;     :history [...]
 ;;     :steps [{:tool-calls [...] :tool-results [...]}]}

@@ -192,15 +192,16 @@ A simple chat loop:
 
 ## 9. Tool calling
 
-Tools are functions. `llm/tool` pairs a Malli schema (what the LLM sees) with a handler (what runs when it's called):
+Tools are plain functions with standard [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md). The `:malli/schema` metadata tells `run-agent` what the LLM sees:
 
 ```clojure
-(def get-weather
-  (llm/tool
-    [:map {:name "get_weather" :description "Get current weather for a city"}
-     [:city {:description "City name"} :string]]
-    (fn [{:keys [city]}]
-      (http/get (str "https://weather.api/" city)))))
+(defn get-weather
+  {:malli/schema [:=> [:cat [:map {:name "get_weather"
+                                   :description "Get current weather for a city"}
+                             [:city {:description "City name"} :string]]]
+                      :string]}
+  [{:keys [city]}]
+  (http/get (str "https://weather.api/" city)))
 ```
 
 A tool is a regular Clojure function. Call it directly, test it, compose it:
@@ -210,29 +211,19 @@ A tool is a regular Clojure function. Call it directly, test it, compose it:
 ;; => "Sunny, 22°C"
 ```
 
-The schema lives in metadata. `run-agent` reads it automatically:
+The schema lives in var metadata — standard Malli, nothing custom:
 
 ```clojure
-(:tool/schema (meta get-weather))
-;; => [:map {:name "get_weather" ...} [:city ...]]
-```
-
-You can also use plain `defn` with metadata — no `llm/tool` required:
-
-```clojure
-(defn get-weather
-  {:tool/schema [:map {:name "get_weather" :description "Get weather"}
-                 [:city :string]]}
-  [{:keys [city]}]
-  (str "Sunny in " city))
+(:malli/schema (meta #'get-weather))
+;; => [:=> [:cat [:map {:name "get_weather" ...} ...]] :string]
 ```
 
 ## 10. Running agents
 
-Pass tool functions to `run-agent`. It reads their schemas, sends them to the model, and calls them when the model invokes them. The loop repeats until the model gives a final text response.
+Pass tool vars to `run-agent`. It reads their `:malli/schema`, sends the input schemas to the model, and calls the functions when the model invokes them. The loop repeats until the model gives a final text response.
 
 ```clojure
-(llm/run-agent ai [get-weather] "Weather in Tokyo?")
+(llm/run-agent ai [#'get-weather] "Weather in Tokyo?")
 ;; => {:text    "It's sunny and 22°C in Tokyo!"
 ;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]
 ;;     :steps   [{:tool-calls [...] :tool-results [...]}]}

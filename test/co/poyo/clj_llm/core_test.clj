@@ -136,59 +136,64 @@
         (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls)))))))
 
   (testing "generate rejects :tools — use run-agent instead"
-    (let [tool-schema [:map {:name "ping" :description "Ping a host"}
-                       [:host :string]]
+    (let [tool-schema [:=> [:cat [:map {:name "ping" :description "Ping a host"}
+                                  [:host :string]]]
+                           :string]
           provider (mock-provider [{:type :content :content "hi"}])]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support :tools"
             (llm/generate provider {:tools [tool-schema]} "ping both"))))))
 
-(deftest test-tool-fn
-  (testing "llm/tool creates a callable fn with schema metadata"
-    (let [t (llm/tool [:map {:name "ping" :description "Ping"}
-                        [:host :string]]
-                       (fn [{:keys [host]}] (str "pong " host)))]
-      ;; It's a function
-      (is (fn? t))
-      (is (= "pong example.com" (t {:host "example.com"})))
-      ;; Schema is in metadata
-      (is (some? (:tool/schema (meta t))))
-      (is (= "ping" (:name (malli.core/properties (malli.core/schema (:tool/schema (meta t)))))))))
+(defn ^:private ping-tool
+  {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping"}
+                             [:host :string]]] :string]}
+  [{:keys [host]}]
+  (str "pong " host))
 
-  (testing "defn with :tool/schema metadata works"
-    (let [f (with-meta (fn [{:keys [x]}] (* x x))
-                       {:tool/schema [:map {:name "square" :description "Square a number"}
-                                      [:x :int]]})]
+(deftest test-tool-schema-from-defn
+  (testing "defn with :malli/schema — schema lives on the var"
+    (is (= "pong example.com" (ping-tool {:host "example.com"})))
+    (let [schema (:malli/schema (meta #'ping-tool))]
+      (is (some? schema))
+      (is (= :=> (malli.core/type (malli.core/schema schema))))
+      (let [s (malli.core/schema schema)
+            cat-schema (first (malli.core/children s))
+            input (first (malli.core/children (malli.core/schema cat-schema)))]
+        (is (= "ping" (:name (malli.core/properties (malli.core/schema input))))))))
+
+  (testing "with-meta fn also works"
+    (let [f (with-meta
+              (fn [{:keys [x]}] (* x x))
+              {:malli/schema [:=> [:cat [:map {:name "square" :description "Square"}
+                                        [:x :int]]] :int]})]
       (is (= 9 (f {:x 3})))
-      (is (= "square" (:name (malli.core/properties (malli.core/schema (:tool/schema (meta f))))))))))
+      (is (some? (:malli/schema (meta f))))))
+
+  (testing "flat arrow :-> syntax works"
+    (let [f (with-meta
+              (fn [{:keys [host]}] (str "pong " host))
+              {:malli/schema [:-> [:map {:name "ping" :description "Ping"}
+                                   [:host :string]] :string]})]
+      (is (fn? f))
+      (is (= "pong x" (f {:host "x"})))
+      (is (some? (:malli/schema (meta f)))))))
 
 (deftest test-run-agent
   (testing "run-agent with tool functions"
-    (let [get-weather (llm/tool
-                        [:map {:name "get_weather" :description "Get weather"}
-                         [:city :string]]
-                        (fn [{:keys [city]}]
-                          ;; After execution, swap provider to text response
-                          (str "Sunny, 22C in " city)))
-          provider (->MockProvider
+    (let [provider (->MockProvider
                     (atom [{:type :tool-call :index 0 :id "call_1"
                             :name "get_weather" :arguments ""}
                            {:type :tool-call-delta :index 0
                             :arguments "{\"city\":\"Tokyo\"}"}])
                     {:model "test-model"})
-          _ (let [orig-fn get-weather]
-              ;; After tool executes, make provider return text
-              (add-watch (.responses provider) :swap
-                (fn [_ _ _ _])) )
-          ;; We need the provider to return text on second call
-          ;; Wrap the tool to also swap the provider response
-          get-weather-wrapped (llm/tool
-                                [:map {:name "get_weather" :description "Get weather"}
-                                 [:city :string]]
-                                (fn [{:keys [city]}]
-                                  (reset! (.responses provider)
-                                          [{:type :content :content "It's sunny in Tokyo!"}])
-                                  (str "Sunny, 22C in " city)))
-          result (llm/run-agent provider [get-weather-wrapped] "Weather in Tokyo?")]
+          get-weather (with-meta
+                        (fn [{:keys [city]}]
+                          (reset! (.responses provider)
+                                  [{:type :content :content "It's sunny in Tokyo!"}])
+                          (str "Sunny, 22C in " city))
+                        {:malli/schema [:=> [:cat [:map {:name "get_weather" :description "Get weather"}
+                                                   [:city :string]]]
+                                            :string]})
+          result (llm/run-agent provider [get-weather] "Weather in Tokyo?")]
       (is (= "It's sunny in Tokyo!" (:text result)))
       (is (vector? (:history result)))
       (is (= 1 (count (:steps result))))
@@ -201,24 +206,21 @@
             (llm/run-agent provider [] "test")))))
 
   (testing "run-agent with :schema parses final response"
-    (let [lookup (llm/tool
-                   [:map {:name "lookup" :description "Lookup"}
-                    [:id :string]]
-                   (fn [{:keys [id]}] (str "found user " id)))
-          provider (->MockProvider
+    (let [provider (->MockProvider
                     (atom [{:type :tool-call :index 0 :id "call_1"
                             :name "lookup" :arguments ""}
                            {:type :tool-call-delta :index 0
                             :arguments "{\"id\":\"123\"}"}])
                     {:model "test-model"})
-          lookup-with-swap (llm/tool
-                             [:map {:name "lookup" :description "Lookup"}
-                              [:id :string]]
-                             (fn [{:keys [id]}]
-                               (reset! (.responses provider)
-                                       [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
-                               (str "found user " id)))
-          result (llm/run-agent provider [lookup-with-swap]
+          lookup (with-meta
+                   (fn [{:keys [id]}]
+                     (reset! (.responses provider)
+                             [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
+                     (str "found user " id))
+                   {:malli/schema [:=> [:cat [:map {:name "lookup" :description "Lookup"}
+                                              [:id :string]]]
+                                       :string]})
+          result (llm/run-agent provider [lookup]
                    {:schema [:map [:name :string] [:age pos-int?]]}
                    "find user 123")]
       (is (= {:name "Alice" :age 30} (:text result))))))
