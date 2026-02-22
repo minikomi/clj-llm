@@ -57,21 +57,23 @@
         (recur))))
 
   ;; ══════════════════════════════════════
-  ;; Tool calling — use run-agent
+  ;; Tool calling — tools are functions
   ;; ══════════════════════════════════════
 
-  (def weather-tool
-    [:map {:name "get_weather" :description "Get weather for a city"}
-     [:city {:description "City name"} :string]])
+  ;; llm/tool attaches a schema to a function
+  (def get-weather
+    (llm/tool
+      [:map {:name "get_weather" :description "Get weather for a city"}
+       [:city {:description "City name"} :string]]
+      (fn [{:keys [city]}]
+        (str "Sunny, 22°C in " city))))
 
-  (defn execute [{:keys [name arguments]}]
-    (case name
-      "get_weather" (str "Sunny, 22°C in " (:city arguments))))
+  ;; It's a regular function — test it directly
+  (get-weather {:city "Tokyo"})
+  ;; => "Sunny, 22°C in Tokyo"
 
-  ;; run-agent handles the full loop: call tools, feed results back, repeat
-  (llm/run-agent ai
-    {:tools [weather-tool] :execute execute}
-    "What's the weather in Tokyo?")
+  ;; run-agent reads schemas from metadata and calls the fns
+  (llm/run-agent ai [get-weather] "What's the weather in Tokyo?")
   ;; => {:text "It's sunny and 22°C in Tokyo!"
   ;;     :history [...]
   ;;     :steps [{:tool-calls [...] :tool-results [...]}]}

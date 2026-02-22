@@ -4,7 +4,8 @@
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
             [clojure.core.async :as a :refer [chan go >! <!! close!]]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [malli.core]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Mock provider
@@ -141,54 +142,84 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support :tools"
             (llm/generate provider {:tools [tool-schema]} "ping both"))))))
 
+(deftest test-tool-fn
+  (testing "llm/tool creates a callable fn with schema metadata"
+    (let [t (llm/tool [:map {:name "ping" :description "Ping"}
+                        [:host :string]]
+                       (fn [{:keys [host]}] (str "pong " host)))]
+      ;; It's a function
+      (is (fn? t))
+      (is (= "pong example.com" (t {:host "example.com"})))
+      ;; Schema is in metadata
+      (is (some? (:tool/schema (meta t))))
+      (is (= "ping" (:name (malli.core/properties (malli.core/schema (:tool/schema (meta t)))))))))
+
+  (testing "defn with :tool/schema metadata works"
+    (let [f (with-meta (fn [{:keys [x]}] (* x x))
+                       {:tool/schema [:map {:name "square" :description "Square a number"}
+                                      [:x :int]]})]
+      (is (= 9 (f {:x 3})))
+      (is (= "square" (:name (malli.core/properties (malli.core/schema (:tool/schema (meta f))))))))))
+
 (deftest test-run-agent
-  (testing "run-agent executes tool calls and returns final text"
-    (let [call-count (atom 0)
-          tool-schema [:map {:name "get_weather" :description "Get weather"}
-                       [:city :string]]
-          ;; First call returns tool call, second returns text
+  (testing "run-agent with tool functions"
+    (let [get-weather (llm/tool
+                        [:map {:name "get_weather" :description "Get weather"}
+                         [:city :string]]
+                        (fn [{:keys [city]}]
+                          ;; After execution, swap provider to text response
+                          (str "Sunny, 22C in " city)))
           provider (->MockProvider
                     (atom [{:type :tool-call :index 0 :id "call_1"
                             :name "get_weather" :arguments ""}
                            {:type :tool-call-delta :index 0
                             :arguments "{\"city\":\"Tokyo\"}"}])
                     {:model "test-model"})
-          execute-fn (fn [tc]
-                       ;; After first execution, swap to text response
-                       (reset! (.responses provider)
-                               [{:type :content :content "It's sunny in Tokyo!"}])
-                       (str "Sunny, 22C in " (:city (:arguments tc))))
-          result (llm/run-agent provider
-                   {:tools [tool-schema] :execute execute-fn}
-                   "Weather in Tokyo?")]
+          _ (let [orig-fn get-weather]
+              ;; After tool executes, make provider return text
+              (add-watch (.responses provider) :swap
+                (fn [_ _ _ _])) )
+          ;; We need the provider to return text on second call
+          ;; Wrap the tool to also swap the provider response
+          get-weather-wrapped (llm/tool
+                                [:map {:name "get_weather" :description "Get weather"}
+                                 [:city :string]]
+                                (fn [{:keys [city]}]
+                                  (reset! (.responses provider)
+                                          [{:type :content :content "It's sunny in Tokyo!"}])
+                                  (str "Sunny, 22C in " city)))
+          result (llm/run-agent provider [get-weather-wrapped] "Weather in Tokyo?")]
       (is (= "It's sunny in Tokyo!" (:text result)))
       (is (vector? (:history result)))
       (is (= 1 (count (:steps result))))
       (is (= 1 (count (:tool-calls (first (:steps result))))))
       (is (= "get_weather" (:name (first (:tool-calls (first (:steps result)))))))))
 
-  (testing "run-agent requires :execute in opts"
+  (testing "run-agent requires non-empty tools vector"
     (let [provider (mock-provider [{:type :content :content "hi"}])]
       (is (thrown? clojure.lang.ExceptionInfo
-            (llm/run-agent provider {:tools []} "test")))))
+            (llm/run-agent provider [] "test")))))
 
   (testing "run-agent with :schema parses final response"
-    (let [tool-schema [:map {:name "lookup" :description "Lookup"}
-                       [:id :string]]
+    (let [lookup (llm/tool
+                   [:map {:name "lookup" :description "Lookup"}
+                    [:id :string]]
+                   (fn [{:keys [id]}] (str "found user " id)))
           provider (->MockProvider
                     (atom [{:type :tool-call :index 0 :id "call_1"
                             :name "lookup" :arguments ""}
                            {:type :tool-call-delta :index 0
                             :arguments "{\"id\":\"123\"}"}])
                     {:model "test-model"})
-          execute-fn (fn [tc]
-                       (reset! (.responses provider)
-                               [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
-                       "found it")
-          result (llm/run-agent provider
-                   {:tools [tool-schema]
-                    :execute execute-fn
-                    :schema [:map [:name :string] [:age pos-int?]]}
+          lookup-with-swap (llm/tool
+                             [:map {:name "lookup" :description "Lookup"}
+                              [:id :string]]
+                             (fn [{:keys [id]}]
+                               (reset! (.responses provider)
+                                       [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
+                               (str "found user " id)))
+          result (llm/run-agent provider [lookup-with-swap]
+                   {:schema [:map [:name :string] [:age pos-int?]]}
                    "find user 123")]
       (is (= {:name "Alice" :age 30} (:text result))))))
 
