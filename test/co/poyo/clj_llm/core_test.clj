@@ -149,6 +149,11 @@
   [{:keys [host]}]
   (str "pong " host))
 
+;; Tool registered via m/=> (global Malli registry, no metadata on var)
+(defn ^:private registry-tool [{:keys [n]}] (inc n))
+(malli.core/=> registry-tool [:=> [:cat [:map {:name "increment" :description "Add one"}
+                                         [:n :int]]] :int])
+
 (deftest test-tool-schema-from-defn
   (testing "defn with :malli/schema — schema lives on the var"
     (is (= "pong example.com" (ping-tool {:host "example.com"})))
@@ -175,7 +180,17 @@
                                    [:host :string]] :string]})]
       (is (fn? f))
       (is (= "pong x" (f {:host "x"})))
-      (is (some? (:malli/schema (meta f)))))))
+      (is (some? (:malli/schema (meta f))))))
+
+  (testing "m/=> global registry — no metadata on var"
+    ;; registry-tool has no :malli/schema on its var metadata
+    (is (nil? (:malli/schema (meta #'registry-tool))))
+    (is (nil? (:schema (meta #'registry-tool))))
+    (is (= 2 (registry-tool {:n 1})))
+    ;; resolve-tool-schema finds it in Malli's global function registry
+    (let [schema (#'co.poyo.clj-llm.core/resolve-tool-schema #'registry-tool)]
+      (is (some? schema))
+      (is (= :=> (malli.core/type (malli.core/schema schema)))))))
 
 (deftest test-run-agent
   (testing "run-agent with tool functions"

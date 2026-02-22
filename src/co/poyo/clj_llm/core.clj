@@ -292,16 +292,19 @@
 
 (defn- resolve-tool-schema
   "Get the Malli function schema ([:=> ...] or [:-> ...]) from a tool.
-   Supports:
-   - var with :malli/schema metadata (defn + {:malli/schema ...})
-   - var with :schema metadata (mx/defn)
-   - fn with :malli/schema metadata (with-meta)"
+   Checks in order:
+   1. :malli/schema on metadata (defn + {:malli/schema ...}, with-meta)
+   2. :schema on metadata (mx/defn)
+   3. Malli global function registry (m/=> annotation)"
   [tool]
   (let [m (meta tool)]
     (or (:malli/schema m)
-        (:schema m) ;; mx/defn puts :schema on var meta
+        (:schema m)
+        ;; Check Malli's global function registry (populated by m/=>)
+        (when-let [ns-sym (some-> (:ns m) ns-name)]
+          (:schema (get-in (m/function-schemas) [ns-sym (:name m)])))
         (throw (errors/error
-                "Tool missing :malli/schema metadata. Use defn {:malli/schema ...} or mx/defn."
+                "Tool missing Malli schema. Use {:malli/schema ...}, mx/defn, or m/=>."
                 {:tool tool})))))
 
 (defn- extract-input-schema
@@ -355,11 +358,16 @@
      [{:keys [city]}]
      (str \"Sunny in \" city))
 
-   ;; Or mx/defn (malli.experimental)
+   ;; mx/defn (malli.experimental)
    (mx/defn get-weather :- :string
      [args :- [:map {:name \"get_weather\" :description \"Get weather\"}
                 [:city :string]]]
      (str \"Sunny in \" (:city args)))
+
+   ;; m/=> annotation (Malli global registry)
+   (defn get-weather [{:keys [city]}] (str \"Sunny in \" city))
+   (m/=> get-weather [:=> [:cat [:map {:name \"get_weather\"}
+                                  [:city :string]]] :string])
 
    The input :map schema carries :name and :description for the LLM.
    Pass tool vars to run-agent:
