@@ -192,6 +192,8 @@ A simple chat loop:
 
 ## 9. Tool calling
 
+`generate` is a pure value function — it doesn't do tool calls. When getting a value requires tool calls, use `run-agent`.
+
 Define tools as Malli schemas with `:name` and `:description` metadata:
 
 ```clojure
@@ -200,54 +202,24 @@ Define tools as Malli schemas with `:name` and `:description` metadata:
    [:city {:description "City name"} :string]])
 ```
 
-Pass tools as an option. When the model wants to call tools, `generate` returns a map:
-
-```clojure
-(def result (llm/generate ai {:tools [get-weather]} "What's the weather in Tokyo?"))
-;; => {:tool-calls [{:id "call_abc123" :name "get_weather" :arguments {:city "Tokyo"}}]
-;;     :message {:role :assistant :tool-calls [{:id "call_abc123" :type "function" ...}]}}
-```
-
-Everything you need is right there — `:tool-calls` to act on, `:message` for history round-tripping. If the model also returned text alongside tool calls, it's in `:text`.
-
-If the model decides no tools are needed, you get a plain string back.
-
-## 10. Feeding tool results back
-
-Build tool result messages with `tool-result`, then pass the full history back:
-
-```clojure
-;; Execute the tool yourself
-(defn execute [{:keys [name arguments]}]
-  (case name
-    "get_weather" (str "Sunny, 22°C in " (:city arguments))))
-
-;; Build history: user message → assistant (with tool calls) → tool results
-(let [{:keys [tool-calls message]} (llm/generate ai {:tools [get-weather]} "Weather in Tokyo?")
-      results (mapv #(llm/tool-result (:id %) (execute %)) tool-calls)
-      history (into [{:role :user :content "Weather in Tokyo?"} message] results)]
-  (llm/generate ai history))
-;; => "It's sunny and 22°C in Tokyo!"
-```
-
-This is explicit. You destructure what you need. Nothing is hidden in metadata.
-
-## 11. Agentic loop
-
-For the common pattern of "call tools until the model is done", there's `run-agent`:
+Write an executor — a function that takes a tool call and returns a result:
 
 ```clojure
 (defn execute [{:keys [name arguments]}]
   (case name
     "get_weather" (str "Sunny, 22°C in " (:city arguments))))
+```
 
+`run-agent` handles the loop: call the model, execute tools, feed results back, repeat until the model produces a final text response.
+
+```clojure
 (llm/run-agent ai {:tools [get-weather] :execute execute} "Weather in Tokyo?")
 ;; => {:text    "It's sunny and 22°C in Tokyo!"
 ;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]
 ;;     :steps   [{:tool-calls [...] :tool-results [...]}]}
 ```
 
-`run-agent` returns a map because it has multiple things to tell you: the final text, the full history (reusable), and what happened at each step.
+`:text` is the final answer. `:history` is the full conversation (reusable). `:steps` records each tool-calling iteration.
 
 Limit iterations with `:max-steps`:
 
@@ -255,7 +227,28 @@ Limit iterations with `:max-steps`:
 (llm/run-agent ai {:tools [get-weather] :execute execute :max-steps 3} "Weather in Tokyo?")
 ```
 
-## 12. Full response access
+If your agent should return structured data, pass `:schema`:
+
+```clojure
+(llm/run-agent ai
+  {:tools [lookup-tool] :execute execute
+   :schema [:map [:name :string] [:status :string]]}
+  "Look up user 123")
+;; => {:text {:name "Alice" :status "active"} :history [...] :steps [...]}
+```
+
+## 10. Why `generate` doesn't do tools
+
+Tool calling is fundamentally different from generation. When a model requests a tool call, it hasn't produced a value yet — it's mid-computation. Having `generate` return tool-call payloads would mean the return type depends on what the model decides to do, forcing callers to branch on the result type whenever tools are configured.
+
+Instead:
+
+- **`generate`** — single request, single value back. Always a string or structured data.
+- **`run-agent`** — loop until done. Handles tool calls internally, returns the final value.
+
+The name tells you the execution model.
+
+## 11. Full response access
 
 When you need token usage, raw SSE events, or fine-grained streaming control, use `prompt` directly:
 
@@ -271,7 +264,7 @@ When you need token usage, raw SSE events, or fine-grained streaming control, us
 
 `prompt` returns a `Response` record. `generate` is built on top of it — it calls `prompt` and extracts the natural value.
 
-## 13. Error handling
+## 12. Error handling
 
 ```clojure
 (require '[co.poyo.clj-llm.errors :as errors])
@@ -286,7 +279,7 @@ When you need token usage, raw SSE events, or fine-grained streaming control, us
       (throw e))))
 ```
 
-## 14. Multiple providers
+## 13. Multiple providers
 
 The same code works with any provider. Only the connection changes.
 
@@ -314,7 +307,7 @@ The same code works with any provider. Only the connection changes.
 | Text generation | `(generate ai "prompt")` → string |
 | With options | `(generate ai {:system-prompt "..."} "prompt")` |
 | Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
-| Tool calling | `(generate ai {:tools t} "prompt")` → `{:tool-calls [...] :message ...}` |
+| Tool calling | `(run-agent ai {:tools t :execute f} "prompt")` → `{:text ... :steps ...}` |
 | Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
 | Conversations | `(generate ai history-vector)` |
 | Agent loop | `(run-agent ai {:tools t :execute exec-fn} "prompt")` |
