@@ -1,7 +1,8 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai])
+         '[co.poyo.clj-llm.backends.openai :as openai]
+         '[cheshire.core :as json])
 
 ;; Works with OPENAI_API_KEY or OPENROUTER_KEY
 (def provider
@@ -16,13 +17,34 @@
 ;; Tools are plain functions with standard Malli function schemas.
 ;; The :malli/schema on the var tells run-agent what the LLM sees.
 
+(def wmo-codes
+  {0 "Clear sky" 1 "Mainly clear" 2 "Partly cloudy" 3 "Overcast"
+   45 "Fog" 48 "Rime fog" 51 "Light drizzle" 53 "Drizzle" 55 "Dense drizzle"
+   61 "Slight rain" 63 "Rain" 65 "Heavy rain" 71 "Slight snow" 73 "Snow"
+   75 "Heavy snow" 80 "Slight showers" 81 "Showers" 82 "Violent showers"
+   95 "Thunderstorm" 96 "Thunderstorm w/ hail" 99 "Thunderstorm w/ heavy hail"})
+
 (defn get-weather
   {:malli/schema [:=> [:cat [:map {:name "get_weather"
-                                   :description "Get weather for a city"}
+                                   :description "Get current weather for a city using Open-Meteo"}
                              [:city {:description "City name"} :string]]]
                       :string]}
   [{:keys [city]}]
-  (str "Sunny, 22°C in " city))
+  (let [geo  (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name=" (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
+                 (json/parse-string true))
+        loc  (first (:results geo))]
+    (if-not loc
+      (str "Could not find city: " city)
+      (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
+                               "&longitude=" (:longitude loc)
+                               "&current=temperature_2m,weather_code,wind_speed_10m"
+                               "&timezone=auto"))
+                   (json/parse-string true))
+            current (:current wx)]
+        (str (:name loc) ", " (:country loc) ": "
+             (get wmo-codes (:weather_code current) "Unknown") ", "
+             (:temperature_2m current) "°C, "
+             "wind " (:wind_speed_10m current) " km/h")))))
 
 (defn search-restaurants
   {:malli/schema [:=> [:cat [:map {:name "search_restaurants"

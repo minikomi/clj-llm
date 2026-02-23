@@ -231,20 +231,32 @@ A simple chat loop:
 Tools are plain functions with standard [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md). The `:malli/schema` metadata tells the LLM what the tool does and what arguments it takes:
 
 ```clojure
+(require '[cheshire.core :as json])
+
 (defn get-weather
   {:malli/schema [:=> [:cat [:map {:name "get_weather"
                                    :description "Get current weather for a city"}
                              [:city {:description "City name"} :string]]]
                       :string]}
   [{:keys [city]}]
-  (http/get (str "https://weather.api/" city)))
+  (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
+                            (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
+                (json/parse-string true))
+        loc (first (:results geo))
+        wx  (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
+                            "&longitude=" (:longitude loc)
+                            "&current=temperature_2m,weather_code,wind_speed_10m"
+                            "&timezone=auto"))
+                (json/parse-string true))]
+    (let [c (:current wx)]
+      (str (:name loc) ": " (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h"))))
 ```
 
 A tool is a regular Clojure function. Call it directly, test it, compose it:
 
 ```clojure
 (get-weather {:city "Tokyo"})
-;; => "Sunny, 22°C"
+;; => "Tokyo: 20.1°C, wind 7.6 km/h"
 ```
 
 The schema lives in var metadata — standard Malli, nothing custom:
