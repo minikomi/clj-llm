@@ -17,6 +17,26 @@
 ;; Tools are plain functions with standard Malli function schemas.
 ;; The :malli/schema on the var tells run-agent what the LLM sees.
 
+;; Two tools that the LLM chains together:
+;; 1. geocode: city name → lat/lng
+;; 2. get-weather: lat/lng → current weather
+;; No API key needed — powered by Open-Meteo.
+
+(defn geocode
+  {:malli/schema [:=> [:cat [:map {:name "geocode"
+                                   :description "Look up latitude and longitude for a city"}
+                             [:city {:description "City name"} :string]]]
+                      :string]}
+  [{:keys [city]}]
+  (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
+                            (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
+                (json/parse-string true))
+        loc (first (:results geo))]
+    (if-not loc
+      (str "Could not find city: " city)
+      (json/generate-string {:name (:name loc) :country (:country loc)
+                             :latitude (:latitude loc) :longitude (:longitude loc)}))))
+
 (def wmo-codes
   {0 "Clear sky" 1 "Mainly clear" 2 "Partly cloudy" 3 "Overcast"
    45 "Fog" 48 "Rime fog" 51 "Light drizzle" 53 "Drizzle" 55 "Dense drizzle"
@@ -26,52 +46,39 @@
 
 (defn get-weather
   {:malli/schema [:=> [:cat [:map {:name "get_weather"
-                                   :description "Get current weather for a city using Open-Meteo"}
-                             [:city {:description "City name"} :string]]]
+                                   :description "Get current weather at a location. Call geocode first to get coordinates."}
+                             [:latitude {:description "Latitude"} :double]
+                             [:longitude {:description "Longitude"} :double]]]
                       :string]}
-  [{:keys [city]}]
-  (let [geo  (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name=" (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
-                 (json/parse-string true))
-        loc  (first (:results geo))]
-    (if-not loc
-      (str "Could not find city: " city)
-      (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
-                               "&longitude=" (:longitude loc)
-                               "&current=temperature_2m,weather_code,wind_speed_10m"
-                               "&timezone=auto"))
-                   (json/parse-string true))
-            current (:current wx)]
-        (str (:name loc) ", " (:country loc) ": "
-             (get wmo-codes (:weather_code current) "Unknown") ", "
-             (:temperature_2m current) "°C, "
-             "wind " (:wind_speed_10m current) " km/h")))))
-
-(defn search-restaurants
-  {:malli/schema [:=> [:cat [:map {:name "search_restaurants"
-                                   :description "Search restaurants in a city"}
-                             [:city {:description "City"} :string]
-                             [:cuisine {:description "Cuisine type"} :string]]]
-                      :string]}
-  [{:keys [city cuisine]}]
-  (str "Found: " cuisine " place in " city))
+  [{:keys [latitude longitude]}]
+  (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
+                           "&longitude=" longitude
+                           "&current=temperature_2m,weather_code,wind_speed_10m"
+                           "&timezone=auto"))
+               (json/parse-string true))
+        c  (:current wx)]
+    (str (get wmo-codes (:weather_code c) "Unknown") ", "
+         (:temperature_2m c) "°C, "
+         "wind " (:wind_speed_10m c) " km/h")))
 
 ;; Tools are regular functions — test them directly
-(println "Direct call:" (get-weather {:city "Tokyo"}))
+(println "Direct call:" (geocode {:city "Tokyo"}))
+(println "Direct call:" (get-weather {:latitude 35.6895 :longitude 139.6917}))
 
-;; run-agent reads schemas from var metadata, calls the fns when the model invokes them
-(println "\n--- single tool agent ---")
-(let [{:keys [text steps]} (llm/run-agent ai [#'get-weather] "What's the weather in Tokyo?")]
+;; run-agent chains tools automatically — geocode then get-weather
+(println "\n--- agent chains geocode → get-weather ---")
+(let [{:keys [text steps]} (llm/run-agent ai [#'geocode #'get-weather]
+                             "What's the weather in Tokyo?")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls]} steps]
     (doseq [tc tool-calls]
       (println "  Called:" (:name tc) (:arguments tc))))
   (println "Final:" text))
 
-;; Multiple tools
-(println "\n--- multi-tool agent ---")
-(let [{:keys [text steps]} (llm/run-agent ai
-                             [#'get-weather #'search-restaurants]
-                             "Weather in Tokyo and find ramen there")]
+;; Multiple cities — the LLM can call geocode in parallel
+(println "\n--- multi-city ---")
+(let [{:keys [text steps]} (llm/run-agent ai [#'geocode #'get-weather]
+                             "Compare weather in Tokyo and Paris right now")]
   (println "Steps:" (count steps))
   (doseq [{:keys [tool-calls]} steps]
     (doseq [tc tool-calls]
@@ -80,8 +87,8 @@
 
 ;; With options
 (println "\n--- with max-steps ---")
-(let [{:keys [text steps truncated]} (llm/run-agent ai [#'get-weather]
-                                       {:max-steps 2}
+(let [{:keys [text steps truncated]} (llm/run-agent ai [#'geocode #'get-weather]
+                                       {:max-steps 3}
                                        "Weather in Tokyo?")]
   (println "Steps:" (count steps) (when truncated "(truncated)"))
   (println "Final:" text))

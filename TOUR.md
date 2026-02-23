@@ -233,37 +233,51 @@ Tools are plain functions with standard [Malli function schemas](https://github.
 ```clojure
 (require '[cheshire.core :as json])
 
-(defn get-weather
-  {:malli/schema [:=> [:cat [:map {:name "get_weather"
-                                   :description "Get current weather for a city"}
+;; Geocode: city name → coordinates (free Open-Meteo API, no key needed)
+(defn geocode
+  {:malli/schema [:=> [:cat [:map {:name "geocode"
+                                   :description "Look up latitude and longitude for a city"}
                              [:city {:description "City name"} :string]]]
                       :string]}
   [{:keys [city]}]
   (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
                             (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
                 (json/parse-string true))
-        loc (first (:results geo))
-        wx  (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
-                            "&longitude=" (:longitude loc)
-                            "&current=temperature_2m,weather_code,wind_speed_10m"
-                            "&timezone=auto"))
-                (json/parse-string true))]
+        loc (first (:results geo))]
+    (json/generate-string (select-keys loc [:name :country :latitude :longitude]))))
+
+;; Weather: coordinates → current conditions
+(defn get-weather
+  {:malli/schema [:=> [:cat [:map {:name "get_weather"
+                                   :description "Get current weather at a location. Call geocode first to get coordinates."}
+                             [:latitude {:description "Latitude"} :double]
+                             [:longitude {:description "Longitude"} :double]]]
+                      :string]}
+  [{:keys [latitude longitude]}]
+  (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
+                           "&longitude=" longitude
+                           "&current=temperature_2m,weather_code,wind_speed_10m"
+                           "&timezone=auto"))
+               (json/parse-string true))]
     (let [c (:current wx)]
-      (str (:name loc) ": " (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h"))))
+      (str (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h"))))
 ```
 
-A tool is a regular Clojure function. Call it directly, test it, compose it:
+Tools are regular Clojure functions. Call them directly, test them, compose them:
 
 ```clojure
-(get-weather {:city "Tokyo"})
-;; => "Tokyo: 20.1°C, wind 7.6 km/h"
+(geocode {:city "Tokyo"})
+;; => "{\"name\":\"Tokyo\",\"country\":\"Japan\",\"latitude\":35.6895,\"longitude\":139.69171}"
+
+(get-weather {:latitude 35.6895 :longitude 139.6917})
+;; => "20.1°C, wind 7.6 km/h"
 ```
 
-The schema lives in var metadata — standard Malli, nothing custom:
+Schemas live in var metadata — standard Malli, nothing custom:
 
 ```clojure
-(:malli/schema (meta #'get-weather))
-;; => [:=> [:cat [:map {:name "get_weather" ...} ...]] :string]
+(:malli/schema (meta #'geocode))
+;; => [:=> [:cat [:map {:name "geocode" ...} ...]] :string]
 ```
 
 All three standard Malli approaches work. You can also use `m/=>` to keep the schema separate:
@@ -292,10 +306,10 @@ Or `mx/defn` for inline schema hints:
 Pass `:tools` to `generate` for a single LLM call with tool access. The model decides whether to call tools. If it does, `generate` executes them and returns everything:
 
 ```clojure
-(llm/generate ai {:tools [#'get-weather]} "What's the weather in Tokyo?")
+(llm/generate ai {:tools [#'geocode #'get-weather]} "What's the weather in Tokyo?")
 ;; => {:text nil
-;;     :tool-calls [{:id "call_abc" :name "get_weather" :arguments {:city "Tokyo"}}]
-;;     :tool-results ["Sunny, 22°C"]}
+;;     :tool-calls [{:id "call_abc" :name "geocode" :arguments {:city "Tokyo"}}]
+;;     :tool-results ["{\"name\":\"Tokyo\",...}"]}
 ```
 
 When tools are configured, `generate` always returns a map with three keys:
@@ -307,7 +321,7 @@ When tools are configured, `generate` always returns a map with three keys:
 If the model decides no tools are needed, you get empty vectors:
 
 ```clojure
-(llm/generate ai {:tools [#'get-weather]} "What is 2 + 2?")
+(llm/generate ai {:tools [#'geocode #'get-weather]} "What is 2 + 2?")
 ;; => {:text "2 + 2 = 4" :tool-calls [] :tool-results []}
 ```
 
@@ -318,8 +332,11 @@ This is one LLM call. The model sees the tools, optionally calls them, and you g
 `run-agent` is the autonomous loop. It calls the LLM, executes tools, feeds results back, and repeats until the model stops calling tools.
 
 ```clojure
-(llm/run-agent ai [#'get-weather #'search] "Plan a day trip to Tokyo")
-;; => {:text    "Based on the weather and attractions..."
+(llm/run-agent ai [#'geocode #'get-weather] "Weather in Tokyo?")
+;; Step 1: LLM calls geocode({:city "Tokyo"}) → coordinates
+;; Step 2: LLM calls get-weather({:latitude 35.69 :longitude 139.69}) → conditions
+;; Step 3: LLM produces final answer
+;; => {:text    "It's currently 20.1°C in Tokyo with light wind."
 ;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]
 ;;     :steps   [{:tool-calls [...] :tool-results [...]}
 ;;              {:tool-calls [...] :tool-results [...]}]}
@@ -330,7 +347,7 @@ This is one LLM call. The model sees the tools, optionally calls them, and you g
 Options go between tools and input:
 
 ```clojure
-(llm/run-agent ai [#'get-weather] {:max-steps 3} "Weather in Tokyo?")
+(llm/run-agent ai [#'geocode #'get-weather] {:max-steps 3} "Weather in Tokyo?")
 ```
 
 ### Controlling when the agent stops

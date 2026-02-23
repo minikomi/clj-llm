@@ -28,9 +28,14 @@
 
 ;; ══════ Tools ══════
 
-(def get-weather
-  [:map {:name "get_weather" :description "Get current weather for a city"}
+(def geocode
+  [:map {:name "geocode" :description "Look up latitude and longitude for a city"}
    [:city {:description "City name"} :string]])
+
+(def get-weather
+  [:map {:name "get_weather" :description "Get current weather at a location. Call geocode first to get coordinates."}
+   [:latitude {:description "Latitude"} :double]
+   [:longitude {:description "Longitude"} :double]])
 
 (def search-web
   [:map {:name "search_web" :description "Search the web for information"}
@@ -65,7 +70,7 @@
     (catch Exception e
       (str "Search error: " (.getMessage e)))))
 
-(def agent-tools [get-weather search-web calculate])
+(def agent-tools [geocode get-weather search-web calculate])
 
 (def wmo-codes
   {0 "Clear sky" 1 "Mainly clear" 2 "Partly cloudy" 3 "Overcast"
@@ -74,29 +79,37 @@
    75 "Heavy snow" 80 "Slight showers" 81 "Showers" 82 "Violent showers"
    95 "Thunderstorm" 96 "Thunderstorm w/ hail" 99 "Thunderstorm w/ heavy hail"})
 
-(defn fetch-weather [city]
+(defn fetch-geocode [city]
   (try
-    (let [geo  (-> (http/get (str "https://geocoding-api.open-meteo.com/v1/search?name=" (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
+    (let [geo  (-> (http/get (str "https://geocoding-api.open-meteo.com/v1/search?name="
+                                  (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
                    :body (json/parse-string true))
           loc  (first (:results geo))]
       (if-not loc
         (str "Could not find city: " city)
-        (let [wx (-> (http/get (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
-                                    "&longitude=" (:longitude loc)
-                                    "&current=temperature_2m,weather_code,wind_speed_10m"
-                                    "&timezone=auto"))
-                     :body (json/parse-string true))
-              current (:current wx)]
-          (str (:name loc) ", " (:country loc) ": "
-               (get wmo-codes (:weather_code current) "Unknown") ", "
-               (:temperature_2m current) "°C, "
-               "wind " (:wind_speed_10m current) " km/h"))))
+        (json/generate-string {:name (:name loc) :country (:country loc)
+                               :latitude (:latitude loc) :longitude (:longitude loc)})))
+    (catch Exception e
+      (str "Geocoding error: " (.getMessage e)))))
+
+(defn fetch-weather [latitude longitude]
+  (try
+    (let [wx (-> (http/get (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
+                                "&longitude=" longitude
+                                "&current=temperature_2m,weather_code,wind_speed_10m"
+                                "&timezone=auto"))
+                 :body (json/parse-string true))
+          c  (:current wx)]
+      (str (get wmo-codes (:weather_code c) "Unknown") ", "
+           (:temperature_2m c) "°C, "
+           "wind " (:wind_speed_10m c) " km/h"))
     (catch Exception e
       (str "Weather lookup error: " (.getMessage e)))))
 
 (defn execute-tool [{:keys [name arguments]}]
   (case name
-    "get_weather"  (fetch-weather (:city arguments))
+    "geocode"      (fetch-geocode (:city arguments))
+    "get_weather"  (fetch-weather (:latitude arguments) (:longitude arguments))
     "search_web"   (tavily-search (:query arguments))
     "calculate"    (str "Result: "
                         (try (load-string (:expression arguments))
