@@ -11,7 +11,8 @@ This walks through the library piece by piece. Every example is real code.
 | Text generation | `(generate ai "prompt")` → string |
 | With options | `(generate ai {:system-prompt "..."} "prompt")` |
 | Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
-| Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
+| Single tool call | `(generate ai {:tools [...]} "prompt")` → `{:text :tool-calls :tool-results}` |
+| Agent loop | `(run-agent ai [#'tool-fn] "prompt")` → `{:text :steps :history}` |
 | Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
 | Conversations | `(generate ai history-vector)` |
 | Full access | `(request ai "prompt")` → Response record |
@@ -225,9 +226,9 @@ A simple chat loop:
 ;; => "K2, at 8,611 meters."
 ```
 
-## 9. Tool calling
+## 9. Defining tools
 
-Tools are plain functions with standard [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md). The `:malli/schema` metadata tells `run-agent` what the LLM sees:
+Tools are plain functions with standard [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md). The `:malli/schema` metadata tells the LLM what the tool does and what arguments it takes:
 
 ```clojure
 (defn get-weather
@@ -274,24 +275,75 @@ Or `mx/defn` for inline schema hints:
   (str "Sunny in " (:city args)))
 ```
 
-## 10. Running agents
+## 10. Single-turn tool calls with `generate`
 
-Pass tool vars to `run-agent`. It reads their `:malli/schema`, sends the input schemas to the model, and calls the functions when the model invokes them. The loop repeats until the model gives a final text response.
+Pass `:tools` to `generate` for a single LLM call with tool access. The model decides whether to call tools. If it does, `generate` executes them and returns everything:
 
 ```clojure
-(llm/run-agent ai [#'get-weather] "Weather in Tokyo?")
-;; => {:text    "It's sunny and 22°C in Tokyo!"
-;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]
-;;     :steps   [{:tool-calls [...] :tool-results [...]}]}
+(llm/generate ai {:tools [#'get-weather]} "What's the weather in Tokyo?")
+;; => {:text nil
+;;     :tool-calls [{:id "call_abc" :name "get_weather" :arguments {:city "Tokyo"}}]
+;;     :tool-results ["Sunny, 22°C"]}
 ```
 
-`:text` is the final answer (always a string). `:history` is the full conversation (reusable). `:steps` records each tool-calling iteration.
+When tools are configured, `generate` always returns a map with three keys:
 
-Options go in an opts map between tools and input:
+- `:text` — any text the model produced alongside tool calls (often `nil`)
+- `:tool-calls` — vector of `{:id :name :arguments}` maps
+- `:tool-results` — vector of results from executing each tool call
+
+If the model decides no tools are needed, you get empty vectors:
+
+```clojure
+(llm/generate ai {:tools [#'get-weather]} "What is 2 + 2?")
+;; => {:text "2 + 2 = 4" :tool-calls [] :tool-results []}
+```
+
+This is one LLM call. The model sees the tools, optionally calls them, and you get back data. No loops, no agents.
+
+## 11. Multi-turn agents with `run-agent`
+
+`run-agent` is the autonomous loop. It calls the LLM, executes tools, feeds results back, and repeats until the model stops calling tools.
+
+```clojure
+(llm/run-agent ai [#'get-weather #'search] "Plan a day trip to Tokyo")
+;; => {:text    "Based on the weather and attractions..."
+;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]
+;;     :steps   [{:tool-calls [...] :tool-results [...]}
+;;              {:tool-calls [...] :tool-results [...]}]}
+```
+
+`:text` is the final answer. `:history` is the full conversation (reusable). `:steps` records each tool-calling iteration.
+
+Options go between tools and input:
 
 ```clojure
 (llm/run-agent ai [#'get-weather] {:max-steps 3} "Weather in Tokyo?")
 ```
+
+### Controlling when the agent stops
+
+By default, the loop stops when the model returns no tool calls — it's done.
+
+Use `:stop-when` for explicit control. It's a predicate called after each LLM response, before tools are executed. Return truthy to stop:
+
+```clojure
+;; Stop when the model calls a "done" tool
+(llm/run-agent ai [#'research #'done]
+  {:stop-when (fn [{:keys [tool-calls]}]
+                (some #(= "done" (:name %)) tool-calls))}
+  "Research quantum computing")
+;; => {:text "..."
+;;     :tool-calls [{:name "done" :arguments {:summary "..."}}]  ;; pending, not executed
+;;     :steps [...]
+;;     :history [...]}
+```
+
+The predicate receives `{:tool-calls [...] :text "..."}`. When `:stop-when` fires, pending tool calls are returned in `:tool-calls` on the result — they were not executed.
+
+`:max-steps` caps iterations as a safety net (default 10).
+
+### Structured output after tool use
 
 For structured output after tool use, compose with `generate`:
 
@@ -301,20 +353,22 @@ For structured output after tool use, compose with `generate`:
 ;; => {:name "Alice" :status "active"}
 ```
 
-This keeps `run-agent` focused on the tool loop and `generate` as the single place structured output happens.
+This keeps `run-agent` focused on the tool loop and `generate` as the single place structured extraction happens.
 
-## 11. Why `generate` doesn't do tools
+## 12. `generate` vs `run-agent`
 
-Tool calling is fundamentally different from generation. When a model requests a tool call, it hasn't produced a value yet — it's mid-computation. Having `generate` return tool-call payloads would mean the return type depends on what the model decides to do, forcing callers to branch on the result type whenever tools are configured.
+| | `generate` | `run-agent` |
+|---|---|---|
+| LLM calls | Exactly one | Loop until done |
+| Tools | Optional — pass `:tools` in opts | Required — pass as second arg |
+| Executes tools | Yes, once | Yes, each iteration |
+| Returns | String, structured data, or `{:text :tool-calls :tool-results}` | `{:text :history :steps}` |
+| Stop control | N/A (one call) | `:stop-when` predicate, `:max-steps` |
+| Use when | You know one call is enough | The model needs to iterate |
 
-Instead:
+`generate` is the workhorse. `run-agent` is for when the model needs to drive.
 
-- **`generate`** — single request, single value back. Always a string or structured data.
-- **`run-agent`** — loop until done. Handles tool calls internally, returns the final value.
-
-The name tells you the execution model.
-
-## 12. Full response access
+## 13. Full response access
 
 When you need token usage, raw SSE events, or fine-grained streaming control, use `request` directly:
 
@@ -346,7 +400,7 @@ For raw events only (without the full Response record), use `events`:
 ;; :done {:type :done}
 ```
 
-## 13. Error handling
+## 14. Error handling
 
 Errors are `ex-info` exceptions with an `:error-type` keyword in `ex-data` for programmatic dispatch:
 
@@ -377,7 +431,7 @@ Error types:
 
 The library does not do automatic retries. Use your own retry logic or a library like `again`.
 
-## 14. Multiple providers
+## 15. Multiple providers
 
 The same code works with any provider. Only the connection changes.
 

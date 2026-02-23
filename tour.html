@@ -266,20 +266,25 @@ code.</p>
 <td><code>(generate ai {:schema s} "prompt")</code> → parsed data</td>
 </tr>
 <tr class="even">
-<td>Tool calling</td>
-<td><code>(run-agent ai [#'tool-fn] "prompt")</code> →
-<code>{:text ... :steps ...}</code></td>
+<td>Single tool call</td>
+<td><code>(generate ai {:tools [...]} "prompt")</code> →
+<code>{:text :tool-calls :tool-results}</code></td>
 </tr>
 <tr class="odd">
+<td>Agent loop</td>
+<td><code>(run-agent ai [#'tool-fn] "prompt")</code> →
+<code>{:text :steps :history}</code></td>
+</tr>
+<tr class="even">
 <td>Streaming</td>
 <td><code>(stream-print ai "prompt")</code> or
 <code>(stream ai "prompt")</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>Conversations</td>
 <td><code>(generate ai history-vector)</code></td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>Full access</td>
 <td><code>(request ai "prompt")</code> → Response record</td>
 </tr>
@@ -450,11 +455,11 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb16-1"><a
 <span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>(chat! <span class="st">&quot;How about the second tallest?&quot;</span>)</span>
 <span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;K2, at 8,611 meters.&quot;</span></span></code></pre></div>
-<h2 id="tool-calling">9. Tool calling</h2>
+<h2 id="defining-tools">9. Defining tools</h2>
 <p>Tools are plain functions with standard <a
 href="https://github.com/metosin/malli/blob/master/docs/function-schemas.md">Malli
-function schemas</a>. The <code>:malli/schema</code> metadata tells
-<code>run-agent</code> what the LLM sees:</p>
+function schemas</a>. The <code>:malli/schema</code> metadata tells the
+LLM what the tool does and what arguments it takes:</p>
 <div class="sourceCode" id="cb17"><pre
 class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather</span></span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
@@ -489,91 +494,178 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb21-1"><a
 <span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  [args <span class="at">:-</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span> <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
 <span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>             [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
 <span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> (<span class="at">:city</span> args)))</span></code></pre></div>
-<h2 id="running-agents">10. Running agents</h2>
-<p>Pass tool vars to <code>run-agent</code>. It reads their
-<code>:malli/schema</code>, sends the input schemas to the model, and
-calls the functions when the model invokes them. The loop repeats until
-the model gives a final text response.</p>
+<h2 id="single-turn-tool-calls-with-generate">10. Single-turn tool calls
+with <code>generate</code></h2>
+<p>Pass <code>:tools</code> to <code>generate</code> for a single LLM
+call with tool access. The model decides whether to call tools. If it
+does, <code>generate</code> executes them and returns everything:</p>
 <div class="sourceCode" id="cb22"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span>] <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text    &quot;It&#39;s sunny and 22°C in Tokyo!&quot;</span></span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]</span></span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps   [{:tool-calls [...] :tool-results [...]}]}</span></span></code></pre></div>
-<p><code>:text</code> is the final answer (always a string).
-<code>:history</code> is the full conversation (reusable).
-<code>:steps</code> records each tool-calling iteration.</p>
-<p>Options go in an opts map between tools and input:</p>
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;get-weather</span>]} <span class="st">&quot;What&#39;s the weather in Tokyo?&quot;</span>)</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text nil</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-calls [{:id &quot;call_abc&quot; :name &quot;get_weather&quot; :arguments {:city &quot;Tokyo&quot;}}]</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-results [&quot;Sunny, 22°C&quot;]}</span></span></code></pre></div>
+<p>When tools are configured, <code>generate</code> always returns a map
+with three keys:</p>
+<ul>
+<li><code>:text</code> — any text the model produced alongside tool
+calls (often <code>nil</code>)</li>
+<li><code>:tool-calls</code> — vector of
+<code>{:id :name :arguments}</code> maps</li>
+<li><code>:tool-results</code> — vector of results from executing each
+tool call</li>
+</ul>
+<p>If the model decides no tools are needed, you get empty vectors:</p>
 <div class="sourceCode" id="cb23"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span>] {<span class="at">:max-steps</span> <span class="dv">3</span>} <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;get-weather</span>]} <span class="st">&quot;What is 2 + 2?&quot;</span>)</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text &quot;2 + 2 = 4&quot; :tool-calls [] :tool-results []}</span></span></code></pre></div>
+<p>This is one LLM call. The model sees the tools, optionally calls
+them, and you get back data. No loops, no agents.</p>
+<h2 id="multi-turn-agents-with-run-agent">11. Multi-turn agents with
+<code>run-agent</code></h2>
+<p><code>run-agent</code> is the autonomous loop. It calls the LLM,
+executes tools, feeds results back, and repeats until the model stops
+calling tools.</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span> <span class="va">#&#39;search</span>] <span class="st">&quot;Plan a day trip to Tokyo&quot;</span>)</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text    &quot;Based on the weather and attractions...&quot;</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps   [{:tool-calls [...] :tool-results [...]}</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="co">;;              {:tool-calls [...] :tool-results [...]}]}</span></span></code></pre></div>
+<p><code>:text</code> is the final answer. <code>:history</code> is the
+full conversation (reusable). <code>:steps</code> records each
+tool-calling iteration.</p>
+<p>Options go between tools and input:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span>] {<span class="at">:max-steps</span> <span class="dv">3</span>} <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
+<h3 id="controlling-when-the-agent-stops">Controlling when the agent
+stops</h3>
+<p>By default, the loop stops when the model returns no tool calls —
+it’s done.</p>
+<p>Use <code>:stop-when</code> for explicit control. It’s a predicate
+called after each LLM response, before tools are executed. Return truthy
+to stop:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; Stop when the model calls a &quot;done&quot; tool</span></span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;research</span> <span class="va">#&#39;done</span>]</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:stop-when</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [tool-calls]}]</span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>                (<span class="kw">some</span> #(<span class="kw">=</span> <span class="st">&quot;done&quot;</span> (<span class="at">:name</span> <span class="va">%</span>)) tool-calls))}</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Research quantum computing&quot;</span>)</span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text &quot;...&quot;</span></span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-calls [{:name &quot;done&quot; :arguments {:summary &quot;...&quot;}}]  ;; pending, not executed</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps [...]</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [...]}</span></span></code></pre></div>
+<p>The predicate receives <code>{:tool-calls [...] :text "..."}</code>.
+When <code>:stop-when</code> fires, pending tool calls are returned in
+<code>:tool-calls</code> on the result — they were not executed.</p>
+<p><code>:max-steps</code> caps iterations as a safety net (default
+10).</p>
+<h3 id="structured-output-after-tool-use">Structured output after tool
+use</h3>
 <p>For structured output after tool use, compose with
 <code>generate</code>:</p>
-<div class="sourceCode" id="cb24"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [{<span class="at">:keys</span> [history]} (llm/run-agent ai [<span class="va">#&#39;lookup</span>] <span class="st">&quot;Look up user 123&quot;</span>)]</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:status</span> <span class="at">:string</span>]]} history))</span>
-<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Alice&quot; :status &quot;active&quot;}</span></span></code></pre></div>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [{<span class="at">:keys</span> [history]} (llm/run-agent ai [<span class="va">#&#39;lookup</span>] <span class="st">&quot;Look up user 123&quot;</span>)]</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:status</span> <span class="at">:string</span>]]} history))</span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Alice&quot; :status &quot;active&quot;}</span></span></code></pre></div>
 <p>This keeps <code>run-agent</code> focused on the tool loop and
-<code>generate</code> as the single place structured output happens.</p>
-<h2 id="why-generate-doesnt-do-tools">11. Why <code>generate</code>
-doesn’t do tools</h2>
-<p>Tool calling is fundamentally different from generation. When a model
-requests a tool call, it hasn’t produced a value yet — it’s
-mid-computation. Having <code>generate</code> return tool-call payloads
-would mean the return type depends on what the model decides to do,
-forcing callers to branch on the result type whenever tools are
-configured.</p>
-<p>Instead:</p>
-<ul>
-<li><strong><code>generate</code></strong> — single request, single
-value back. Always a string or structured data.</li>
-<li><strong><code>run-agent</code></strong> — loop until done. Handles
-tool calls internally, returns the final value.</li>
-</ul>
-<p>The name tells you the execution model.</p>
-<h2 id="full-response-access">12. Full response access</h2>
+<code>generate</code> as the single place structured extraction
+happens.</p>
+<h2 id="generate-vs-run-agent">12. <code>generate</code> vs
+<code>run-agent</code></h2>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th><code>generate</code></th>
+<th><code>run-agent</code></th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>LLM calls</td>
+<td>Exactly one</td>
+<td>Loop until done</td>
+</tr>
+<tr class="even">
+<td>Tools</td>
+<td>Optional — pass <code>:tools</code> in opts</td>
+<td>Required — pass as second arg</td>
+</tr>
+<tr class="odd">
+<td>Executes tools</td>
+<td>Yes, once</td>
+<td>Yes, each iteration</td>
+</tr>
+<tr class="even">
+<td>Returns</td>
+<td>String, structured data, or
+<code>{:text :tool-calls :tool-results}</code></td>
+<td><code>{:text :history :steps}</code></td>
+</tr>
+<tr class="odd">
+<td>Stop control</td>
+<td>N/A (one call)</td>
+<td><code>:stop-when</code> predicate, <code>:max-steps</code></td>
+</tr>
+<tr class="even">
+<td>Use when</td>
+<td>You know one call is enough</td>
+<td>The model needs to iterate</td>
+</tr>
+</tbody>
+</table>
+<p><code>generate</code> is the workhorse. <code>run-agent</code> is for
+when the model needs to drive.</p>
+<h2 id="full-response-access">13. Full response access</h2>
 <p>When you need token usage, raw SSE events, or fine-grained streaming
 control, use <code>request</code> directly:</p>
-<div class="sourceCode" id="cb25"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> resp </span>(llm/request ai <span class="st">&quot;Explain AI briefly&quot;</span>))</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="at">@resp</span>              <span class="co">;; block for text (Response implements IDeref)</span></span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:text</span> resp)      <span class="co">;; same thing, explicit</span></span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:usage</span> resp)     <span class="co">;; {:prompt_tokens 12 :completion_tokens 45 ...}</span></span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>(<span class="at">:chunks</span> resp)     <span class="co">;; core.async channel of text chunks</span></span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>(<span class="at">:events</span> resp)     <span class="co">;; core.async channel of raw events</span></span></code></pre></div>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> resp </span>(llm/request ai <span class="st">&quot;Explain AI briefly&quot;</span>))</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a><span class="at">@resp</span>              <span class="co">;; block for text (Response implements IDeref)</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:text</span> resp)      <span class="co">;; same thing, explicit</span></span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:usage</span> resp)     <span class="co">;; {:prompt_tokens 12 :completion_tokens 45 ...}</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>(<span class="at">:chunks</span> resp)     <span class="co">;; core.async channel of text chunks</span></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>(<span class="at">:events</span> resp)     <span class="co">;; core.async channel of raw events</span></span></code></pre></div>
 <p><code>request</code> returns a <code>Response</code> record.
 <code>generate</code> is built on top of it — it calls
 <code>request</code> and extracts the natural value.</p>
 <p>For raw events only (without the full Response record), use
 <code>events</code>:</p>
-<div class="sourceCode" id="cb26"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 5&quot;</span>)]</span>
-<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
-<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [event (&lt;!! ch)]</span>
-<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> (<span class="at">:type</span> event) event)</span>
-<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">when-not</span> (<span class="kw">=</span> <span class="at">:done</span> (<span class="at">:type</span> event))</span>
-<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">recur</span>)))))</span>
-<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:type :content :content &quot;1&quot;}</span></span>
-<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:type :content :content &quot;, 2&quot;}</span></span>
-<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; ...</span></span>
-<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; :usage {:type :usage :prompt-tokens 10 :completion-tokens 20 ...}</span></span>
-<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; :done {:type :done}</span></span></code></pre></div>
-<h2 id="error-handling">13. Error handling</h2>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 5&quot;</span>)]</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [event (&lt;!! ch)]</span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> (<span class="at">:type</span> event) event)</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">when-not</span> (<span class="kw">=</span> <span class="at">:done</span> (<span class="at">:type</span> event))</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">recur</span>)))))</span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:type :content :content &quot;1&quot;}</span></span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:type :content :content &quot;, 2&quot;}</span></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; ...</span></span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; :usage {:type :usage :prompt-tokens 10 :completion-tokens 20 ...}</span></span>
+<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; :done {:type :done}</span></span></code></pre></div>
+<h2 id="error-handling">14. Error handling</h2>
 <p>Errors are <code>ex-info</code> exceptions with an
 <code>:error-type</code> keyword in <code>ex-data</code> for
 programmatic dispatch:</p>
-<div class="sourceCode" id="cb27"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.errors <span class="at">:as</span> errors])</span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
-<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
-<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">case</span> (errors/error-type <span class="kw">e</span>)</span>
-<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/rate-limit</span>    (<span class="kw">println</span> <span class="st">&quot;Rate limited, retry in&quot;</span> (errors/retry-after <span class="kw">e</span>) <span class="st">&quot;ms&quot;</span>)</span>
-<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/network-error</span> (<span class="kw">println</span> <span class="st">&quot;Network issue&quot;</span>)</span>
-<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/invalid-key</span>   (<span class="kw">println</span> <span class="st">&quot;Bad API key&quot;</span>)</span>
-<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/server-error</span>  (<span class="kw">println</span> <span class="st">&quot;Server error, try again&quot;</span>)</span>
-<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/invalid-request</span> (<span class="kw">println</span> <span class="st">&quot;Bad request:&quot;</span> (ex-message <span class="kw">e</span>))</span>
-<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">throw</span> <span class="kw">e</span>))))</span></code></pre></div>
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.errors <span class="at">:as</span> errors])</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">case</span> (errors/error-type <span class="kw">e</span>)</span>
+<span id="cb30-7"><a href="#cb30-7" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/rate-limit</span>    (<span class="kw">println</span> <span class="st">&quot;Rate limited, retry in&quot;</span> (errors/retry-after <span class="kw">e</span>) <span class="st">&quot;ms&quot;</span>)</span>
+<span id="cb30-8"><a href="#cb30-8" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/network-error</span> (<span class="kw">println</span> <span class="st">&quot;Network issue&quot;</span>)</span>
+<span id="cb30-9"><a href="#cb30-9" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/invalid-key</span>   (<span class="kw">println</span> <span class="st">&quot;Bad API key&quot;</span>)</span>
+<span id="cb30-10"><a href="#cb30-10" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/server-error</span>  (<span class="kw">println</span> <span class="st">&quot;Server error, try again&quot;</span>)</span>
+<span id="cb30-11"><a href="#cb30-11" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/invalid-request</span> (<span class="kw">println</span> <span class="st">&quot;Bad request:&quot;</span> (ex-message <span class="kw">e</span>))</span>
+<span id="cb30-12"><a href="#cb30-12" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">throw</span> <span class="kw">e</span>))))</span></code></pre></div>
 <p>Error types:</p>
 <table>
 <thead>
@@ -607,21 +699,21 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb27-1"><a
 </table>
 <p>The library does not do automatic retries. Use your own retry logic
 or a library like <code>again</code>.</p>
-<h2 id="multiple-providers">14. Multiple providers</h2>
+<h2 id="multiple-providers">15. Multiple providers</h2>
 <p>The same code works with any provider. Only the connection
 changes.</p>
-<div class="sourceCode" id="cb28"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/backend)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/backend) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>                                        <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
-<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
-<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
-<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>(llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
-<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>(llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
-<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>(llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/backend)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/backend) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>                                        <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>(llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>(llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>(llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span></code></pre></div>
 </body>
 </html>
