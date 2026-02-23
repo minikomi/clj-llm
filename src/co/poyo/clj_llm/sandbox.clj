@@ -2,6 +2,7 @@
   "REPL-friendly examples for clj-llm"
   (:require [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.backends.openai :as openai]
+            [cheshire.core :as json]
             [clojure.core.async :refer [<!!]]))
 
 (comment
@@ -61,17 +62,30 @@
   ;; ======================================
 
   ;; Standard Malli function schema on the var metadata
+  ;; This one calls the free Open-Meteo API — no key needed!
   (defn get-weather
     {:malli/schema [:=> [:cat [:map {:name "get_weather"
-                                     :description "Get weather for a city"}
+                                     :description "Get current weather for a city"}
                                [:city {:description "City name"} :string]]]
                         :string]}
     [{:keys [city]}]
-    (str "Sunny, 22C in " city))
+    (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
+                              (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
+                  (json/parse-string true))
+          loc (first (:results geo))]
+      (if-not loc
+        (str "Unknown city: " city)
+        (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
+                                 "&longitude=" (:longitude loc)
+                                 "&current=temperature_2m,weather_code,wind_speed_10m"
+                                 "&timezone=auto"))
+                     (json/parse-string true))
+              c (:current wx)]
+          (str (:name loc) ": " (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h")))))
 
   ;; It's a regular function -- test it directly
   (get-weather {:city "Tokyo"})
-  ;; => "Sunny, 22C in Tokyo"
+  ;; => "Tokyo: 20.1°C, wind 7.6 km/h"
 
   ;; run-agent reads schemas from var metadata and calls the fns
   (llm/run-agent ai [#'get-weather] "What's the weather in Tokyo?")
