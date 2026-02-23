@@ -61,11 +61,12 @@
   ;; Tool calling -- defns with Malli schemas
   ;; ======================================
 
-  ;; Standard Malli function schema on the var metadata
-  ;; This one calls the free Open-Meteo API — no key needed!
-  (defn get-weather
-    {:malli/schema [:=> [:cat [:map {:name "get_weather"
-                                     :description "Get current weather for a city"}
+  ;; Two tools that the LLM chains: geocode → get-weather
+  ;; Powered by free Open-Meteo API — no key needed!
+
+  (defn geocode
+    {:malli/schema [:=> [:cat [:map {:name "geocode"
+                                     :description "Look up latitude and longitude for a city"}
                                [:city {:description "City name"} :string]]]
                         :string]}
     [{:keys [city]}]
@@ -75,23 +76,36 @@
           loc (first (:results geo))]
       (if-not loc
         (str "Unknown city: " city)
-        (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
-                                 "&longitude=" (:longitude loc)
-                                 "&current=temperature_2m,weather_code,wind_speed_10m"
-                                 "&timezone=auto"))
-                     (json/parse-string true))
-              c (:current wx)]
-          (str (:name loc) ": " (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h")))))
+        (json/generate-string {:name (:name loc) :country (:country loc)
+                               :latitude (:latitude loc) :longitude (:longitude loc)}))))
 
-  ;; It's a regular function -- test it directly
-  (get-weather {:city "Tokyo"})
-  ;; => "Tokyo: 20.1°C, wind 7.6 km/h"
+  (defn get-weather
+    {:malli/schema [:=> [:cat [:map {:name "get_weather"
+                                     :description "Get current weather at a location. Call geocode first to get coordinates."}
+                               [:latitude {:description "Latitude"} :double]
+                               [:longitude {:description "Longitude"} :double]]]
+                        :string]}
+    [{:keys [latitude longitude]}]
+    (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
+                             "&longitude=" longitude
+                             "&current=temperature_2m,weather_code,wind_speed_10m"
+                             "&timezone=auto"))
+                 (json/parse-string true))
+          c  (:current wx)]
+      (str (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h")))
 
-  ;; run-agent reads schemas from var metadata and calls the fns
-  (llm/run-agent ai [#'get-weather] "What's the weather in Tokyo?")
-  ;; => {:text "It's sunny and 22C in Tokyo!"
+  ;; They're regular functions -- test them directly
+  (geocode {:city "Tokyo"})
+  ;; => "{\"name\":\"Tokyo\",\"country\":\"Japan\",\"latitude\":35.6895,\"longitude\":139.69171}"
+
+  (get-weather {:latitude 35.6895 :longitude 139.6917})
+  ;; => "20.1°C, wind 7.6 km/h"
+
+  ;; run-agent chains them: geocode → get-weather → answer
+  (llm/run-agent ai [#'geocode #'get-weather] "What's the weather in Tokyo?")
+  ;; => {:text "It's currently 20.1°C in Tokyo with light wind."
   ;;     :history [...]
-  ;;     :steps [{:tool-calls [...] :tool-results [...]}]}
+  ;;     :steps [{:tool-calls [...] :tool-results [...]} ...]}
 
   ;; ======================================
   ;; Full response (prompt)

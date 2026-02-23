@@ -181,36 +181,50 @@ Tools are plain functions with standard [Malli function schemas](https://github.
 ```clojure
 (require '[cheshire.core :as json])
 
-(defn get-weather
-  {:malli/schema [:=> [:cat [:map {:name "get_weather"
-                                   :description "Get current weather for a city"}
+;; Geocode: city name → coordinates (free Open-Meteo API, no key needed)
+(defn geocode
+  {:malli/schema [:=> [:cat [:map {:name "geocode"
+                                   :description "Look up latitude and longitude for a city"}
                              [:city {:description "City name"} :string]]]
                       :string]}
   [{:keys [city]}]
   (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
                             (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
                 (json/parse-string true))
-        loc (first (:results geo))
-        wx  (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" (:latitude loc)
-                            "&longitude=" (:longitude loc)
-                            "&current=temperature_2m,weather_code,wind_speed_10m"
-                            "&timezone=auto"))
-                (json/parse-string true))]
-    (let [c (:current wx)]
-      (str (:name loc) ": " (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h"))))
+        loc (first (:results geo))]
+    (json/generate-string (select-keys loc [:name :country :latitude :longitude]))))
 
-;; It's a regular function — call it, test it, compose it
-(get-weather {:city "Tokyo"})
-;; => "Tokyo: 20.1°C, wind 7.6 km/h"
+;; Weather: coordinates → current conditions
+(defn get-weather
+  {:malli/schema [:=> [:cat [:map {:name "get_weather"
+                                   :description "Get current weather at a location. Call geocode first to get coordinates."}
+                             [:latitude {:description "Latitude"} :double]
+                             [:longitude {:description "Longitude"} :double]]]
+                      :string]}
+  [{:keys [latitude longitude]}]
+  (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
+                           "&longitude=" longitude
+                           "&current=temperature_2m,weather_code,wind_speed_10m"
+                           "&timezone=auto"))
+               (json/parse-string true))]
+    (let [c (:current wx)]
+      (str (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h"))))
+
+;; They're regular functions — call them, test them, compose them
+(geocode {:city "Tokyo"})
+;; => "{\"name\":\"Tokyo\",\"country\":\"Japan\",\"latitude\":35.6895,\"longitude\":139.69171}"
+
+(get-weather {:latitude 35.6895 :longitude 139.6917})
+;; => "20.1°C, wind 7.6 km/h"
 ```
 
-`run-agent` reads `:malli/schema` from var metadata and calls the functions when the model invokes them:
+`run-agent` reads `:malli/schema` from var metadata, calls the functions when the model invokes them, and chains multi-step tool use automatically:
 
 ```clojure
-(llm/run-agent ai [#'get-weather] "Weather in Tokyo?")
-;; => {:text "It's sunny and 22°C in Tokyo!"
+(llm/run-agent ai [#'geocode #'get-weather] "Weather in Tokyo?")
+;; => {:text "It's currently 20.1°C in Tokyo with light wind."
 ;;     :history [...]
-;;     :steps [{:tool-calls [...] :tool-results [...]}]}
+;;     :steps [{:tool-calls [...] :tool-results [...]} ...]}
 ```
 
 All three standard Malli approaches work — `{:malli/schema ...}` metadata, `mx/defn`, and `m/=>`:
