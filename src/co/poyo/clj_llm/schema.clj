@@ -60,7 +60,6 @@
      {:type "null"}
      (let [compiled-schema (m/schema schema)
            schema-type (when compiled-schema (m/type compiled-schema))
-           description (when compiled-schema (get (m/properties compiled-schema) :name ""))
            description (when compiled-schema (get (m/properties compiled-schema) :description ""))
            base-schema (cond-> {} (not (str/blank? description)) (assoc :description description))]
        (case schema-type

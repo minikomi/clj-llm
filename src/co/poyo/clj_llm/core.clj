@@ -482,7 +482,7 @@
            ;; Execute tool calls and continue
            (let [msg (tool-calls->assistant-message tc text)]
              (if (>= (inc n) max-steps)
-               {:text "" :history history :steps steps :truncated true}
+               {:text text :history (conj history msg) :steps steps :truncated true}
                (let [results    (mapv (fn [t]
                                         (let [f (or (get name->fn (:name t))
                                                     (throw (errors/error
