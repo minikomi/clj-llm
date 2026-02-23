@@ -6,6 +6,147 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
   <title>A Tour of clj-llm</title>
   <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
     code{white-space: pre-wrap;}
     span.smallcaps{font-variant: small-caps;}
     div.columns{display: flex; gap: min(4vw, 1.5em);}
@@ -48,375 +189,49 @@
         -khtml-user-select: none; -moz-user-select: none;
         -ms-user-select: none; user-select: none;
         padding: 0 4px; width: 4em;
-        background-color: #232629;
-        color: #7a7c7d;
+        color: #aaaaaa;
       }
-    pre.numberSource { margin-left: 3em; border-left: 1px solid #7a7c7d;  padding-left: 4px; }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
     div.sourceCode
-      { color: #cfcfc2; background-color: #232629; }
+      {   }
     @media screen {
     pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
     }
-    code span { color: #cfcfc2; } /* Normal */
-    code span.al { color: #95da4c; background-color: #4d1f24; font-weight: bold; } /* Alert */
-    code span.an { color: #3f8058; } /* Annotation */
-    code span.at { color: #2980b9; } /* Attribute */
-    code span.bn { color: #f67400; } /* BaseN */
-    code span.bu { color: #7f8c8d; } /* BuiltIn */
-    code span.cf { color: #fdbc4b; font-weight: bold; } /* ControlFlow */
-    code span.ch { color: #3daee9; } /* Char */
-    code span.cn { color: #27aeae; font-weight: bold; } /* Constant */
-    code span.co { color: #7a7c7d; } /* Comment */
-    code span.cv { color: #7f8c8d; } /* CommentVar */
-    code span.do { color: #a43340; } /* Documentation */
-    code span.dt { color: #2980b9; } /* DataType */
-    code span.dv { color: #f67400; } /* DecVal */
-    code span.er { color: #da4453; text-decoration: underline; } /* Error */
-    code span.ex { color: #0099ff; font-weight: bold; } /* Extension */
-    code span.fl { color: #f67400; } /* Float */
-    code span.fu { color: #8e44ad; } /* Function */
-    code span.im { color: #27ae60; } /* Import */
-    code span.in { color: #c45b00; } /* Information */
-    code span.kw { color: #cfcfc2; font-weight: bold; } /* Keyword */
-    code span.op { color: #cfcfc2; } /* Operator */
-    code span.ot { color: #27ae60; } /* Other */
-    code span.pp { color: #27ae60; } /* Preprocessor */
-    code span.re { color: #2980b9; background-color: #153042; } /* RegionMarker */
-    code span.sc { color: #3daee9; } /* SpecialChar */
-    code span.ss { color: #da4453; } /* SpecialString */
-    code span.st { color: #f44f4f; } /* String */
-    code span.va { color: #27aeae; } /* Variable */
-    code span.vs { color: #da4453; } /* VerbatimString */
-    code span.wa { color: #da4453; } /* Warning */
-  </style>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
-  <style>
-  :root {
-    --bg: #fafaf9;
-    --fg: #1c1917;
-    --muted: #78716c;
-    --border: #e7e5e4;
-    --code-bg: #1e1e2e;
-    --code-fg: #cdd6f4;
-    --accent: #7c3aed;
-    --accent-light: #ede9fe;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Inter', -apple-system, system-ui, sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-    line-height: 1.7;
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 3rem 1.5rem;
-  }
-  h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
-  h2 { font-size: 1.35rem; font-weight: 600; margin: 3rem 0 1rem; padding-top: 1.5rem; border-top: 1px solid var(--border); letter-spacing: -0.01em; }
-  h2:first-of-type { border-top: none; padding-top: 0; }
-  h3 { font-size: 1.1rem; font-weight: 600; margin: 2rem 0 0.75rem; }
-  p { margin: 0.75rem 0; }
-  p + p { margin-top: 0.5rem; }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.88em; }
-  :not(pre) > code { background: #f5f5f4; padding: 0.15em 0.4em; border-radius: 4px; color: #44403c; }
-  pre {
-    background: var(--code-bg);
-    color: var(--code-fg);
-    border-radius: 8px;
-    padding: 1.25rem 1.5rem;
-    overflow-x: auto;
-    margin: 1rem 0;
-    font-size: 0.875rem;
-    line-height: 1.6;
-  }
-  pre code { background: none; padding: 0; color: inherit; }
-  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
-  ul, ol { margin: 0.75rem 0; padding-left: 1.5rem; }
-  li { margin: 0.35rem 0; }
-  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
-  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
-  th { font-weight: 600; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-  blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--muted); margin: 1rem 0; }
-  header { margin-bottom: 2rem; }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
   </style>
 </head>
 <body>
-<header id="title-block-header">
-<h1 class="title">A Tour of clj-llm</h1>
-</header>
 <h1 id="a-tour-of-clj-llm">A Tour of clj-llm</h1>
 <p>This walks through the library piece by piece. Every example is real
 code.</p>
-<h2 id="connect-to-a-provider">1. Connect to a provider</h2>
-<p>A provider is a map that knows how to talk to an LLM API.</p>
-<div class="sourceCode" id="cb1"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.core <span class="at">:as</span> llm]</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>         &#39;[co.poyo.clj-llm.backends.openai <span class="at">:as</span> openai])</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; OpenAI (reads OPENAI_API_KEY from env by default)</span></span>
-<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> provider </span>(openai/-&gt;openai))</span>
-<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; Or point at anything with an OpenAI-compatible API</span></span>
-<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> ollama </span>(openai/-&gt;openai {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
-<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>                              <span class="at">:api-key</span> <span class="st">&quot;not-needed&quot;</span>}))</span>
-<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openrouter </span>(openai/-&gt;openai {<span class="at">:api-key-env</span> <span class="st">&quot;OPENROUTER_API_KEY&quot;</span></span>
-<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>                                  <span class="at">:api-base</span> <span class="st">&quot;https://openrouter.ai/api/v1&quot;</span>}))</span></code></pre></div>
-<p>A provider is just a map. You can print it, store it, pass it
-around.</p>
-<h2 id="set-defaults">2. Set defaults</h2>
-<p>Put your model and any other config on the <code>:defaults</code>
-key. It’s just <code>assoc</code>.</p>
-<div class="sourceCode" id="cb2"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> ai </span>(<span class="kw">assoc</span> provider <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span></code></pre></div>
-<p>That’s it. <code>ai</code> is still a map. You can layer more config
-later:</p>
-<div class="sourceCode" id="cb3"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> careful-ai </span>(<span class="kw">update</span> ai <span class="at">:defaults</span> <span class="kw">merge</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o&quot;</span>}))</span></code></pre></div>
-<h2 id="generate-text">3. Generate text</h2>
-<p><code>generate</code> calls the LLM and returns the result. The input
-— a string or a message history vector — is always the
-<strong>last</strong> argument.</p>
-<div class="sourceCode" id="cb4"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai <span class="st">&quot;What is the capital of France?&quot;</span>)</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;The capital of France is Paris.&quot;</span></span></code></pre></div>
-<p>Pass options as a map before the input:</p>
-<div class="sourceCode" id="cb5"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:system-prompt</span> <span class="st">&quot;Answer in one word.&quot;</span>} <span class="st">&quot;What is the capital of France?&quot;</span>)</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Paris.&quot;</span></span></code></pre></div>
-<p>Per-call options merge on top of <code>:defaults</code>. Per-call
-wins.</p>
-<h2 id="threading">4. Threading</h2>
-<p>Because input is last, <code>generate</code> threads naturally with
-<code>-&gt;&gt;</code>. The output of one call (a string) becomes the
-input of the next.</p>
-<div class="sourceCode" id="cb6"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">-&gt;&gt;</span> <span class="st">&quot;The mitochondria is the powerhouse of the cell. It make ATP.&quot;</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>     (llm/generate ai {<span class="at">:system-prompt</span> <span class="st">&quot;Fix grammar and spelling.&quot;</span>})</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>     (llm/generate ai {<span class="at">:system-prompt</span> <span class="st">&quot;Translate to French.&quot;</span>}))</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;La mitochondrie est la centrale énergétique de la cellule. Elle produit de l&#39;ATP.&quot;</span></span></code></pre></div>
-<p>No special pipeline abstraction. Just Clojure.</p>
-<h2 id="structured-output">5. Structured output</h2>
-<p>Pass a <code>:schema</code> (a Malli schema) and
-<code>generate</code> returns parsed, validated data instead of a
-string.</p>
-<div class="sourceCode" id="cb7"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:schema</span> [<span class="at">:map</span></span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>            [<span class="at">:name</span> <span class="at">:string</span>]</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>            [<span class="at">:age</span> <span class="at">:int</span>]</span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>            [<span class="at">:occupation</span> <span class="at">:string</span>]]}</span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Marie Curie was a 66 year old physicist&quot;</span>)</span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Marie Curie&quot; :age 66 :occupation &quot;physicist&quot;}</span></span></code></pre></div>
-<p>The return value is the data. Not
-<code>{:structured {:name ...}}</code>. Just the map.</p>
-<p>Schemas can be as complex as Malli allows:</p>
-<div class="sourceCode" id="cb8"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> company-schema</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  [<span class="at">:map</span></span>
-<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:name</span> <span class="at">:string</span>]</span>
-<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:founded</span> <span class="at">:int</span>]</span>
-<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:employees</span> [<span class="at">:vector</span> [<span class="at">:map</span></span>
-<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>                         [<span class="at">:name</span> <span class="at">:string</span>]</span>
-<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a>                         [<span class="at">:role</span> <span class="at">:string</span>]</span>
-<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>                         [<span class="at">:salary</span> <span class="at">:int</span>]]]]</span>
-<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:locations</span> [<span class="at">:vector</span> <span class="at">:string</span>]]])</span>
-<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:schema</span> company-schema}</span>
-<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;TechCorp founded 2010. Alice is CEO at $200k, Bob is Engineer at $120k. Offices in NYC and SF.&quot;</span>)</span>
-<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;TechCorp&quot;</span></span>
-<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :founded 2010</span></span>
-<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :employees [{:name &quot;Alice&quot; :role &quot;CEO&quot; :salary 200000}</span></span>
-<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a><span class="co">;;                 {:name &quot;Bob&quot; :role &quot;Engineer&quot; :salary 120000}]</span></span>
-<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :locations [&quot;NYC&quot; &quot;SF&quot;]}</span></span></code></pre></div>
-<h2 id="reusable-configurations">6. Reusable configurations</h2>
-<p>Since the provider is a map, you build reusable “tasks” with standard
-map operations:</p>
-<div class="sourceCode" id="cb9"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> extractor</span></span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">update</span> ai <span class="at">:defaults</span> <span class="kw">merge</span></span>
-<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    {<span class="at">:system-prompt</span> <span class="st">&quot;Extract structured data from the input.&quot;</span></span>
-<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>     <span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:age</span> <span class="at">:int</span>] [<span class="at">:occupation</span> <span class="at">:string</span>]]}))</span>
-<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>(llm/generate extractor <span class="st">&quot;Marie Curie was a 66 year old physicist&quot;</span>)</span>
-<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Marie Curie&quot; :age 66 :occupation &quot;physicist&quot;}</span></span>
-<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>(llm/generate extractor <span class="st">&quot;Albert Einstein was a 76 year old theoretical physicist&quot;</span>)</span>
-<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Albert Einstein&quot; :age 76 :occupation &quot;theoretical physicist&quot;}</span></span>
-<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a><span class="co">;; Override per-call when needed</span></span>
-<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a>(llm/generate extractor {<span class="at">:model</span> <span class="st">&quot;gpt-4o&quot;</span>} <span class="st">&quot;some tricky input&quot;</span>)</span></code></pre></div>
-<p>No special <code>task</code> or <code>chain</code> function. It’s
-<code>assoc</code> and <code>merge</code>.</p>
-<h2 id="streaming">7. Streaming</h2>
-<p><code>stream-print</code> prints chunks to stdout as they arrive and
-returns the full text:</p>
-<div class="sourceCode" id="cb10"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>(llm/stream-print ai <span class="st">&quot;Write a haiku about Clojure&quot;</span>)</span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; prints: Data flows like water / Parentheses embrace all / REPL sparks joy</span></span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Data flows like water\nParentheses embrace all\nREPL sparks joy&quot;</span></span></code></pre></div>
-<p><code>stream</code> returns a <code>core.async</code> channel of text
-chunks for custom processing:</p>
-<div class="sourceCode" id="cb11"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[clojure.core.async <span class="at">:refer</span> [&lt;!!]])</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/stream ai <span class="st">&quot;Count from 1 to 5&quot;</span>)]</span>
-<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
-<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [<span class="kw">chunk</span> (&lt;!! ch)]</span>
-<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">print</span> <span class="kw">chunk</span>)</span>
-<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">flush</span>)</span>
-<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">recur</span>))))</span></code></pre></div>
-<p>Both take opts in the same position:</p>
-<div class="sourceCode" id="cb12"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>(llm/stream-print ai {<span class="at">:system-prompt</span> <span class="st">&quot;Respond in ALL CAPS&quot;</span>} <span class="st">&quot;Say hello&quot;</span>)</span></code></pre></div>
-<h2 id="conversations">8. Conversations</h2>
-<p>Message history is a vector. You pass it as the input (last arg).
-There’s no conversation object — you own the data.</p>
-<div class="sourceCode" id="cb13"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> history</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:role</span> <span class="at">:system</span> <span class="at">:content</span> <span class="st">&quot;You are a helpful coding assistant.&quot;</span>}</span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>   {<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> <span class="st">&quot;How do I reverse a list in Clojure?&quot;</span>}</span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>   {<span class="at">:role</span> <span class="at">:assistant</span> <span class="at">:content</span> <span class="st">&quot;Use (reverse coll) or (into () coll).&quot;</span>}</span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>   {<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> <span class="st">&quot;What about in Python?&quot;</span>}])</span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>(llm/generate ai history)</span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;In Python, use reversed(lst) or lst[::-1].&quot;</span></span></code></pre></div>
-<p>A simple chat loop:</p>
-<div class="sourceCode" id="cb14"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> conversation </span>(<span class="kw">atom</span> []))</span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> chat! </span>[message]</span>
-<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">swap!</span> conversation <span class="kw">conj</span> {<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> message})</span>
-<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [response (llm/generate ai <span class="at">@conversation</span>)]</span>
-<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">swap!</span> conversation <span class="kw">conj</span> {<span class="at">:role</span> <span class="at">:assistant</span> <span class="at">:content</span> response})</span>
-<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>    response))</span>
-<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>(chat! <span class="st">&quot;What&#39;s the tallest mountain?&quot;</span>)</span>
-<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Mount Everest, at 8,849 meters.&quot;</span></span>
-<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a>(chat! <span class="st">&quot;How about the second tallest?&quot;</span>)</span>
-<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;K2, at 8,611 meters.&quot;</span></span></code></pre></div>
-<h2 id="tool-calling">9. Tool calling</h2>
-<p>Tools are plain functions with standard <a
-href="https://github.com/metosin/malli/blob/master/docs/function-schemas.md">Malli
-function schemas</a>. The <code>:malli/schema</code> metadata tells
-<code>run-agent</code> what the LLM sees:</p>
-<div class="sourceCode" id="cb15"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Get current weather for a city&quot;</span>}</span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:city</span> {<span class="at">:description</span> <span class="st">&quot;City name&quot;</span>} <span class="at">:string</span>]]]</span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>                      <span class="at">:string</span>]}</span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [city]}]</span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  (http/get (<span class="kw">str</span> <span class="st">&quot;https://weather.api/&quot;</span> city)))</span></code></pre></div>
-<p>A tool is a regular Clojure function. Call it directly, test it,
-compose it:</p>
-<div class="sourceCode" id="cb16"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>(get-weather {<span class="at">:city</span> <span class="st">&quot;Tokyo&quot;</span>})</span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Sunny, 22°C&quot;</span></span></code></pre></div>
-<p>The schema lives in var metadata — standard Malli, nothing
-custom:</p>
-<div class="sourceCode" id="cb17"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>(<span class="at">:malli/schema</span> (<span class="kw">meta</span> <span class="va">#&#39;get-weather</span>))</span>
-<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; [:=&gt; [:cat [:map {:name &quot;get_weather&quot; ...} ...]] :string]</span></span></code></pre></div>
-<p>All three standard Malli approaches work. You can also use
-<code>m/=&gt;</code> to keep the schema separate:</p>
-<div class="sourceCode" id="cb18"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather </span>[{<span class="at">:keys</span> [city]}] (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> city))</span>
-<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>(m/=&gt; get-weather [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
-<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>                                    <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
-<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>                              [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
-<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:string</span>])</span></code></pre></div>
-<p>Or <code>mx/defn</code> for inline schema hints:</p>
-<div class="sourceCode" id="cb19"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[malli.experimental <span class="at">:as</span> mx])</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>(mx/defn get-weather <span class="at">:-</span> <span class="at">:string</span></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  [args <span class="at">:-</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span> <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>             [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> (<span class="at">:city</span> args)))</span></code></pre></div>
-<h2 id="running-agents">10. Running agents</h2>
-<p>Pass tool vars to <code>run-agent</code>. It reads their
-<code>:malli/schema</code>, sends the input schemas to the model, and
-calls the functions when the model invokes them. The loop repeats until
-the model gives a final text response.</p>
-<div class="sourceCode" id="cb20"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span>] <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
-<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text    &quot;It&#39;s sunny and 22°C in Tokyo!&quot;</span></span>
-<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]</span></span>
-<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps   [{:tool-calls [...] :tool-results [...]}]}</span></span></code></pre></div>
-<p><code>:text</code> is the final answer. <code>:history</code> is the
-full conversation (reusable). <code>:steps</code> records each
-tool-calling iteration.</p>
-<p>Options go in an opts map between tools and input:</p>
-<div class="sourceCode" id="cb21"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span>] {<span class="at">:max-steps</span> <span class="dv">3</span>} <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
-<p>If your agent should return structured data, pass
-<code>:schema</code>:</p>
-<div class="sourceCode" id="cb22"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;lookup</span>] {<span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:status</span> <span class="at">:string</span>]]}</span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Look up user 123&quot;</span>)</span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text {:name &quot;Alice&quot; :status &quot;active&quot;} :history [...] :steps [...]}</span></span></code></pre></div>
-<h2 id="why-generate-doesnt-do-tools">11. Why <code>generate</code>
-doesn’t do tools</h2>
-<p>Tool calling is fundamentally different from generation. When a model
-requests a tool call, it hasn’t produced a value yet — it’s
-mid-computation. Having <code>generate</code> return tool-call payloads
-would mean the return type depends on what the model decides to do,
-forcing callers to branch on the result type whenever tools are
-configured.</p>
-<p>Instead:</p>
-<ul>
-<li><strong><code>generate</code></strong> — single request, single
-value back. Always a string or structured data.</li>
-<li><strong><code>run-agent</code></strong> — loop until done. Handles
-tool calls internally, returns the final value.</li>
-</ul>
-<p>The name tells you the execution model.</p>
-<h2 id="full-response-access">12. Full response access</h2>
-<p>When you need token usage, raw SSE events, or fine-grained streaming
-control, use <code>prompt</code> directly:</p>
-<div class="sourceCode" id="cb23"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> resp </span>(llm/prompt ai <span class="st">&quot;Explain AI briefly&quot;</span>))</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="at">@resp</span>              <span class="co">;; block for text (Response implements IDeref)</span></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:text</span> resp)      <span class="co">;; same thing, explicit</span></span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:usage</span> resp)     <span class="co">;; {:prompt_tokens 12 :completion_tokens 45 ...}</span></span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>(<span class="at">:chunks</span> resp)     <span class="co">;; core.async channel of text chunks</span></span>
-<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>(<span class="at">:events</span> resp)     <span class="co">;; core.async channel of raw events</span></span></code></pre></div>
-<p><code>prompt</code> returns a <code>Response</code> record.
-<code>generate</code> is built on top of it — it calls
-<code>prompt</code> and extracts the natural value.</p>
-<h2 id="error-handling">13. Error handling</h2>
-<div class="sourceCode" id="cb24"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.errors <span class="at">:as</span> errors])</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
-<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
-<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
-<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">case</span> (errors/error-type <span class="kw">e</span>)</span>
-<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/rate-limit</span>    (<span class="kw">println</span> <span class="st">&quot;Rate limited, retry in&quot;</span> (errors/retry-after <span class="kw">e</span>) <span class="st">&quot;ms&quot;</span>)</span>
-<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/network-error</span> (<span class="kw">println</span> <span class="st">&quot;Network issue&quot;</span>)</span>
-<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/invalid-key</span>   (<span class="kw">println</span> <span class="st">&quot;Bad API key&quot;</span>)</span>
-<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">throw</span> <span class="kw">e</span>))))</span></code></pre></div>
-<h2 id="multiple-providers">14. Multiple providers</h2>
-<p>The same code works with any provider. Only the connection
-changes.</p>
-<div class="sourceCode" id="cb25"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/-&gt;openai)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/-&gt;anthropic) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/-&gt;openai {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>                                         <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
-<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
-<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a>(llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
-<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a>(llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
-<span id="cb25-12"><a href="#cb25-12" aria-hidden="true" tabindex="-1"></a>(llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span></code></pre></div>
 <h2 id="summary">Summary</h2>
 <table>
 <colgroup>
@@ -432,7 +247,7 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb25-1"><a
 <tbody>
 <tr class="odd">
 <td>Provider</td>
-<td><code>(openai/-&gt;openai)</code> — a map</td>
+<td><code>(openai/backend)</code> — a map</td>
 </tr>
 <tr class="even">
 <td>Config</td>
@@ -466,11 +281,347 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb25-1"><a
 </tr>
 <tr class="odd">
 <td>Full access</td>
-<td><code>(prompt ai "prompt")</code> → Response record</td>
+<td><code>(request ai "prompt")</code> → Response record</td>
 </tr>
 </tbody>
 </table>
 <p>Everything is data. Providers are maps. Options are maps. History is
 a vector. Compose with the tools Clojure already gives you.</p>
+<h2 id="connect-to-a-provider">1. Connect to a provider</h2>
+<p>A provider is a map that knows how to talk to an LLM API.</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.core <span class="at">:as</span> llm]</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>         &#39;[co.poyo.clj-llm.backends.openai <span class="at">:as</span> openai])</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; OpenAI (reads OPENAI_API_KEY from env by default)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> provider </span>(openai/backend))</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; Or point at anything with an OpenAI-compatible API</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> ollama </span>(openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>                             <span class="at">:api-key</span> <span class="st">&quot;not-needed&quot;</span>}))</span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openrouter </span>(openai/backend {<span class="at">:api-key-env</span> <span class="st">&quot;OPENROUTER_API_KEY&quot;</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>                                 <span class="at">:api-base</span> <span class="st">&quot;https://openrouter.ai/api/v1&quot;</span>}))</span></code></pre></div>
+<p>A provider is just a map. You can print it, store it, pass it
+around.</p>
+<h2 id="set-defaults">2. Set defaults</h2>
+<p>Put your model and any other config on the <code>:defaults</code>
+key. It’s just <code>assoc</code>.</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> ai </span>(<span class="kw">assoc</span> provider <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span></code></pre></div>
+<p>That’s it. <code>ai</code> is still a map. You can layer more config
+later:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> careful-ai </span>(<span class="kw">update</span> ai <span class="at">:defaults</span> <span class="kw">merge</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o&quot;</span>}))</span></code></pre></div>
+<h2 id="generate-text">3. Generate text</h2>
+<p><code>generate</code> calls the LLM and returns the result. The input
+— a string or a message history vector — is always the
+<strong>last</strong> argument.</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai <span class="st">&quot;What is the capital of France?&quot;</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;The capital of France is Paris.&quot;</span></span></code></pre></div>
+<p>Pass options as a map before the input:</p>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:system-prompt</span> <span class="st">&quot;Answer in one word.&quot;</span>} <span class="st">&quot;What is the capital of France?&quot;</span>)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Paris.&quot;</span></span></code></pre></div>
+<p>Per-call options merge on top of <code>:defaults</code>. Per-call
+wins.</p>
+<h3 id="common-options">Common options</h3>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:model</span>         <span class="st">&quot;gpt-4o&quot;</span>          <span class="co">;; override model</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>                  <span class="at">:system-prompt</span> <span class="st">&quot;Be concise.&quot;</span>      <span class="co">;; system message</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>                  <span class="at">:temperature</span>   <span class="fl">0.2</span>                <span class="co">;; lower = more deterministic</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>                  <span class="at">:max-tokens</span>    <span class="dv">500</span>                <span class="co">;; cap output length</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>                  <span class="at">:top-p</span>         <span class="fl">0.9</span>}               <span class="co">;; nucleus sampling</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Explain quantum computing&quot;</span>)</span></code></pre></div>
+<p>For provider-specific parameters not listed above, use
+<code>:provider-opts</code>:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:provider-opts</span> {<span class="at">:frequency</span>_penalty <span class="fl">0.5</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>                                  <span class="at">:presence</span>_penalty <span class="fl">0.3</span>}}</span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Write something creative&quot;</span>)</span></code></pre></div>
+<h2 id="threading">4. Threading</h2>
+<p>Because input is last, <code>generate</code> threads naturally with
+<code>-&gt;&gt;</code>. The output of one call (a string) becomes the
+input of the next.</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">-&gt;&gt;</span> <span class="st">&quot;The mitochondria is the powerhouse of the cell. It make ATP.&quot;</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>     (llm/generate ai {<span class="at">:system-prompt</span> <span class="st">&quot;Fix grammar and spelling.&quot;</span>})</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>     (llm/generate ai {<span class="at">:system-prompt</span> <span class="st">&quot;Translate to French.&quot;</span>}))</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;La mitochondrie est la centrale énergétique de la cellule. Elle produit de l&#39;ATP.&quot;</span></span></code></pre></div>
+<p>No special pipeline abstraction. Just Clojure.</p>
+<h2 id="structured-output">5. Structured output</h2>
+<p>Pass a <code>:schema</code> (a Malli schema) and
+<code>generate</code> returns parsed, validated data instead of a
+string.</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:schema</span> [<span class="at">:map</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>            [<span class="at">:name</span> <span class="at">:string</span>]</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>            [<span class="at">:age</span> <span class="at">:int</span>]</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>            [<span class="at">:occupation</span> <span class="at">:string</span>]]}</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Marie Curie was a 66 year old physicist&quot;</span>)</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Marie Curie&quot; :age 66 :occupation &quot;physicist&quot;}</span></span></code></pre></div>
+<p>The return value is the data. Not
+<code>{:structured {:name ...}}</code>. Just the map.</p>
+<p>Schemas can be as complex as Malli allows:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> company-schema</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  [<span class="at">:map</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:name</span> <span class="at">:string</span>]</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:founded</span> <span class="at">:int</span>]</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:employees</span> [<span class="at">:vector</span> [<span class="at">:map</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>                         [<span class="at">:name</span> <span class="at">:string</span>]</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>                         [<span class="at">:role</span> <span class="at">:string</span>]</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>                         [<span class="at">:salary</span> <span class="at">:int</span>]]]]</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>   [<span class="at">:locations</span> [<span class="at">:vector</span> <span class="at">:string</span>]]])</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:schema</span> company-schema}</span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;TechCorp founded 2010. Alice is CEO at $200k, Bob is Engineer at $120k. Offices in NYC and SF.&quot;</span>)</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;TechCorp&quot;</span></span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :founded 2010</span></span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :employees [{:name &quot;Alice&quot; :role &quot;CEO&quot; :salary 200000}</span></span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a><span class="co">;;                 {:name &quot;Bob&quot; :role &quot;Engineer&quot; :salary 120000}]</span></span>
+<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :locations [&quot;NYC&quot; &quot;SF&quot;]}</span></span></code></pre></div>
+<h2 id="reusable-configurations">6. Reusable configurations</h2>
+<p>Since the provider is a map, you build reusable “tasks” with standard
+map operations:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> extractor</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">update</span> ai <span class="at">:defaults</span> <span class="kw">merge</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    {<span class="at">:system-prompt</span> <span class="st">&quot;Extract structured data from the input.&quot;</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>     <span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:age</span> <span class="at">:int</span>] [<span class="at">:occupation</span> <span class="at">:string</span>]]}))</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>(llm/generate extractor <span class="st">&quot;Marie Curie was a 66 year old physicist&quot;</span>)</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Marie Curie&quot; :age 66 :occupation &quot;physicist&quot;}</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>(llm/generate extractor <span class="st">&quot;Albert Einstein was a 76 year old theoretical physicist&quot;</span>)</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Albert Einstein&quot; :age 76 :occupation &quot;theoretical physicist&quot;}</span></span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb11-12"><a href="#cb11-12" aria-hidden="true" tabindex="-1"></a><span class="co">;; Override per-call when needed</span></span>
+<span id="cb11-13"><a href="#cb11-13" aria-hidden="true" tabindex="-1"></a>(llm/generate extractor {<span class="at">:model</span> <span class="st">&quot;gpt-4o&quot;</span>} <span class="st">&quot;some tricky input&quot;</span>)</span></code></pre></div>
+<p>No special <code>task</code> or <code>chain</code> function. It’s
+<code>assoc</code> and <code>merge</code>.</p>
+<h2 id="streaming">7. Streaming</h2>
+<p><code>stream-print</code> prints chunks to stdout as they arrive and
+returns the full text:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>(llm/stream-print ai <span class="st">&quot;Write a haiku about Clojure&quot;</span>)</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; prints: Data flows like water / Parentheses embrace all / REPL sparks joy</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Data flows like water\nParentheses embrace all\nREPL sparks joy&quot;</span></span></code></pre></div>
+<p><code>stream</code> returns a <code>core.async</code> channel of text
+chunks for custom processing:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[clojure.core.async <span class="at">:refer</span> [&lt;!!]])</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/stream ai <span class="st">&quot;Count from 1 to 5&quot;</span>)]</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [<span class="kw">chunk</span> (&lt;!! ch)]</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">print</span> <span class="kw">chunk</span>)</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">flush</span>)</span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">recur</span>))))</span></code></pre></div>
+<p>Both take opts in the same position:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>(llm/stream-print ai {<span class="at">:system-prompt</span> <span class="st">&quot;Respond in ALL CAPS&quot;</span>} <span class="st">&quot;Say hello&quot;</span>)</span></code></pre></div>
+<h2 id="conversations">8. Conversations</h2>
+<p>Message history is a vector. You pass it as the input (last arg).
+There’s no conversation object — you own the data.</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> history</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:role</span> <span class="at">:system</span> <span class="at">:content</span> <span class="st">&quot;You are a helpful coding assistant.&quot;</span>}</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>   {<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> <span class="st">&quot;How do I reverse a list in Clojure?&quot;</span>}</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>   {<span class="at">:role</span> <span class="at">:assistant</span> <span class="at">:content</span> <span class="st">&quot;Use (reverse coll) or (into () coll).&quot;</span>}</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>   {<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> <span class="st">&quot;What about in Python?&quot;</span>}])</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>(llm/generate ai history)</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;In Python, use reversed(lst) or lst[::-1].&quot;</span></span></code></pre></div>
+<p>A simple chat loop:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> conversation </span>(<span class="kw">atom</span> []))</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> chat! </span>[message]</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">swap!</span> conversation <span class="kw">conj</span> {<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> message})</span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [response (llm/generate ai <span class="at">@conversation</span>)]</span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">swap!</span> conversation <span class="kw">conj</span> {<span class="at">:role</span> <span class="at">:assistant</span> <span class="at">:content</span> response})</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>    response))</span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>(chat! <span class="st">&quot;What&#39;s the tallest mountain?&quot;</span>)</span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Mount Everest, at 8,849 meters.&quot;</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb16-12"><a href="#cb16-12" aria-hidden="true" tabindex="-1"></a>(chat! <span class="st">&quot;How about the second tallest?&quot;</span>)</span>
+<span id="cb16-13"><a href="#cb16-13" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;K2, at 8,611 meters.&quot;</span></span></code></pre></div>
+<h2 id="tool-calling">9. Tool calling</h2>
+<p>Tools are plain functions with standard <a
+href="https://github.com/metosin/malli/blob/master/docs/function-schemas.md">Malli
+function schemas</a>. The <code>:malli/schema</code> metadata tells
+<code>run-agent</code> what the LLM sees:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Get current weather for a city&quot;</span>}</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:city</span> {<span class="at">:description</span> <span class="st">&quot;City name&quot;</span>} <span class="at">:string</span>]]]</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>                      <span class="at">:string</span>]}</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [city]}]</span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  (http/get (<span class="kw">str</span> <span class="st">&quot;https://weather.api/&quot;</span> city)))</span></code></pre></div>
+<p>A tool is a regular Clojure function. Call it directly, test it,
+compose it:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>(get-weather {<span class="at">:city</span> <span class="st">&quot;Tokyo&quot;</span>})</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;Sunny, 22°C&quot;</span></span></code></pre></div>
+<p>The schema lives in var metadata — standard Malli, nothing
+custom:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>(<span class="at">:malli/schema</span> (<span class="kw">meta</span> <span class="va">#&#39;get-weather</span>))</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; [:=&gt; [:cat [:map {:name &quot;get_weather&quot; ...} ...]] :string]</span></span></code></pre></div>
+<p>All three standard Malli approaches work. You can also use
+<code>m/=&gt;</code> to keep the schema separate:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather </span>[{<span class="at">:keys</span> [city]}] (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> city))</span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>(m/=&gt; get-weather [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>                                    <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>                              [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:string</span>])</span></code></pre></div>
+<p>Or <code>mx/defn</code> for inline schema hints:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[malli.experimental <span class="at">:as</span> mx])</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>(mx/defn get-weather <span class="at">:-</span> <span class="at">:string</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  [args <span class="at">:-</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span> <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>             [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> (<span class="at">:city</span> args)))</span></code></pre></div>
+<h2 id="running-agents">10. Running agents</h2>
+<p>Pass tool vars to <code>run-agent</code>. It reads their
+<code>:malli/schema</code>, sends the input schemas to the model, and
+calls the functions when the model invokes them. The loop repeats until
+the model gives a final text response.</p>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span>] <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text    &quot;It&#39;s sunny and 22°C in Tokyo!&quot;</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps   [{:tool-calls [...] :tool-results [...]}]}</span></span></code></pre></div>
+<p><code>:text</code> is the final answer (always a string).
+<code>:history</code> is the full conversation (reusable).
+<code>:steps</code> records each tool-calling iteration.</p>
+<p>Options go in an opts map between tools and input:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;get-weather</span>] {<span class="at">:max-steps</span> <span class="dv">3</span>} <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
+<p>For structured output after tool use, compose with
+<code>generate</code>:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [{<span class="at">:keys</span> [history]} (llm/run-agent ai [<span class="va">#&#39;lookup</span>] <span class="st">&quot;Look up user 123&quot;</span>)]</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:status</span> <span class="at">:string</span>]]} history))</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Alice&quot; :status &quot;active&quot;}</span></span></code></pre></div>
+<p>This keeps <code>run-agent</code> focused on the tool loop and
+<code>generate</code> as the single place structured output happens.</p>
+<h2 id="why-generate-doesnt-do-tools">11. Why <code>generate</code>
+doesn’t do tools</h2>
+<p>Tool calling is fundamentally different from generation. When a model
+requests a tool call, it hasn’t produced a value yet — it’s
+mid-computation. Having <code>generate</code> return tool-call payloads
+would mean the return type depends on what the model decides to do,
+forcing callers to branch on the result type whenever tools are
+configured.</p>
+<p>Instead:</p>
+<ul>
+<li><strong><code>generate</code></strong> — single request, single
+value back. Always a string or structured data.</li>
+<li><strong><code>run-agent</code></strong> — loop until done. Handles
+tool calls internally, returns the final value.</li>
+</ul>
+<p>The name tells you the execution model.</p>
+<h2 id="full-response-access">12. Full response access</h2>
+<p>When you need token usage, raw SSE events, or fine-grained streaming
+control, use <code>request</code> directly:</p>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> resp </span>(llm/request ai <span class="st">&quot;Explain AI briefly&quot;</span>))</span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="at">@resp</span>              <span class="co">;; block for text (Response implements IDeref)</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:text</span> resp)      <span class="co">;; same thing, explicit</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>@(<span class="at">:usage</span> resp)     <span class="co">;; {:prompt_tokens 12 :completion_tokens 45 ...}</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>(<span class="at">:chunks</span> resp)     <span class="co">;; core.async channel of text chunks</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>(<span class="at">:events</span> resp)     <span class="co">;; core.async channel of raw events</span></span></code></pre></div>
+<p><code>request</code> returns a <code>Response</code> record.
+<code>generate</code> is built on top of it — it calls
+<code>request</code> and extracts the natural value.</p>
+<p>For raw events only (without the full Response record), use
+<code>events</code>:</p>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 5&quot;</span>)]</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [event (&lt;!! ch)]</span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> (<span class="at">:type</span> event) event)</span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">when-not</span> (<span class="kw">=</span> <span class="at">:done</span> (<span class="at">:type</span> event))</span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">recur</span>)))))</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:type :content :content &quot;1&quot;}</span></span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:type :content :content &quot;, 2&quot;}</span></span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; ...</span></span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; :usage {:type :usage :prompt-tokens 10 :completion-tokens 20 ...}</span></span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; :done {:type :done}</span></span></code></pre></div>
+<h2 id="error-handling">13. Error handling</h2>
+<p>Errors are <code>ex-info</code> exceptions with an
+<code>:error-type</code> keyword in <code>ex-data</code> for
+programmatic dispatch:</p>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.errors <span class="at">:as</span> errors])</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">case</span> (errors/error-type <span class="kw">e</span>)</span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/rate-limit</span>    (<span class="kw">println</span> <span class="st">&quot;Rate limited, retry in&quot;</span> (errors/retry-after <span class="kw">e</span>) <span class="st">&quot;ms&quot;</span>)</span>
+<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/network-error</span> (<span class="kw">println</span> <span class="st">&quot;Network issue&quot;</span>)</span>
+<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/invalid-key</span>   (<span class="kw">println</span> <span class="st">&quot;Bad API key&quot;</span>)</span>
+<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/server-error</span>  (<span class="kw">println</span> <span class="st">&quot;Server error, try again&quot;</span>)</span>
+<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>      <span class="at">:llm/invalid-request</span> (<span class="kw">println</span> <span class="st">&quot;Bad request:&quot;</span> (ex-message <span class="kw">e</span>))</span>
+<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">throw</span> <span class="kw">e</span>))))</span></code></pre></div>
+<p>Error types:</p>
+<table>
+<thead>
+<tr class="header">
+<th>Keyword</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>:llm/rate-limit</code></td>
+<td>429 — too many requests</td>
+</tr>
+<tr class="even">
+<td><code>:llm/invalid-key</code></td>
+<td>401/403 — authentication failed</td>
+</tr>
+<tr class="odd">
+<td><code>:llm/invalid-request</code></td>
+<td>400/404/422 — bad input</td>
+</tr>
+<tr class="even">
+<td><code>:llm/server-error</code></td>
+<td>500/502/503/504 — provider issue</td>
+</tr>
+<tr class="odd">
+<td><code>:llm/unknown</code></td>
+<td>Other errors</td>
+</tr>
+</tbody>
+</table>
+<p>The library does not do automatic retries. Use your own retry logic
+or a library like <code>again</code>.</p>
+<h2 id="multiple-providers">14. Multiple providers</h2>
+<p>The same code works with any provider. Only the connection
+changes.</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/backend)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/backend) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a>                                        <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>(llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>(llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>(llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>)</span></code></pre></div>
 </body>
 </html>
