@@ -18,7 +18,7 @@
 
 (def ^:private agent-keys
   "Additional keys accepted by run-agent."
-  #{:tools :tool-choice :max-steps})
+  #{:tools :tool-choice :max-steps :stop-when})
 
 ;; Keys that get forwarded to the provider API (not consumed by clj-llm itself)
 (def ^:private api-forward-keys
@@ -277,6 +277,58 @@
                              tool-calls)}
     (not (empty? text)) (assoc :content text)))
 
+(defn- resolve-tool-schema
+  "Get the Malli function schema ([:=> ...] or [:-> ...]) from a tool.
+   Checks in order:
+   1. :malli/schema on metadata (defn + {:malli/schema ...}, with-meta)
+   2. :schema on metadata (mx/defn)
+   3. Malli global function registry (m/=> annotation)"
+  [tool]
+  (let [m (meta tool)]
+    (or (:malli/schema m)
+        (:schema m)
+        ;; Check Malli's global function registry (populated by m/=>)
+        (when-let [ns-sym (some-> (:ns m) ns-name)]
+          (:schema (get-in (m/function-schemas) [ns-sym (:name m)])))
+        (throw (errors/error
+                "Tool missing Malli schema. Use {:malli/schema ...}, mx/defn, or m/=>."
+                {:error-type :llm/invalid-request :tool tool})))))
+
+(defn- extract-input-schema
+  "Extract the input map schema from a Malli function schema.
+   Supports [:=> [:cat <map-schema>] <ret>] and [:-> <map-schema> <ret>]."
+  [fn-schema]
+  (let [s (m/schema fn-schema)
+        t (m/type s)
+        ;; :-> is a flat proxy for :=> -- deref to normalize
+        resolved (if (= :-> t) (m/deref s) s)
+        resolved-type (m/type resolved)]
+    (when-not (= :=> resolved-type)
+      (throw (errors/error
+              "Tool schema must be [:=> [:cat ...] <return>] or [:-> <input> <return>]"
+              {:error-type :llm/invalid-request :schema fn-schema})))
+    (let [input-schema (first (m/children resolved))
+          args (m/children (m/schema input-schema))]
+      (when (empty? args)
+        (throw (errors/error
+                "Tool function schema has no input arguments"
+                {:error-type :llm/invalid-request :schema fn-schema})))
+      (first args))))
+
+(defn- extract-tool-name
+  "Get the tool name from a Malli schema's properties."
+  [schema]
+  (let [props (try (m/properties (m/schema schema)) (catch Exception _ nil))]
+    (or (:name props)
+        (throw (errors/error
+                "Tool schema missing :name in properties"
+                {:error-type :llm/invalid-request :schema schema})))))
+
+(defn- tools->input-schemas
+  "Extract Malli input schemas from a vector of tool vars/fns."
+  [tools]
+  (mapv (comp extract-input-schema resolve-tool-schema) tools))
+
 (defn generate
   "Blocking generation. Returns the natural value:
 
@@ -304,71 +356,38 @@
         (llm/generate ai {:system-prompt \"Fix grammar\"})
         (llm/generate ai {:system-prompt \"Translate to French\"}))
 
-   For tool calling, use `run-agent`. For streaming/usage, use `request`."
+   When :tools are provided, returns a map {:text ... :tool-calls [...]} instead
+   of a plain string. Tool calls are NOT executed — use run-agent for that.
+
+   (generate ai {:tools [#'get-weather]} \"Weather in Tokyo?\")
+   ;; => {:text nil :tool-calls [{:id \"call_1\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]}
+
+   For streaming/usage, use `request`."
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
-   (let [merged (helpers/deep-merge (:defaults provider) opts)]
-     (when (:tools merged)
-       (throw (errors/error
-               (str "generate does not support :tools — use run-agent for tool calling")
-               {:error-type :llm/invalid-request :opts opts})))
-     (let [response (request provider opts input)
-           text     @(:text response)
-           _        (when (instance? Exception text) (throw text))]
-       (if (:schema merged)
-         (let [s @(:structured response)]
-           (if (instance? Exception s) (throw s) s))
-         text)))))
+   (let [merged (helpers/deep-merge (:defaults provider) opts)
+         has-tools? (:tools merged)
+         ;; When tools are var-quoted fns, extract Malli schemas for the API
+         api-opts (if has-tools?
+                    (let [schemas (tools->input-schemas (:tools merged))]
+                      (assoc (dissoc opts :tools) :tools schemas))
+                    opts)
+         response (request provider api-opts input)
+         text     @(:text response)
+         _        (when (instance? Exception text) (throw text))]
+     (cond
+       has-tools?
+       {:text (not-empty text)
+        :tool-calls (or (parse-tool-calls @(:tool-calls response)) [])}
+
+       (:schema merged)
+       (let [s @(:structured response)]
+         (if (instance? Exception s) (throw s) s))
+
+       :else text))))
 
 
-
-(defn- resolve-tool-schema
-  "Get the Malli function schema ([:=> ...] or [:-> ...]) from a tool.
-   Checks in order:
-   1. :malli/schema on metadata (defn + {:malli/schema ...}, with-meta)
-   2. :schema on metadata (mx/defn)
-   3. Malli global function registry (m/=> annotation)"
-  [tool]
-  (let [m (meta tool)]
-    (or (:malli/schema m)
-        (:schema m)
-        ;; Check Malli's global function registry (populated by m/=>)
-        (when-let [ns-sym (some-> (:ns m) ns-name)]
-          (:schema (get-in (m/function-schemas) [ns-sym (:name m)])))
-        (throw (errors/error
-                "Tool missing Malli schema. Use {:malli/schema ...}, mx/defn, or m/=>."
-                {:error-type :llm/invalid-request :tool tool})))))
-
-(defn- extract-input-schema
-  "Extract the input map schema from a Malli function schema.
-   Supports [:=> [:cat <map-schema>] <ret>] and [:-> <map-schema> <ret>]."
-  [fn-schema]
-  (let [s (m/schema fn-schema)
-        t (m/type s)
-        ;; :-> is a flat proxy for :=> — deref to normalize
-        resolved (if (= :-> t) (m/deref s) s)
-        resolved-type (m/type resolved)]
-    (when-not (= :=> resolved-type)
-      (throw (errors/error
-              "Tool schema must be [:=> [:cat ...] <return>] or [:-> <input> <return>]"
-              {:error-type :llm/invalid-request :schema fn-schema})))
-    (let [input-schema (first (m/children resolved))
-          args (m/children (m/schema input-schema))]
-      (when (empty? args)
-        (throw (errors/error
-                "Tool function schema has no input arguments"
-                {:error-type :llm/invalid-request :schema fn-schema})))
-      (first args))))
-
-(defn- extract-tool-name
-  "Get the tool name from a Malli schema's properties."
-  [schema]
-  (let [props (try (m/properties (m/schema schema)) (catch Exception _ nil))]
-    (or (:name props)
-        (throw (errors/error
-                "Tool schema missing :name in properties"
-                {:error-type :llm/invalid-request :schema schema})))))
 
 (defn tool-result
   "Create a tool result message for feeding back into message history.
@@ -380,55 +399,37 @@
 
 (defn run-agent
   "Run an agentic tool-calling loop. Tools are plain functions with standard
-   Malli function schemas attached via metadata. Define tools with:
-
-   ;; defn + :malli/schema (recommended)
-   (defn get-weather
-     {:malli/schema [:=> [:cat [:map {:name \"get_weather\"
-                                      :description \"Get weather for a city\"}
-                                [:city :string]]]
-                        :string]}
-     [{:keys [city]}]
-     (str \"Sunny in \" city))
-
-   ;; mx/defn (malli.experimental)
-   (mx/defn get-weather :- :string
-     [args :- [:map {:name \"get_weather\" :description \"Get weather\"}
-                [:city :string]]]
-     (str \"Sunny in \" (:city args)))
-
-   ;; m/=> annotation (Malli global registry)
-   (defn get-weather [{:keys [city]}] (str \"Sunny in \" city))
-   (m/=> get-weather [:=> [:cat [:map {:name \"get_weather\"}
-                                  [:city :string]]] :string])
-
-   The input :map schema carries :name and :description for the LLM.
-   Pass tool vars to run-agent:
+   Malli function schemas attached via metadata.
 
    (run-agent ai [#'get-weather] \"Weather in Tokyo?\")
+   (run-agent ai [#'get-weather #'search] {:max-steps 5} \"plan a trip\")
 
-   tools: vector of tool vars or fns (each carries its schema in metadata)
+   tools: vector of tool vars or fns (each carries its Malli schema in metadata)
 
    opts (optional):
-     :max-steps      - max iterations (default 10)
-     :temperature     - float, e.g. 0.7
-     :max-tokens      - int, max tokens to generate
-     :top-p           - float, nucleus sampling
-     :provider-opts   - map of additional provider-specific API params
-     + any request opts (:model, :system-prompt, etc.)
+     :max-steps       - max iterations (default 10)
+     :stop-when       - (fn [{:keys [tool-calls text]}] ...) called after each LLM
+                        response, before executing tools. Return truthy to stop.
+                        Default: stop when no tool calls (model is done).
+     :model, :system-prompt, :temperature, :max-tokens, :top-p, :provider-opts
 
-   Returns {:text ... :history ... :steps [...]}
-     :text    - final text response (string)
-     :history - full message history (reusable — feed into generate for structured extraction)
-     :steps   - vec of {:tool-calls [...] :tool-results [...]} per iteration
+   Returns {:text ... :history ... :steps [...] :tool-calls ...}
+     :text       - final text response (string)
+     :history    - full message history (reusable)
+     :steps      - vec of {:tool-calls [...] :tool-results [...]} per iteration
+     :tool-calls - pending tool calls when :stop-when fired (nil otherwise)
 
    For structured output after tool use, compose with generate:
 
      (let [{:keys [history]} (run-agent ai tools \"find user 123\")]
        (generate ai {:schema result-schema} history))
 
-   (run-agent ai [#'get-weather] \"Weather in Tokyo?\")
-   (run-agent ai [#'get-weather #'search] {:max-steps 5} \"Weather in Tokyo?\")"
+   Stop the loop explicitly:
+
+     ;; Stop when the model calls the 'done' tool
+     (run-agent ai tools {:stop-when (fn [{:keys [tool-calls]}]
+                                       (some #(= \"done\" (:name %)) tool-calls))}
+       \"do the thing\")"
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
@@ -442,12 +443,13 @@
                       (throw (errors/error "run-agent requires a non-empty tools vector"
                                           {:error-type :llm/invalid-request
                                            :tools tools})))
-         fn-schemas (mapv resolve-tool-schema tools)
-         input-schemas (mapv extract-input-schema fn-schemas)
+         input-schemas (tools->input-schemas tools)
          name->fn   (into {} (map (fn [t s] [(extract-tool-name s) t]) tools input-schemas))
          max-steps  (or (:max-steps opts) 10)
+         stop-when  (or (:stop-when opts)
+                        (fn [{:keys [tool-calls]}] (empty? tool-calls)))
          base-opts  (-> opts
-                        (dissoc :max-steps)
+                        (dissoc :max-steps :stop-when)
                         (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
@@ -455,9 +457,15 @@
        (let [response   (request provider base-opts history)
              text       @(:text response)
              _          (when (instance? Exception text) (throw text))
-             tc         (parse-tool-calls @(:tool-calls response))]
-         (if (seq tc)
-           ;; Tool calls - look up and execute
+             tc         (parse-tool-calls @(:tool-calls response))
+             step-ctx   {:tool-calls (or tc []) :text text}]
+         (if (stop-when step-ctx)
+           ;; Stop condition met - return current state
+           {:text    text
+            :history (conj history {:role :assistant :content (or text "")})
+            :steps   steps
+            :tool-calls (not-empty tc)}
+           ;; Execute tool calls and continue
            (let [msg (tool-calls->assistant-message tc text)]
              (if (>= (inc n) max-steps)
                {:text "" :history history :steps steps :truncated true}
@@ -477,12 +485,7 @@
                  (recur new-history
                         (conj steps {:tool-calls (vec tc)
                                      :tool-results (mapv :result results)})
-                        (inc n)))))
-           ;; No tool calls — done
-           {:text    text
-            :history (conj history {:role :assistant :content text})
-            :steps   steps}))))))
-
+                        (inc n)))))))))))
 
 
 (defn stream
