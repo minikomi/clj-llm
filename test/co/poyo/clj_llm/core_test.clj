@@ -135,13 +135,46 @@
         (is (= "ping" (:name (first tool-calls))))
         (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls)))))))
 
-  (testing "generate rejects :tools — use run-agent instead"
-    (let [tool-schema [:=> [:cat [:map {:name "ping" :description "Ping a host"}
-                                  [:host :string]]]
-                           :string]
-          provider (mock-provider [{:type :content :content "hi"}])]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support :tools"
-            (llm/generate provider {:tools [tool-schema]} "ping both"))))))
+  (testing "generate with :tools returns {:text :tool-calls} map"
+    (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}])
+          ping-fn (with-meta
+                    (fn [{:keys [host]}] (str "pong " host))
+                    {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping a host"}
+                                              [:host :string]]]
+                                       :string]})
+          result (llm/generate provider {:tools [ping-fn]} "ping example.com")]
+      (is (map? result))
+      (is (= 1 (count (:tool-calls result))))
+      (is (= "ping" (:name (first (:tool-calls result)))))
+      (is (= {:host "example.com"} (:arguments (first (:tool-calls result)))))
+      ;; Tool calls are NOT executed
+      (is (vector? (:tool-calls result)))))
+
+  (testing "generate with :tools and text returns both"
+    (let [provider (mock-provider [{:type :content :content "Let me check that"}
+                                   {:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}])
+          ping-fn (with-meta
+                    (fn [{:keys [host]}] (str "pong " host))
+                    {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping"}
+                                              [:host :string]]]
+                                       :string]})
+          result (llm/generate provider {:tools [ping-fn]} "ping example.com")]
+      (is (= "Let me check that" (:text result)))
+      (is (= 1 (count (:tool-calls result))))))
+
+  (testing "generate with :tools but no tool calls returns empty vector"
+    (let [provider (mock-provider [{:type :content :content "No tools needed"}])
+          ping-fn (with-meta
+                    (fn [{:keys [host]}] (str "pong " host))
+                    {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping"}
+                                              [:host :string]]]
+                                       :string]})
+          result (llm/generate provider {:tools [ping-fn]} "hello")]
+      (is (map? result))
+      (is (= "No tools needed" (:text result)))
+      (is (= [] (:tool-calls result))))))
 
 (defn ^:private ping-tool
   {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping"}
@@ -219,6 +252,43 @@
     (let [provider (mock-provider [{:type :content :content "hi"}])]
       (is (thrown? clojure.lang.ExceptionInfo
             (llm/run-agent provider [] "test")))))
+
+  (testing "run-agent :stop-when predicate"
+    (let [call-count (atom 0)
+          provider (->MockProvider
+                    (atom [{:type :tool-call :index 0 :id "call_1"
+                            :name "done" :arguments ""}
+                           {:type :tool-call-delta :index 0
+                            :arguments "{\"result\":\"finished\"}"}])
+                    {:model "test-model"})
+          done-tool (with-meta
+                      (fn [{:keys [result]}]
+                        (swap! call-count inc)
+                        result)
+                      {:malli/schema [:=> [:cat [:map {:name "done" :description "Signal completion"}
+                                                 [:result :string]]]
+                                         :string]})
+          result (llm/run-agent provider [done-tool]
+                   {:stop-when (fn [{:keys [tool-calls]}]
+                                 (some #(= "done" (:name %)) tool-calls))}
+                   "do something")]
+      ;; Tool was NOT executed (stop-when fires before execution)
+      (is (= 0 @call-count))
+      ;; Pending tool calls are returned
+      (is (= 1 (count (:tool-calls result))))
+      (is (= "done" (:name (first (:tool-calls result)))))))
+
+  (testing "run-agent default stop-when: no tool calls"
+    (let [provider (mock-provider [{:type :content :content "Just text, no tools"}])
+          dummy-tool (with-meta
+                       (fn [{:keys [x]}] x)
+                       {:malli/schema [:=> [:cat [:map {:name "dummy" :description "Dummy"}
+                                                  [:x :string]]]
+                                          :string]})
+          result (llm/run-agent provider [dummy-tool] "hello")]
+      (is (= "Just text, no tools" (:text result)))
+      (is (nil? (:tool-calls result)))
+      (is (empty? (:steps result)))))
 
   (testing "run-agent returns text, compose with generate for structured output"
     (let [provider (->MockProvider
