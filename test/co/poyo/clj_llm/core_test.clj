@@ -135,7 +135,7 @@
         (is (= "ping" (:name (first tool-calls))))
         (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls)))))))
 
-  (testing "generate with :tools returns {:text :tool-calls} map"
+  (testing "generate with :tools executes tools and returns results"
     (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
                                    {:type :tool-call-delta :index 0 :arguments "{\"host\":\"example.com\"}"}])
           ping-fn (with-meta
@@ -148,8 +148,8 @@
       (is (= 1 (count (:tool-calls result))))
       (is (= "ping" (:name (first (:tool-calls result)))))
       (is (= {:host "example.com"} (:arguments (first (:tool-calls result)))))
-      ;; Tool calls are NOT executed
-      (is (vector? (:tool-calls result)))))
+      ;; Tool was executed
+      (is (= ["pong example.com"] (:tool-results result)))))
 
   (testing "generate with :tools and text returns both"
     (let [provider (mock-provider [{:type :content :content "Let me check that"}
@@ -162,9 +162,10 @@
                                        :string]})
           result (llm/generate provider {:tools [ping-fn]} "ping example.com")]
       (is (= "Let me check that" (:text result)))
-      (is (= 1 (count (:tool-calls result))))))
+      (is (= 1 (count (:tool-calls result))))
+      (is (= ["pong example.com"] (:tool-results result)))))
 
-  (testing "generate with :tools but no tool calls returns empty vector"
+  (testing "generate with :tools but no tool calls returns empty vectors"
     (let [provider (mock-provider [{:type :content :content "No tools needed"}])
           ping-fn (with-meta
                     (fn [{:keys [host]}] (str "pong " host))
@@ -174,7 +175,8 @@
           result (llm/generate provider {:tools [ping-fn]} "hello")]
       (is (map? result))
       (is (= "No tools needed" (:text result)))
-      (is (= [] (:tool-calls result))))))
+      (is (= [] (:tool-calls result)))
+      (is (= [] (:tool-results result))))))
 
 (defn ^:private ping-tool
   {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping"}
