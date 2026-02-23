@@ -356,30 +356,44 @@
         (llm/generate ai {:system-prompt \"Fix grammar\"})
         (llm/generate ai {:system-prompt \"Translate to French\"}))
 
-   When :tools are provided, returns a map {:text ... :tool-calls [...]} instead
-   of a plain string. Tool calls are NOT executed — use run-agent for that.
+   When :tools are provided, makes a single LLM call, executes any tool calls,
+   and returns a map with all results:
 
    (generate ai {:tools [#'get-weather]} \"Weather in Tokyo?\")
-   ;; => {:text nil :tool-calls [{:id \"call_1\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]}
+   ;; => {:text nil
+   ;;     :tool-calls [{:id \"call_1\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
+   ;;     :tool-results [\"Sunny, 22C in Tokyo\"]}
 
+   For multi-turn tool loops, use `run-agent`.
    For streaming/usage, use `request`."
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
    (let [merged (helpers/deep-merge (:defaults provider) opts)
-         has-tools? (:tools merged)
-         ;; When tools are var-quoted fns, extract Malli schemas for the API
-         api-opts (if has-tools?
-                    (let [schemas (tools->input-schemas (:tools merged))]
-                      (assoc (dissoc opts :tools) :tools schemas))
+         tools (:tools merged)
+         input-schemas (when tools (tools->input-schemas tools))
+         api-opts (if tools
+                    (assoc (dissoc opts :tools) :tools input-schemas)
                     opts)
          response (request provider api-opts input)
          text     @(:text response)
          _        (when (instance? Exception text) (throw text))]
      (cond
-       has-tools?
-       {:text (not-empty text)
-        :tool-calls (or (parse-tool-calls @(:tool-calls response)) [])}
+       tools
+       (let [name->fn (into {} (map (fn [t s] [(extract-tool-name s) t]) tools input-schemas))
+             tc (or (parse-tool-calls @(:tool-calls response)) [])]
+         (if (seq tc)
+           (let [results (mapv (fn [t]
+                                (let [f (or (get name->fn (:name t))
+                                            (throw (errors/error
+                                                    (str "Unknown tool: " (:name t))
+                                                    {:error-type :llm/invalid-request
+                                                     :name (:name t)
+                                                     :available (keys name->fn)})))]
+                                  (f (:arguments t))))
+                              tc)]
+             {:text (not-empty text) :tool-calls tc :tool-results results})
+           {:text (not-empty text) :tool-calls [] :tool-results []}))
 
        (:schema merged)
        (let [s @(:structured response)]
