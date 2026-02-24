@@ -23,12 +23,12 @@
   (let [messages (bh/normalize-messages messages)
         tools-config (cond
                        tools
-                       {:tools (mapv schema/malli->json-schema tools)
-                        :tool_choice (cond
-                                       (= tool-choice "auto") {:type "auto"}
-                                       (= tool-choice "required") {:type "any"}
-                                       (= tool-choice "none") nil
-                                       :else (or tool-choice {:type "auto"}))}
+                       (cond-> {:tools (mapv schema/malli->json-schema tools)}
+                         (not= tool-choice "none")
+                         (assoc :tool_choice (cond
+                                              (= tool-choice "auto") {:type "auto"}
+                                              (= tool-choice "required") {:type "any"}
+                                              :else (or tool-choice {:type "auto"}))))
 
                        schema
                        {:tools [(schema/malli->json-schema schema)]
