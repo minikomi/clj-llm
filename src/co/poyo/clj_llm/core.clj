@@ -363,6 +363,38 @@
                        :available  (keys name->fn)})))]
     (f (:arguments tool-call))))
 
+(defn tool-result
+  "Create a tool result message for feeding back into message history.
+
+   (tool-result \"call_abc\" \"Sunny, 22°C\")
+   ;; => {:role :tool :tool-call-id \"call_abc\" :content \"Sunny, 22°C\"}"
+  [tool-call-id content]
+  {:role :tool :tool-call-id tool-call-id :content (str content)})
+
+(defn- build-agent-step
+  "Execute tool calls and build the history messages + step record for one
+   iteration of the agent loop.
+
+   Returns {:history-msgs [assistant-msg tool-result-msgs...]
+            :step         {:tool-calls [...] :tool-results [...]}  or nil}"
+  [name->fn parsed-calls text]
+  (if (seq parsed-calls)
+    (let [results (mapv (fn [tc]
+                          (try
+                            {:call tc :result (execute-tool-call name->fn tc)}
+                            (catch Exception e
+                              {:call tc :result (str "Error: " (.getMessage e)) :error e})))
+                        parsed-calls)
+          assistant-msg  (tool-calls->assistant-message parsed-calls text)
+          result-msgs    (mapv (fn [{:keys [call result]}]
+                                 (tool-result (:id call) (str result)))
+                               results)]
+      {:history-msgs (into [assistant-msg] result-msgs)
+       :step         {:tool-calls   (vec parsed-calls)
+                      :tool-results (mapv :result results)}})
+    {:history-msgs [{:role :assistant :content (or text "")}]
+     :step         nil}))
+
 (defn generate
   "Blocking generation. Returns the natural value:
 
@@ -427,13 +459,6 @@
 
 
 
-(defn tool-result
-  "Create a tool result message for feeding back into message history.
-
-   (tool-result \"call_abc\" \"Sunny, 22°C\")
-   ;; => {:role :tool :tool-call-id \"call_abc\" :content \"Sunny, 22°C\"}"
-  [tool-call-id content]
-  {:role :tool :tool-call-id tool-call-id :content (str content)})
 
 (defn run-agent
   "Run an agentic tool-calling loop. Tools are plain functions with standard
@@ -498,31 +523,13 @@
             :steps      steps
             :tool-calls (not-empty parsed-calls)}
 
-           ;; Build next history + step
-           (let [has-tc?  (seq parsed-calls)
-                 results  (when has-tc?
-                            (mapv (fn [t]
-                                    (try
-                                      {:call t :result (execute-tool-call name->fn t)}
-                                      (catch Exception e
-                                        {:call t :result (str "Error: " (.getMessage e)) :error e})))
-                                  parsed-calls))
-                 msg      (if has-tc?
-                            (tool-calls->assistant-message parsed-calls text)
-                            {:role :assistant :content (or text "")})
-                 msgs     (if has-tc?
-                            (into [msg] (mapv (fn [{:keys [call result]}]
-                                               (tool-result (:id call) (str result)))
-                                             results))
-                            [msg])
-                 next-history (into history msgs)
-                 next-steps   (if has-tc?
-                                (conj steps {:tool-calls  (vec parsed-calls)
-                                             :tool-results (mapv :result results)})
-                                steps)]
+           (let [{:keys [history-msgs step]} (build-agent-step name->fn parsed-calls text)
+                 next-history (into history history-msgs)
+                 next-steps   (if step (conj steps step) steps)]
              (if (>= (inc n) max-steps)
                {:text text :history next-history :steps next-steps :truncated true}
                (recur next-history next-steps (inc n))))))))))
+
 
 
 
