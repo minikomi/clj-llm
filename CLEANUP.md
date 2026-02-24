@@ -1,6 +1,8 @@
 # Cleanup Plan: Making clj-llm a Joy to Read
 
-**Status: COMPLETE** — All items implemented.
+**Status: COMPLETE** — All items addressed. Two were reverted as over-engineering:
+`:schema` → `:output-schema` (verbose for no gain) and `build-agent-step` extraction
+(one-call-site function with made-up return keys).
 
 Audit of all 1,468 lines of source across 11 files. Grouped by theme, ordered by impact.
 
