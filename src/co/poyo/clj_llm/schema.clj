@@ -14,7 +14,7 @@
 
 (declare malli->json-schema)
 
-(defn- auto-generate-function-info
+(defn- infer-tool-metadata
   "Auto-generate function name and description from schema properties"
   [compiled-schema]
   (let [children (m/children compiled-schema)
@@ -81,7 +81,7 @@
          (let [properties (m/properties compiled-schema)
                base-map (merge base-schema {:type "object"} (extract-properties compiled-schema depth))]
            (if (zero? depth)
-             (let [auto-info (auto-generate-function-info compiled-schema)
+             (let [auto-info (infer-tool-metadata compiled-schema)
                    name (:name properties (:name auto-info))
                    description (:description properties (:description auto-info))]
                {:type "function"

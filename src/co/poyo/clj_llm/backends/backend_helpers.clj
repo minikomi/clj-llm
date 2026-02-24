@@ -66,11 +66,11 @@
    - url: full API endpoint URL
    - headers: HTTP headers map
    - body: JSON string request body
-   - event->internal: (data -> seq-of-events | nil)
+   - parse-sse-data: (data -> seq-of-events | nil)
    - provider-name: string for error messages
 
    Returns a channel of internal events (maps with :type key)."
-  [url headers body event->internal provider-name]
+  [url headers body parse-sse-data provider-name]
   (let [events-chan (chan 1024)]
     (net/post-stream url headers body
                      (fn [response]
@@ -101,7 +101,7 @@
                                      (recur)
 
                                      :else
-                                     (if-let [evts (seq (event->internal (::sse/data chunk)))]
+                                     (if-let [evts (seq (parse-sse-data (::sse/data chunk)))]
                                        (let [done? (loop [es evts]
                                                       (if es
                                                         (let [e (first es)]
