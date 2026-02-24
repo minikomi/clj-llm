@@ -1,22 +1,20 @@
-# clj-llm Refactoring: Decomplecting the Event Pipeline
+# clj-llm Refactoring: From Bug Fixes to Joy
 
-## Motivation
+After completing 19 bug-fix tasks, the codebase worked correctly but had accumulated structural complexity. This documents two phases of refactoring: a **structural decomplection** and a **readability cleanup** across all 11 source files.
 
-After completing 19 bug-fix tasks, three areas had accumulated complexity:
-
-1. **`consume-events` go-loop** — 5 positional `recur` args, state transitions tangled with channel I/O
-2. **`event->internal` return type** — polymorphic (nil, map, or vector), forcing conditional unwrapping downstream
-3. **`run-agent` loop** — two nearly-identical code paths that could drift apart
-
-The goal: make state updates predictable (`state × event → state'`), give every function a uniform contract, and eliminate duplicated branches.
+**Final state:** 74 tests, 237 assertions, 0 failures. 1,452 lines of source across 11 files.
 
 ---
 
-## 1. Pure State Machine for `consume-events`
+## Phase 1: Structural Decomplection
 
-### Before
+Three areas had accumulated complexity that made the code harder to reason about and easier to break.
 
-The go-loop carried five positional accumulators and mixed state updates with side effects in every `case` branch:
+### 1.1 Pure State Machine for `consume-events`
+
+The go-loop carried **five positional `recur` arguments**, with state updates and channel I/O interleaved in every `case` branch.
+
+**Before** — tangled state + I/O:
 
 ```clojure
 (go-loop [chunks []
@@ -24,249 +22,159 @@ The go-loop carried five positional accumulators and mixed state updates with si
           tc-index {}
           usage-acc {}
           finish-reason nil]
-  (if-let [event (<! source-chan)]
-    (do
-      (>! events-chan event)                          ;; side effect
-      (case (:type event)
-        :content
-        (do (>! text-chunks-chan (:content event))    ;; side effect
-            (recur (conj chunks (:content event))     ;; state update
-                   tool-calls tc-index
-                   usage-acc finish-reason))
-        :usage
-        (recur chunks tool-calls tc-index
-               (merge usage-acc (dissoc event :type)) ;; state update
-               finish-reason)
-        :done
-        (finalize! (apply str chunks)                 ;; derive + side effect
-                   (not-empty tool-calls)
-                   (cond-> usage-acc ...))
-        ;; ... every branch repeats all 5 args
+  (case (:type event)
+    :content
+    (do (>! text-chunks-chan (:content event))
+        (recur (conj chunks (:content event))
+               tool-calls tc-index
+               usage-acc finish-reason))
+    ;; every branch repeats all 5 args
 ```
 
-**Problems:**
-- Adding a 6th accumulator means touching every `recur` call
-- Can't unit-test state transitions without channels
-- Side effects and state logic are interleaved — hard to reason about ordering
-
-### After
-
-State transitions are a pure function. The go-loop is just plumbing.
+**After** — pure transitions + thin loop:
 
 ```clojure
-(def ^:private init-state
-  {:chunks [] :tool-calls [] :tc-index {} :usage {} :finish-reason nil :done? false :error nil})
-
-(defn- next-state
-  "Pure: state × event → state'. No channels, no promises."
-  [state event]
+(defn- next-state [state event]
   (case (:type event)
     :content      (update state :chunks conj (:content event))
-    :tool-call    (let [idx (or (:index event) (count (:tool-calls state)))
-                        call (assoc event :arguments (or (:arguments event) ""))]
-                    (-> state
-                        (update :tool-calls conj call)
-                        (assoc-in [:tc-index idx] (count (:tool-calls state)))))
-    :tool-call-delta (let [pos (get (:tc-index state) (:index event))]
-                       (if pos
-                         (update-in state [:tool-calls pos :arguments] str (:arguments event))
-                         state))
+    :tool-call    (-> state (update :tool-calls conj call) (assoc-in ...))
     :usage        (update state :usage merge (dissoc event :type))
-    :finish       (assoc state :finish-reason (:reason event))
-    :error        (assoc state :done? true :error (errors/error ...))
     :done         (assoc state :done? true)
     state))  ;; unknown → pass through
-```
 
-Derivation functions extract final values from state:
-
-```clojure
-(defn- state->text [{:keys [chunks error]}]
-  (or error (apply str chunks)))
-
-(defn- state->usage [{:keys [usage finish-reason]} provider-opts req-start]
-  (let [u (cond-> usage finish-reason (assoc :finish-reason finish-reason))]
-    (when (seq u)
-      (let [now (System/currentTimeMillis)]
-        (assoc u :type :usage ...)))))
-```
-
-The go-loop becomes mechanical:
-
-```clojure
 (go-loop [state init-state]
   (if-let [event (<! source-chan)]
     (let [state' (next-state state event)]
-      ;; Side effects: fan out
       (>! events-chan event)
       (when (= :content (:type event))
         (>! text-chunks-chan (:content event)))
-      (when (and (:error state') (not (realized? structured-promise)))
-        (deliver structured-promise (Exception. (str (:error event)))))
-      ;; Continue or finalize
-      (if (:done? state')
-        (finalize! state')
-        (recur state')))
+      (if (:done? state') (finalize! state') (recur state')))
     (finalize! state)))
 ```
 
-**What this buys:**
-- `next-state` is a pure function — testable with plain maps, no async setup
-- Adding new accumulators = add a key to `init-state` + a `case` branch. No recur args to update.
-- Side effects are visually separated from state logic
-- `finalize!` takes one arg (state), not three
+**Key win:** `next-state` is a pure function — testable with plain maps, no async setup. Adding accumulators means adding a key to `init-state` + a `case` branch. No recur args to update.
+
+### 1.2 Uniform `data->internal-events` Contract
+
+Backend event converters returned **nil, a single map, or a vector of maps**, forcing conditional unwrapping downstream.
+
+**Before:**
+```clojure
+;; returns map OR vector
+(cond
+  content     {:type :content ...}        ;; map
+  tool-calls  (if (= 1 (count events))
+                (first events)            ;; map
+                (vec events))             ;; vector!
+
+;; caller must unwrap
+(let [evts (if (sequential? result) result [result])] ...)
+```
+
+**After:** always seq or nil.
+```clojure
+(cond
+  content     [{:type :content ...}]
+  tool-calls  (not-empty (keep convert-one tool-calls))
+  usage       [(into {:type :usage} usage)]
+  :else nil)
+```
+
+**Key win:** One return shape. No `(if (sequential?) ...)` at call sites. Both backends follow the same contract.
+
+### 1.3 Single Code Path in `run-agent`
+
+The agent loop had two nearly-identical branches (tool calls vs. no tool calls), each with its own `max-steps` check, history construction, and `recur`.
+
+**After:** One `let` computes values, branches only where they differ, one `max-steps` check, one `recur`.
 
 ---
 
-## 2. Uniform `event->internal` Contract
+## Phase 2: Readability Cleanup
 
-### Before
+Systematic pass across all 11 source files in 8 commits, touching 16 files.
 
-Backend event converters returned **nil, a single map, or a vector of maps**:
+### 2.1 Naming Pass
 
-```clojure
-;; OpenAI — polymorphic return
-(defn- data->internal-event [data schema tools]
-  (cond
-    (not-empty content) {:type :content :content content}       ;; map
-    tool-calls          (let [events (keep convert-one tool-calls)]
-                          (when (seq events)
-                            (if (= 1 (count events))
-                              (first events)    ;; map
-                              (vec events))))   ;; vector!
-    ...))
-```
+Replaced cryptic abbreviations with clear names across 6 files:
 
-`backend_helpers` had to handle all three cases:
+| Before | After | Why |
+|--------|-------|-----|
+| `bh` (backend alias) | `backend` | Non-obvious abbreviation |
+| `tc` (6 uses) | `parsed-calls` | Cryptic 2-letter binding |
+| `:tc-index` | `:tool-call-positions` | Unclear what it maps |
+| `merged` | `resolved` | Describes *how*, not *what* |
+| `base-opts` | `request-opts` | Base relative to what? |
+| `cb` | `on-response` | Generic callback name |
+| `s`, `t` | `fn-schema`, `schema-type` | Single letters through 4 conditionals |
+| `event->internal` | `parse-sse-data` | Input isn't an "event" |
 
-```clojure
-(if-let [result (event->internal ...)]
-  (let [evts (if (sequential? result) result [result])]  ;; unwrap
-    (loop [es (seq evts)]                                 ;; inner loop
-      (when es
-        (let [e (first es)]
-          (>! events-chan e)
-          (when (not= :done (:type e))
-            (recur (next es))))))
-    (when-not (some #(= :done (:type %)) evts)
-      (recur)))
-  (recur))
-```
+### 2.2 Consistency Pass
 
-**Problems:**
-- Caller must handle three return shapes
-- `(if (sequential? ...) ...)` is a code smell — the producer should decide the shape
-- Nested `loop` inside a `go` block is fragile (core.async macro limitations)
+Same patterns done the same way everywhere:
 
-### After
+- **`unwrap!` helper** — the check-if-exception-and-throw pattern appeared at 5 call sites with slight variations. Now one function.
+- **Parameterized `validate-opts`** — `request` and `run-agent` both validate option keys, but used different code paths. Now one function with an optional key set argument.
+- **`map->Response`** — replaced 6-field positional `->Response` construction. One swap in positional args silently breaks; named fields don't.
+- **Single `status-errors` table** — `errors.clj` had `status->error-type` and `parse-http-error` both independently casing on HTTP status codes. Now one data table drives both.
 
-Every backend returns **seq or nil**. Always.
+### 2.3 Comments Pass
 
-```clojure
-;; OpenAI
-(defn- data->internal-events [data schema tools]
-  (cond
-    (not-empty content) [{:type :content :content content}]
-    tool-calls          (not-empty (keep convert-one tool-calls))
-    finish-reason       [{:type :finish :reason finish-reason}]
-    usage               [(into {:type :usage} usage)]
-    :else nil))
+Added "why" comments at 10 sites where intent was non-obvious:
 
-;; Anthropic — same contract
-(defn- data->internal-events [data schema tools]
-  (case (:type data)
-    "content_block_delta" [{:type :content :content ...}]
-    "message_stop"        [{:type :done}]
-    ...))
-```
+- `(dropping-buffer 1024)` — why dropping? why 1024? (slow consumers must not block promise delivery)
+- `(catch ExceptionInfo e (throw e))` — looks like dead code (re-throws our errors, only catches parse failures)
+- Unknown event type → `state` — forward-compat with new provider events
+- `"required" → {:type "any"}` in Anthropic — different vocabulary, not a bug
+- `(:throw false)` in net.cljc — errors handled via callback
 
-`backend_helpers` simplifies — no conditional wrapping:
+Also: removed dead `::type :stream-error` key, fixed `description ""` default that existed only to be discarded.
 
-```clojure
-(if-let [evts (seq (event->internal ...))]
-  (let [done? (loop [es evts]
-                (if es
-                  (let [e (first es)]
-                    (>! events-chan e)
-                    (if (= :done (:type e)) true (recur (next es))))
-                  false))]
-    (when-not done? (recur)))
-  (recur))
-```
+### 2.4 Split `malli->json-schema` Dual Personality
 
-**What this buys:**
-- One return shape to handle
-- No `(if (sequential?) ...)` at the call site
-- The `done?` flag replaces `(some #(= :done ...) evts)` — computed during the loop, not after
+At depth=0, `malli->json-schema` returned a **tool definition** `{:type "function" :function {...}}`. At depth>0, it returned a **JSON Schema** `{:type "object" ...}`. The function name promised JSON Schema but delivered tool wrappers.
+
+**After:** `malli->json-schema` always returns plain JSON Schema. New `malli->tool-definition` wraps for tool calling. Backends call the one they need.
+
+### 2.5 Flatten `request` Indentation
+
+The `request` function had a nested `let` inside a `let`, with the `Response` construction at a confusing indentation level. Flattened into a single `let` block.
+
+### 2.6 Decouple Structured Output from `consume-events`
+
+`consume-events` knew about `structured-promise` and `schema` — it delivered errors to the structured promise on `:error` events and spawned a future for parsing.
+
+**After:** `consume-events` only knows about text, tool-calls, usage, and channel fan-out. The structured-output future moved to `request`, where it belongs.
+
+### 2.7 Extract `build-agent-step` Helper
+
+The densest block in `run-agent` — 7 bindings, conditional message construction, history assembly — is now a named function. The loop body reads as: get response → check stop → build step → recur.
+
+### 2.8 Rename `:schema` → `:output-schema`
+
+The `:schema` option key shadowed the `schema` namespace alias and was ambiguous — it could mean a Malli schema, a JSON Schema, or the structured output option.
+
+Renamed across the entire API surface: protocol, both backends, core.clj (option key, destructuring, docstrings), tests, scripts, sandbox, and README. Internal uses of `:schema` in error data and Malli metadata lookups are unchanged.
 
 ---
 
-## 3. Single Code Path in `run-agent`
+## Commit Log
 
-### Before
+| Commit | Description |
+|--------|-------------|
+| `9a5fe75` | Decomplect: pure state machine, uniform event contract, single agent path |
+| `256ce54` | Naming pass: replace cryptic abbreviations with clear names |
+| `7dedabd` | Consistency pass: unwrap!, unified validation, map->Response, error table |
+| `b9b35e9` | Comments pass: add 'why' comments, remove dead code, fix description default |
+| `98dbe35` | Split schema dual personality: malli->json-schema vs malli->tool-definition |
+| `f264d52` | Fix request indentation: flatten nested let into single let block |
+| `99086a3` | Decouple structured output from consume-events |
+| `409aeb9` | Extract build-agent-step helper from run-agent loop |
+| `497d04b` | Rename :schema option to :output-schema across the entire API |
 
-Two parallel branches — one for "has tool calls", one for "no tool calls (reasoning)":
+## Stats
 
-```clojure
-(if (empty? (or tc []))
-  ;; No tool calls — model is reasoning
-  (if (>= (inc n) max-steps)
-    {:text text :history (conj history {:role :assistant :content (or text "")}) :steps steps :truncated true}
-    (recur (conj history {:role :assistant :content (or text "")})
-           steps (inc n)))
-  ;; Has tool calls — execute them
-  (let [msg (tool-calls->assistant-message tc text)]
-    (if (>= (inc n) max-steps)
-      {:text text :history (conj history msg) :steps steps :truncated true}
-      (let [results    (mapv ... tc)
-            result-msgs (mapv ... results)
-            new-history (into (conj history msg) result-msgs)]
-        (recur new-history
-               (conj steps {:tool-calls ... :tool-results ...})
-               (inc n))))))
-```
-
-**Problems:**
-- `max-steps` check duplicated (2×)
-- History construction duplicated with slightly different shapes
-- Adding a new field to the return map means editing both branches
-
-### After
-
-One `let` computes everything. Branches only where values differ:
-
-```clojure
-(let [has-tc?  (seq tc)
-      results  (when has-tc? (mapv ... tc))
-      msg      (if has-tc?
-                 (tool-calls->assistant-message tc text)
-                 {:role :assistant :content (or text "")})
-      msgs     (if has-tc?
-                 (into [msg] (mapv ... results))
-                 [msg])
-      next-history (into history msgs)
-      next-steps   (if has-tc?
-                     (conj steps {:tool-calls ... :tool-results ...})
-                     steps)]
-  (if (>= (inc n) max-steps)
-    {:text text :history next-history :steps next-steps :truncated true}
-    (recur next-history next-steps (inc n))))
-```
-
-**What this buys:**
-- One `max-steps` check
-- One `recur`
-- New return fields go in one place
-- `has-tc?` is a value, not a control-flow fork
-
----
-
-## Summary
-
-| Area | Before | After | Key win |
-|------|--------|-------|---------|
-| `consume-events` | 5 positional recur args, tangled state+I/O | Pure `next-state` fn + mechanical go-loop | Testable state transitions |
-| `event->internal` | nil \| map \| vector | nil \| seq (always) | One shape, no conditional unwrapping |
-| `run-agent` | Two parallel branches, 2× max-steps check | One `let`, one check, one recur | No drifting duplicates |
-
-**Tests:** 73 tests, 234 assertions, 0 failures. Net change: +11 lines of source, -2 assertions (removed polymorphic-return-type checks that no longer apply).
+- **74 tests, 237 assertions, 0 failures**
+- 16 source/test files touched in the readability phase
+- 264 lines added, 225 removed (net +39)
+- 1,452 lines of source across 11 files

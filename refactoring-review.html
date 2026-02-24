@@ -44,11 +44,11 @@
   .hero p {
     font-size: 1.15rem;
     opacity: 0.85;
-    max-width: 600px;
+    max-width: 650px;
     margin: 0 auto;
   }
   .container {
-    max-width: 860px;
+    max-width: 880px;
     margin: 0 auto;
     padding: 2rem 1.5rem 4rem;
   }
@@ -192,6 +192,9 @@
   .tag-pure { background: #dbeafe; color: #1e40af; }
   .tag-uniform { background: #fae8ff; color: #86198f; }
   .tag-dedup { background: #dcfce7; color: #166534; }
+  .tag-naming { background: #fef3c7; color: #92400e; }
+  .tag-api { background: #fce7f3; color: #9d174d; }
+  .tag-clarity { background: #e0e7ff; color: #3730a3; }
   .motivation {
     background: var(--accent-light);
     border-radius: 12px;
@@ -208,7 +211,7 @@
   }
   .stat {
     flex: 1;
-    min-width: 140px;
+    min-width: 120px;
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -226,76 +229,99 @@
     color: #94a3b8;
     margin-top: 0.3rem;
   }
+  .phase-label {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    margin-bottom: 0.25rem;
+  }
+  .rename-table td:first-child {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82em;
+    color: var(--red);
+  }
+  .rename-table td:nth-child(2) {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.82em;
+    color: var(--green);
+  }
+  .commit-log {
+    font-size: 0.85rem;
+  }
+  .commit-log td:first-child {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.78em;
+    color: #94a3b8;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
 
 <div class="hero">
-  <h1>Decomplecting clj-llm</h1>
-  <p>Pure state machines, uniform contracts, and eliminated duplication across the event pipeline.</p>
+  <h1>Refactoring clj-llm</h1>
+  <p>From 19 bug fixes to structural decomplection and a full readability cleanup across all 11 source files.</p>
 </div>
 
 <div class="container">
 
 <div class="stats">
-  <div class="stat"><div class="num">73</div><div class="label">Tests passing</div></div>
-  <div class="stat"><div class="num">234</div><div class="label">Assertions</div></div>
-  <div class="stat"><div class="num">+11</div><div class="label">Net lines changed</div></div>
-  <div class="stat"><div class="num">3</div><div class="label">Decomplections</div></div>
+  <div class="stat"><div class="num">74</div><div class="label">Tests passing</div></div>
+  <div class="stat"><div class="num">237</div><div class="label">Assertions</div></div>
+  <div class="stat"><div class="num">9</div><div class="label">Commits</div></div>
+  <div class="stat"><div class="num">16</div><div class="label">Files touched</div></div>
+  <div class="stat"><div class="num">1,452</div><div class="label">Lines of source</div></div>
 </div>
 
 <div class="motivation">
   <p><strong>Why this refactor?</strong></p>
-  <p>After 19 bug-fix tasks, three areas had accumulated structural complexity: a go-loop with 5 positional recur args, a polymorphic event return type (nil | map | vector), and duplicated branches in the agent loop. Each individually was fine; together they made the code harder to reason about and easier to break.</p>
+  <p>After 19 bug-fix tasks, the code worked correctly but had accumulated structural complexity: a go-loop with 5 positional recur args, polymorphic event return types, duplicated agent branches, cryptic names, and a schema function that was two functions in a trenchcoat. Two passes made it a joy to read.</p>
 </div>
 
-<!-- ═══════════ SECTION 1 ═══════════ -->
+<!-- ═══════════════════════════════════════════ -->
+<!-- PHASE 1                                     -->
+<!-- ═══════════════════════════════════════════ -->
 
-<h2><span class="tag tag-pure">Pure</span> 1. State Machine for <code>consume-events</code></h2>
+<div class="phase-label">Phase 1</div>
+<h2>Structural Decomplection</h2>
+<p>Three interconnected changes in a single commit (<code>9a5fe75</code>).</p>
 
-<p>The go-loop in <code>consume-events</code> is the heart of the library — it reads SSE events from a source channel, accumulates text/tool-calls/usage, and delivers promises. It had grown to carry <strong>five positional recur arguments</strong>, with state updates and channel I/O interleaved in every <code>case</code> branch.</p>
+<!-- 1.1 -->
+<h3><span class="tag tag-pure">Pure</span> State Machine for <code>consume-events</code></h3>
 
-<div class="problems">
-  <strong>Problems:</strong> Adding a 6th accumulator means touching every <code>recur</code> call. Can't test state transitions without async channels. Side effects and state logic are interleaved.
-</div>
+<p>The go-loop in <code>consume-events</code> is the heart of the library. It had grown to carry <strong>five positional recur arguments</strong>, with state updates and channel I/O interleaved in every <code>case</code> branch.</p>
 
 <div class="diff">
   <div class="diff-before">
-    <div class="diff-label">✘ Before — tangled state + I/O</div>
+    <div class="diff-label">✘ Before &mdash; tangled state + I/O</div>
     <pre><code class="language-clojure">(go-loop [chunks []
           tool-calls []
           tc-index {}
           usage-acc {}
           finish-reason nil]
-  (if-let [event (&lt;! source-chan)]
-    (do
-      (>! events-chan event)
-      (case (:type event)
-        :content
-        (do (>! text-chunks-chan (:content event))
-            (recur (conj chunks (:content event))
-                   tool-calls tc-index
-                   usage-acc finish-reason))
-        :usage
-        (recur chunks tool-calls tc-index
-               (merge usage-acc ...)
-               finish-reason)
-        :done
-        (finalize! (apply str chunks)
-                   (not-empty tool-calls)
-                   (cond-> usage-acc ...))
-        ;; every branch repeats all 5 args</code></pre>
+  (case (:type event)
+    :content
+    (do (>! text-chunks-chan (:content event))
+        (recur (conj chunks (:content event))
+               tool-calls tc-index
+               usage-acc finish-reason))
+    :usage
+    (recur chunks tool-calls tc-index
+           (merge usage-acc ...)
+           finish-reason)
+    ;; every branch repeats all 5 args</code></pre>
   </div>
   <div class="diff-after">
-    <div class="diff-label">✔ After — pure transitions + thin loop</div>
-    <pre><code class="language-clojure">;; Pure function — no channels, no promises
+    <div class="diff-label">✔ After &mdash; pure transitions + thin loop</div>
+    <pre><code class="language-clojure">;; Pure function &mdash; no channels, no promises
 (defn- next-state [state event]
   (case (:type event)
     :content     (update state :chunks conj ...)
     :tool-call   (-> state (update ...) (assoc-in ...))
     :usage       (update state :usage merge ...)
-    :finish      (assoc state :finish-reason ...)
-    :error       (assoc state :done? true :error ...)
     :done        (assoc state :done? true)
     state))
 
@@ -314,157 +340,198 @@
 </div>
 
 <div class="wins">
-  <strong>What this buys:</strong>
+  <strong>Key wins:</strong>
   <ul style="margin:0.5rem 0 0 1.2rem">
-    <li><code>next-state</code> is a pure function — testable with plain maps, no async setup</li>
-    <li>Adding new accumulators = add a key to <code>init-state</code> + a <code>case</code> branch. No recur args to update.</li>
+    <li><code>next-state</code> is pure &mdash; testable with plain maps, no async setup</li>
+    <li>Adding accumulators = add key to <code>init-state</code> + a <code>case</code> branch. No recur args to update.</li>
     <li>Side effects are visually separated from state logic</li>
     <li><code>finalize!</code> takes one arg (state), not three</li>
   </ul>
 </div>
 
-<p>Derivation functions extract final values cleanly:</p>
-<pre><code class="language-clojure">(defn- state->text [{:keys [chunks error]}]
-  (or error (apply str chunks)))
+<!-- 1.2 -->
+<h3><span class="tag tag-uniform">Uniform</span> <code>data-&gt;internal-events</code> Always Returns Seq</h3>
 
-(defn- state->usage [{:keys [usage finish-reason]} provider-opts req-start]
-  (let [u (cond-> usage finish-reason (assoc :finish-reason finish-reason))]
-    (when (seq u)
-      (assoc u :type :usage
-               :clj-llm/provider-opts provider-opts
-               :clj-llm/req-start req-start
-               :clj-llm/req-end (System/currentTimeMillis) ...))))</code></pre>
-
-<!-- ═══════════ SECTION 2 ═══════════ -->
-
-<h2><span class="tag tag-uniform">Uniform</span> 2. <code>event->internal</code> Always Returns Seq</h2>
-
-<p>Backend event converters (<code>data->internal-event</code> in OpenAI and Anthropic) had a polymorphic return: <strong>nil</strong>, a <strong>single map</strong>, or a <strong>vector of maps</strong>. This forced <code>backend_helpers</code> to conditionally unwrap every result.</p>
-
-<div class="problems">
-  <strong>Problems:</strong> Caller must handle three return shapes. <code>(if (sequential? ...) ...)</code> is a code smell. Nested <code>loop</code> inside a <code>go</code> block is fragile with core.async macro limitations.
-</div>
+<p>Backend event converters returned <strong>nil, a single map, or a vector of maps</strong>, forcing conditional unwrapping downstream.</p>
 
 <div class="diff">
   <div class="diff-before">
-    <div class="diff-label">✘ Before — polymorphic return</div>
-    <pre><code class="language-clojure">;; OpenAI: returns map OR vector
-(defn- data->internal-event [data schema tools]
-  (cond
-    content  {:type :content ...}   ;; map
-    tool-calls
-      (let [events (keep convert-one tool-calls)]
-        (when (seq events)
-          (if (= 1 (count events))
-            (first events)   ;; map
-            (vec events))))  ;; vector!
-    ...))
+    <div class="diff-label">✘ Before &mdash; polymorphic return</div>
+    <pre><code class="language-clojure">;; Returns map OR vector
+(cond
+  content    {:type :content ...}       ;; map
+  tool-calls (if (= 1 (count events))
+               (first events)           ;; map
+               (vec events))            ;; vector!
 
-;; backend_helpers: must unwrap
-(if-let [result (event->internal ...)]
-  (let [evts (if (sequential? result)
-               result
-               [result])]
-    ...))</code></pre>
+;; Caller must unwrap
+(let [evts (if (sequential? result)
+             result [result])] ...)</code></pre>
   </div>
   <div class="diff-after">
-    <div class="diff-label">✔ After — always seq or nil</div>
-    <pre><code class="language-clojure">;; OpenAI: always seq
-(defn- data->internal-events [data schema tools]
-  (cond
-    content     [{:type :content ...}]
-    tool-calls  (not-empty
-                  (keep convert-one tool-calls))
-    finish      [{:type :finish ...}]
-    usage       [(into {:type :usage} usage)]
-    :else nil))
+    <div class="diff-label">✔ After &mdash; always seq or nil</div>
+    <pre><code class="language-clojure">;; Always seq
+(cond
+  content     [{:type :content ...}]
+  tool-calls  (not-empty
+                (keep convert-one tool-calls))
+  finish      [{:type :finish ...}]
+  usage       [(into {:type :usage} usage)]
+  :else nil)
 
-;; backend_helpers: no unwrapping
-(if-let [evts (seq (event->internal ...))]
-  (let [done? (loop [es evts]
-                ...)]
-    (when-not done? (recur)))
-  (recur))</code></pre>
+;; Caller: no unwrapping
+(if-let [evts (seq (parse-sse-data ...))]
+  ...)</code></pre>
   </div>
 </div>
 
-<div class="wins">
-  <strong>What this buys:</strong>
-  <ul style="margin:0.5rem 0 0 1.2rem">
-    <li>One return shape to handle — no conditional wrapping at the call site</li>
-    <li>The <code>done?</code> flag replaces <code>(some #(= :done ...) evts)</code> — computed during the loop, not after</li>
-    <li>Both backends (<code>openai.clj</code>, <code>anthropic.clj</code>) follow the same contract</li>
-  </ul>
+<!-- 1.3 -->
+<h3><span class="tag tag-dedup">Dedup</span> Single Code Path in <code>run-agent</code></h3>
+
+<p>The agent loop had two nearly-identical branches: one for tool calls, one for reasoning. Each had its own <code>max-steps</code> check, history construction, and <code>recur</code>. Merged into one <code>let</code> with one check and one <code>recur</code>.</p>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- PHASE 2                                     -->
+<!-- ═══════════════════════════════════════════ -->
+
+<div class="phase-label" style="margin-top: 2rem;">Phase 2</div>
+<h2>Readability Cleanup</h2>
+<p>Systematic pass across all 11 source files in 8 commits, touching 16 files total.</p>
+
+<!-- 2.1 -->
+<h3><span class="tag tag-naming">Naming</span> Replace Cryptic Abbreviations</h3>
+
+<table class="rename-table">
+  <thead><tr><th>Before</th><th>After</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>bh</td><td>backend</td><td>Non-obvious alias</td></tr>
+    <tr><td>tc</td><td>parsed-calls</td><td>Cryptic 2-letter binding (6 uses)</td></tr>
+    <tr><td>:tc-index</td><td>:tool-call-positions</td><td>Unclear what it maps</td></tr>
+    <tr><td>merged</td><td>resolved</td><td>Describes <em>how</em>, not <em>what</em></td></tr>
+    <tr><td>base-opts</td><td>request-opts</td><td>Base relative to what?</td></tr>
+    <tr><td>cb</td><td>on-response</td><td>Generic callback name</td></tr>
+    <tr><td>s, t</td><td>fn-schema, schema-type</td><td>Single letters through 4 conditionals</td></tr>
+    <tr><td>event-&gt;internal</td><td>parse-sse-data</td><td>Input isn't an "event"</td></tr>
+  </tbody>
+</table>
+
+<!-- 2.2 -->
+<h3><span class="tag tag-dedup">Consistency</span> Same Pattern, Same Code</h3>
+
+<div class="card">
+  <h3><code>unwrap!</code> helper (5 call sites)</h3>
+  <p>The check-if-exception-and-throw pattern appeared with slight variations at every promise deref. Now one function.</p>
+  <pre><code class="language-clojure">(defn- unwrap! [v]
+  (if (instance? Exception v) (throw v) v))</code></pre>
 </div>
 
-<!-- ═══════════ SECTION 3 ═══════════ -->
-
-<h2><span class="tag tag-dedup">Dedup</span> 3. Single Code Path in <code>run-agent</code></h2>
-
-<p>The agent loop had two nearly-identical branches: one for "has tool calls" and one for "no tool calls (model reasoning)". Each had its own <code>max-steps</code> check, history construction, and <code>recur</code>.</p>
-
-<div class="problems">
-  <strong>Problems:</strong> <code>max-steps</code> check duplicated (2×). History construction duplicated with slightly different shapes. Adding a new field to the return map means editing both branches.
+<div class="card">
+  <h3>Parameterized <code>validate-opts</code></h3>
+  <p><code>request</code> and <code>run-agent</code> both validated option keys but used different code paths with different error shapes. Now one function with an optional key set argument.</p>
+  <pre><code class="language-clojure">(defn- validate-opts
+  ([opts] (validate-opts opts known-keys))
+  ([opts valid-keys]
+   (let [unknown (remove valid-keys (keys opts))]
+     (when (seq unknown)
+       (throw (errors/error ...))))))</code></pre>
 </div>
+
+<div class="card">
+  <h3>Single <code>status-errors</code> table</h3>
+  <p><code>errors.clj</code> had two independent <code>case</code> expressions mapping HTTP status codes. Now one data table drives both <code>status-&gt;error-type</code> and <code>parse-http-error</code>.</p>
+</div>
+
+<!-- 2.3 -->
+<h3><span class="tag tag-clarity">Clarity</span> &ldquo;Why&rdquo; Comments at 10 Sites</h3>
+
+<p>Added comments where intent was non-obvious:</p>
+<ul>
+  <li><code>(dropping-buffer 1024)</code> &mdash; slow consumers must not block the go-loop that delivers promises</li>
+  <li><code>(catch ExceptionInfo e (throw e))</code> &mdash; re-throw our errors; only catch JSON parse failures below</li>
+  <li>Unknown event type &rarr; <code>state</code> &mdash; forward-compat with new provider events</li>
+  <li><code>"required" &rarr; {:type "any"}</code> in Anthropic &mdash; different vocabulary, not a bug</li>
+  <li><code>(:throw false)</code> in net.cljc &mdash; errors handled via callback</li>
+</ul>
+<p>Also removed dead <code>::type :stream-error</code> and fixed a <code>description ""</code> default that existed only to be discarded.</p>
+
+<!-- 2.4 -->
+<h3><span class="tag tag-pure">Split</span> <code>malli-&gt;json-schema</code> Dual Personality</h3>
+
+<p>At depth=0 it returned a <strong>tool definition</strong> <code>{:type "function" :function {...}}</code>. At depth&gt;0 it returned a <strong>JSON Schema</strong> <code>{:type "object" ...}</code>. The function name promised JSON Schema but delivered tool wrappers half the time.</p>
 
 <div class="diff">
   <div class="diff-before">
-    <div class="diff-label">✘ Before — two parallel branches</div>
-    <pre><code class="language-clojure">(if (empty? (or tc []))
-  ;; No tool calls
+    <div class="diff-label">✘ Before &mdash; one function, two identities</div>
+    <pre><code class="language-clojure">(defn malli->json-schema [schema depth]
+  ;; At depth 0: returns tool wrapper
+  ;; At depth > 0: returns JSON Schema
+  (if (zero? depth)
+    {:type "function"
+     :function {:name name
+                :description desc
+                :parameters base-map}}
+    base-map))</code></pre>
+  </div>
+  <div class="diff-after">
+    <div class="diff-label">✔ After &mdash; two functions, clear contracts</div>
+    <pre><code class="language-clojure">(defn malli->json-schema [schema]
+  ;; Always returns plain JSON Schema
+  {:type "object" :properties ... :required ...})
+
+(defn malli->tool-definition [schema]
+  ;; Wraps for tool calling
+  {:type "function"
+   :function {:name name
+              :description desc
+              :parameters (malli->json-schema schema)}})</code></pre>
+  </div>
+</div>
+
+<!-- 2.5 -->
+<h3><span class="tag tag-clarity">Structure</span> Decouple Structured Output from Event Loop</h3>
+
+<p><code>consume-events</code> knew about <code>structured-promise</code> and <code>schema</code> &mdash; it delivered errors to the structured promise on <code>:error</code> events and spawned a future for parsing. This coupled the event consumer to a feature it shouldn't know about.</p>
+
+<div class="wins">
+  <strong>After:</strong> <code>consume-events</code> only knows about text, tool-calls, usage, and channel fan-out. The structured-output future moved to <code>request</code>, where it wraps the event loop.
+</div>
+
+<!-- 2.6 -->
+<h3><span class="tag tag-dedup">Extract</span> <code>build-agent-step</code> Helper</h3>
+
+<p>The densest block in <code>run-agent</code> &mdash; 7 bindings, conditional message construction, history assembly &mdash; became a named function. The loop body now reads as:</p>
+
+<pre><code class="language-clojure">;; The entire inner loop body
+(let [{:keys [history-msgs step]} (build-agent-step name->fn parsed-calls text)
+      next-history (into history history-msgs)
+      next-steps   (if step (conj steps step) steps)]
   (if (>= (inc n) max-steps)
-    {:text text :history ... :truncated true}
-    (recur (conj history {:role :assistant
-                          :content text})
-           steps (inc n)))
-  ;; Has tool calls
-  (let [msg (tool-calls->assistant-message tc text)]
-    (if (>= (inc n) max-steps)       ;; dup!
-      {:text text :history ... :truncated true}
-      (let [results (mapv ... tc)
-            ...]
-        (recur new-history
-               (conj steps ...)
-               (inc n))))))</code></pre>
-  </div>
-  <div class="diff-after">
-    <div class="diff-label">✔ After — one path, branch on values</div>
-    <pre><code class="language-clojure">(let [has-tc?  (seq tc)
-      results  (when has-tc? (mapv ... tc))
-      msg      (if has-tc?
-                 (tool-calls->assistant-message tc text)
-                 {:role :assistant :content text})
-      msgs     (if has-tc?
-                 (into [msg] (mapv ... results))
-                 [msg])
-      next-history (into history msgs)
-      next-steps   (if has-tc?
-                     (conj steps {:tool-calls ...
-                                  :tool-results ...})
-                     steps)]
-  (if (>= (inc n) max-steps)  ;; once!
-    {:text text :history next-history
-     :steps next-steps :truncated true}
+    {:text text :history next-history :steps next-steps :truncated true}
     (recur next-history next-steps (inc n))))</code></pre>
-  </div>
-</div>
 
-<div class="wins">
-  <strong>What this buys:</strong>
-  <ul style="margin:0.5rem 0 0 1.2rem">
-    <li>One <code>max-steps</code> check, one <code>recur</code>, one return-map shape</li>
-    <li>New return fields go in one place</li>
-    <li><code>has-tc?</code> is a value, not a control-flow fork</li>
-  </ul>
-</div>
+<!-- 2.7 -->
+<h3><span class="tag tag-api">API</span> Rename <code>:schema</code> &rarr; <code>:output-schema</code></h3>
 
-<!-- ═══════════ SUMMARY ═══════════ -->
+<p>The <code>:schema</code> option key shadowed the <code>schema</code> namespace alias and was ambiguous &mdash; Malli schema? JSON Schema? Structured output option? Renamed across the entire surface:</p>
+
+<ul>
+  <li>Protocol parameter: <code>schema</code> &rarr; <code>output-schema</code></li>
+  <li>Both backends: <code>build-body</code>, <code>data-&gt;internal-events</code>, <code>request-stream</code></li>
+  <li>Core: option key, destructuring, docstrings</li>
+  <li>Tests, scripts, sandbox, README</li>
+</ul>
+
+<p>Internal uses of <code>:schema</code> in error data and Malli metadata lookups are unchanged &mdash; they refer to actual schemas, not the structured output option.</p>
+
+<!-- ═══════════════════════════════════════════ -->
+<!-- SUMMARY                                     -->
+<!-- ═══════════════════════════════════════════ -->
 
 <h2>Summary</h2>
 
 <table>
   <thead>
-    <tr><th>Area</th><th>Before</th><th>After</th><th>Key Win</th></tr>
+    <tr><th>Change</th><th>Before</th><th>After</th><th>Key Win</th></tr>
   </thead>
   <tbody>
     <tr>
@@ -474,23 +541,71 @@
       <td>Testable state transitions</td>
     </tr>
     <tr>
-      <td><code>event->internal</code></td>
+      <td><code>data-&gt;internal-events</code></td>
       <td>nil | map | vector</td>
       <td>nil | seq (always)</td>
-      <td>One shape, no conditional unwrapping</td>
+      <td>One shape, no unwrapping</td>
     </tr>
     <tr>
-      <td><code>run-agent</code></td>
-      <td>Two parallel branches, 2× max-steps</td>
+      <td><code>run-agent</code> loop</td>
+      <td>Two parallel branches, 2&times; max-steps</td>
       <td>One <code>let</code>, one check, one recur</td>
       <td>No drifting duplicates</td>
+    </tr>
+    <tr>
+      <td>Naming</td>
+      <td><code>bh</code>, <code>tc</code>, <code>s</code>, <code>cb</code></td>
+      <td><code>backend</code>, <code>parsed-calls</code>, <code>fn-schema</code>, <code>on-response</code></td>
+      <td>Reads without decoding</td>
+    </tr>
+    <tr>
+      <td>Consistency</td>
+      <td>5&times; inline exception check, 2&times; validation code</td>
+      <td><code>unwrap!</code>, parameterized <code>validate-opts</code></td>
+      <td>One pattern, one place</td>
+    </tr>
+    <tr>
+      <td><code>malli-&gt;json-schema</code></td>
+      <td>Returns tool wrapper at depth 0, schema at depth &gt; 0</td>
+      <td>Always JSON Schema; separate <code>malli-&gt;tool-definition</code></td>
+      <td>Name matches behavior</td>
+    </tr>
+    <tr>
+      <td>Structured output</td>
+      <td>Coupled to <code>consume-events</code></td>
+      <td>Lives in <code>request</code></td>
+      <td>Event loop is generic</td>
+    </tr>
+    <tr>
+      <td><code>:schema</code> option</td>
+      <td>Shadows ns alias, ambiguous</td>
+      <td><code>:output-schema</code></td>
+      <td>Unambiguous intent</td>
     </tr>
   </tbody>
 </table>
 
-<div class="card" style="background: linear-gradient(135deg, #eef2ff, #faf5ff); border-color: #c7d2fe;">
+<!-- Commit log -->
+<h2>Commit Log</h2>
+
+<table class="commit-log">
+  <thead><tr><th>Commit</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td>9a5fe75</td><td>Decomplect: pure state machine, uniform event contract, single agent path</td></tr>
+    <tr><td>256ce54</td><td>Naming pass: replace cryptic abbreviations with clear names</td></tr>
+    <tr><td>7dedabd</td><td>Consistency pass: unwrap!, unified validation, map-&gt;Response, error table</td></tr>
+    <tr><td>b9b35e9</td><td>Comments pass: add &ldquo;why&rdquo; comments, remove dead code, fix description default</td></tr>
+    <tr><td>98dbe35</td><td>Split schema dual personality: malli-&gt;json-schema vs malli-&gt;tool-definition</td></tr>
+    <tr><td>f264d52</td><td>Flatten nested let in request into single let block</td></tr>
+    <tr><td>99086a3</td><td>Decouple structured output from consume-events</td></tr>
+    <tr><td>409aeb9</td><td>Extract build-agent-step helper from run-agent loop</td></tr>
+    <tr><td>497d04b</td><td>Rename :schema to :output-schema across the entire API</td></tr>
+  </tbody>
+</table>
+
+<div class="card" style="background: linear-gradient(135deg, #eef2ff, #faf5ff); border-color: #c7d2fe; margin-top: 2rem;">
   <h3 style="color: var(--accent); margin-top: 0;">Net result</h3>
-  <p style="color: #4338ca; margin-bottom: 0;"><strong>73 tests, 234 assertions, 0 failures.</strong> +166 lines added, −155 removed. The state machine is pure and testable. The event contract is uniform. The agent loop has one path.</p>
+  <p style="color: #4338ca; margin-bottom: 0;"><strong>74 tests, 237 assertions, 0 failures.</strong> 16 files touched, 264 lines added, 225 removed. The state machine is pure and testable. The event contract is uniform. Every name says what it means. The cleanup plan is complete.</p>
 </div>
 
 </div>
