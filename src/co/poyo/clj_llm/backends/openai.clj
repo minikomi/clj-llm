@@ -10,8 +10,12 @@
    [co.poyo.clj-llm.backends.backend-helpers :as bh]))
 
 (def ^:private default-config
-  {:api-key-env "OPENAI_API_KEY"
-   :api-base "https://api.openai.com/v1"})
+  {:api-base "https://api.openai.com/v1"})
+
+(defn- default-api-key-fn
+  "Default: read API key from OPENAI_API_KEY env var."
+  []
+  (System/getenv "OPENAI_API_KEY"))
 
 (defn- build-body
   "Build OpenAI API request body"
@@ -88,10 +92,14 @@
 ;; OpenAI Backend
 ;; ==========================================
 
-(defrecord OpenAIBackend [api-base api-key defaults]
+(defrecord OpenAIBackend [api-base api-key-fn defaults]
   proto/LLMProvider
   (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
-    (let [url (str api-base "/chat/completions")
+    (let [api-key (api-key-fn)
+          _ (when-not api-key
+              (throw (errors/error "API key function returned nil"
+                                   {:provider "openai"})))
+          url (str api-base "/chat/completions")
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
@@ -99,13 +107,17 @@
                                   #(data->internal-event % schema tools)
                                   "openai"))))
 
-(def ^:private openai-config-keys #{:api-key :api-key-env :api-base})
+(def ^:private openai-config-keys #{:api-key :api-key-fn :api-base})
 
 (defn backend
   "Create an OpenAI provider. Config keys:
-    :api-key     - API key string
-    :api-key-env - env var name (default: OPENAI_API_KEY)
+    :api-key-fn  - 0-arg fn that returns the API key (called per request)
+    :api-key     - API key string (convenience, wrapped in constantly)
     :api-base    - API base URL (default: https://api.openai.com/v1)
+
+   The default api-key-fn reads from the OPENAI_API_KEY env var.
+   Override for custom env vars, vaults, or key rotation:
+     (backend {:api-key-fn #(System/getenv "MY_KEY")})
 
    Set :defaults on the provider to configure model, system-prompt, schema, etc."
   ([] (backend {}))
@@ -117,17 +129,16 @@
                     ". Set :defaults on the provider for prompt options.")
                {:unknown-keys (vec unknown)
                 :valid-keys openai-config-keys}))))
-   (let [api-env  (or (:api-key-env config) (:api-key-env default-config))
-         api-key  (or (:api-key config) (System/getenv api-env))
-         api-base (or (:api-base config) (:api-base default-config))]
-     (when-not api-key
-       (throw (errors/error "Missing API key"
-                            {:provider "openai" :api-key-env api-env})))
-     (->OpenAIBackend api-base api-key {}))))
+   (let [api-key-fn (cond
+                      (:api-key-fn config) (:api-key-fn config)
+                      (:api-key config)    (constantly (:api-key config))
+                      :else                default-api-key-fn)
+         api-base   (or (:api-base config) (:api-base default-config))]
+     (->OpenAIBackend api-base api-key-fn {}))))
 
-(defmethod print-method OpenAIBackend [backend writer]
-  (let [model (get-in backend [:defaults :model])]
+(defmethod print-method OpenAIBackend [b writer]
+  (let [model (get-in b [:defaults :model])]
     (.write writer "#OpenAI")
     (when model
       (.write writer (str " " (pr-str model))))
-    (.write writer (str " " (pr-str (:api-base backend))))))
+    (.write writer (str " " (pr-str (:api-base b))))))

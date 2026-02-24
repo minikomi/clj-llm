@@ -8,9 +8,14 @@
    [co.poyo.clj-llm.backends.backend-helpers :as bh]))
 
 (def ^:private default-config
-  {:api-key-env "ANTHROPIC_API_KEY"
-   :api-base "https://api.anthropic.com"
+  {:api-base "https://api.anthropic.com"
    :api-version "2023-06-01"})
+
+(defn- default-api-key-fn
+  "Default: read API key from ANTHROPIC_API_KEY env var."
+  []
+  (or (System/getenv "ANTHROPIC_API_KEY")
+      (System/getProperty "ANTHROPIC_API_KEY")))
 
 (defn- build-body
   "Build Anthropic API request body"
@@ -90,10 +95,14 @@
 ;; Anthropic Backend
 ;; ==========================================
 
-(defrecord AnthropicBackend [api-base api-key api-version defaults]
+(defrecord AnthropicBackend [api-base api-key-fn api-version defaults]
   proto/LLMProvider
   (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
-    (let [url (str api-base "/v1/messages")
+    (let [api-key (api-key-fn)
+          _ (when-not api-key
+              (throw (errors/error "API key function returned nil"
+                                   {:provider "anthropic"})))
+          url (str api-base "/v1/messages")
           headers {"x-api-key" api-key
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
@@ -102,14 +111,18 @@
                                   #(data->internal-event % schema tools)
                                   "anthropic"))))
 
-(def ^:private anthropic-config-keys #{:api-key :api-key-env :api-base :api-version})
+(def ^:private anthropic-config-keys #{:api-key :api-key-fn :api-base :api-version})
 
 (defn backend
   "Create an Anthropic provider. Config keys:
-    :api-key     - API key string
-    :api-key-env - env var name (default: ANTHROPIC_API_KEY)
+    :api-key-fn  - 0-arg fn that returns the API key (called per request)
+    :api-key     - API key string (convenience, wrapped in constantly)
     :api-base    - API base URL (default: https://api.anthropic.com)
     :api-version - API version (default: 2023-06-01)
+
+   The default api-key-fn reads from the ANTHROPIC_API_KEY env var.
+   Override for custom env vars, vaults, or key rotation:
+     (backend {:api-key-fn #(System/getenv "MY_KEY")})
 
    Set :defaults on the provider to configure model, system-prompt, schema, etc."
   ([] (backend {}))
@@ -121,20 +134,17 @@
                     ". Set :defaults on the provider for prompt options.")
                {:unknown-keys (vec unknown)
                 :valid-keys anthropic-config-keys}))))
-   (let [api-env     (or (:api-key-env config) (:api-key-env default-config))
-         api-key     (or (:api-key config)
-                         (System/getenv api-env)
-                         (System/getProperty api-env))
+   (let [api-key-fn (cond
+                      (:api-key-fn config) (:api-key-fn config)
+                      (:api-key config)    (constantly (:api-key config))
+                      :else                default-api-key-fn)
          api-base    (or (:api-base config) (:api-base default-config))
          api-version (or (:api-version config) (:api-version default-config))]
-     (when-not api-key
-       (throw (errors/error "Missing API key"
-                            {:provider "anthropic" :api-key-env api-env})))
-     (->AnthropicBackend api-base api-key api-version {}))))
+     (->AnthropicBackend api-base api-key-fn api-version {}))))
 
-(defmethod print-method AnthropicBackend [backend writer]
-  (let [model (get-in backend [:defaults :model])]
+(defmethod print-method AnthropicBackend [b writer]
+  (let [model (get-in b [:defaults :model])]
     (.write writer "#Anthropic")
     (when model
       (.write writer (str " " (pr-str model))))
-    (.write writer (str " " (pr-str (:api-base backend))))))
+    (.write writer (str " " (pr-str (:api-base b))))))
