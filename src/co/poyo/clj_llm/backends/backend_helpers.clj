@@ -97,6 +97,7 @@
                                        (>! events-chan {:type :error :error (::sse/error chunk)})
                                        (recur))
 
+                                     ;; Non-JSON SSE data (keep-alive, comments) — skip
                                      (get-in chunk [::sse/data ::sse/unparsed])
                                      (recur)
 

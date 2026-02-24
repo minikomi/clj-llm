@@ -10,7 +10,7 @@
      (delay
        (-> (HttpClient/newBuilder)
            (.version HttpClient$Version/HTTP_2)
-           (.connectTimeout (Duration/ofSeconds 10))
+           (.connectTimeout (Duration/ofSeconds 10)) ;; TCP connect timeout only
            (.build)))))
 
 (defn post-stream
@@ -24,6 +24,7 @@
                                                            :body body
                                                            :as :stream
                                                            :throw false})]
+           ;; Errors handled via on-response, not exceptions
            (on-response {:status status :body body :error error}))
          (catch Exception e
            (on-response {:status 0 :body nil :error e}))))
@@ -32,6 +33,8 @@
        (try
          (let [req-builder (-> (HttpRequest/newBuilder)
                                (.uri (URI/create url))
+                               ;; Time to first byte, not total stream duration.
+                               ;; java.net.http streams the body after headers arrive.
                                (.timeout (Duration/ofSeconds 30))
                                (.POST (HttpRequest$BodyPublishers/ofString body)))]
            (doseq [[k v] headers]

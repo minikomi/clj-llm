@@ -78,6 +78,7 @@
                  :schema schema
                  :value result
                  :errors (me/humanize (m/explain schema result))}))))
+    ;; Re-throw our own errors (schema validation); only catch parse failures below
     (catch clojure.lang.ExceptionInfo e (throw e))
     (catch Exception _
       (throw (errors/error
@@ -151,7 +152,7 @@
     :done
     (assoc state :done? true)
 
-    ;; Unknown event type
+    ;; Forward-compat: ignore event types we don't recognize yet
     state))
 
 (defn- state->text [{:keys [chunks error]}]
@@ -248,6 +249,8 @@
          source-chan    (proto/request-stream provider model system-prompt messages
                                              schema tools tool-choice
                                              (or provider-opts {}))
+         ;; Dropping buffers: slow consumers (or nobody reading :chunks/:events)
+         ;; must not block the go-loop that delivers text-promise.
          text-chunks   (chan (a/dropping-buffer 1024))
          events        (chan (a/dropping-buffer 1024))
          text-p        (promise)

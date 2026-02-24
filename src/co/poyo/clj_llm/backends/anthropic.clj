@@ -27,6 +27,7 @@
                          (not= tool-choice "none")
                          (assoc :tool_choice (cond
                                               (= tool-choice "auto") {:type "auto"}
+                                              ;; Anthropic calls "required" → "any" (different vocabulary)
                                               (= tool-choice "required") {:type "any"}
                                               :else (or tool-choice {:type "auto"}))))
 
@@ -86,6 +87,7 @@
     (when-let [usage (get-in data [:message :usage])]
       [(into {:type :usage} usage)])
 
+    ;; Lifecycle events with no useful payload — skip
     ("content_block_stop" "ping")
     nil
 

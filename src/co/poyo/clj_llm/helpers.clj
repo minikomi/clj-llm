@@ -1,6 +1,8 @@
 (ns co.poyo.clj-llm.helpers)
 
 (defn deep-merge
+  "Recursively merge maps. Later values win for non-map conflicts.
+   Nil arguments are silently dropped."
   [& maps]
   (apply merge-with
          (fn [existing override]
