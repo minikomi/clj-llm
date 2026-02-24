@@ -239,16 +239,16 @@
   ([provider input]
    (request provider {} input))
   ([provider opts input]
-   (let [resolved (validate-opts (helpers/deep-merge (:defaults provider) opts))
-         {:keys [model system-prompt schema tools tool-choice]} resolved]
-     (when-not model
-       (throw (errors/error "No model specified"
-                            {:error-type :llm/invalid-request :opts resolved})))
-     (let [provider-opts (extract-provider-opts resolved)
+   (let [resolved      (validate-opts (helpers/deep-merge (:defaults provider) opts))
+         {:keys [model system-prompt schema tools tool-choice]} resolved
+         _             (when-not model
+                         (throw (errors/error "No model specified"
+                                              {:error-type :llm/invalid-request :opts resolved})))
+         provider-opts (extract-provider-opts resolved)
          messages      (build-messages input)
-         source-chan    (proto/request-stream provider model system-prompt messages
-                                             schema tools tool-choice
-                                             (or provider-opts {}))
+         source-chan   (proto/request-stream provider model system-prompt messages
+                                            schema tools tool-choice
+                                            (or provider-opts {}))
          ;; Dropping buffers: slow consumers (or nobody reading :chunks/:events)
          ;; must not block the go-loop that delivers text-promise.
          text-chunks   (chan (a/dropping-buffer 1024))
@@ -259,22 +259,22 @@
          tool-calls-p  (promise)]
 
      (consume-events source-chan
-                     {:text-chunks-chan text-chunks
-                      :events-chan      events
-                      :text-promise     text-p
-                      :usage-promise    usage-p
+                     {:text-chunks-chan   text-chunks
+                      :events-chan        events
+                      :text-promise       text-p
+                      :usage-promise      usage-p
                       :structured-promise structured-p
                       :tool-calls-promise tool-calls-p
-                      :schema          schema
-                      :provider-opts   provider-opts
-                      :req-start       (System/currentTimeMillis)})
+                      :schema            schema
+                      :provider-opts     provider-opts
+                      :req-start         (System/currentTimeMillis)})
 
-       (map->Response {:chunks     text-chunks
-                       :events     events
-                       :text       text-p
-                       :usage      usage-p
-                       :structured structured-p
-                       :tool-calls tool-calls-p})))))
+     (map->Response {:chunks     text-chunks
+                     :events     events
+                     :text       text-p
+                     :usage      usage-p
+                     :structured structured-p
+                     :tool-calls tool-calls-p}))))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."
