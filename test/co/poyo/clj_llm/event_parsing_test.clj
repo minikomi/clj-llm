@@ -36,12 +36,17 @@
 ;; OpenAI event converter — delegates to real implementation
 ;; ════════════════════════════════════════════════════════════════════
 
-(def ^:private data->internal-event @#'co.poyo.clj-llm.backends.openai/data->internal-event)
+(def ^:private data->internal-events @#'co.poyo.clj-llm.backends.openai/data->internal-events)
+
+(defn openai-events
+  "Convert parsed SSE data to internal events via real openai backend. Returns seq or nil."
+  ([data] (data->internal-events data nil nil))
+  ([data schema tools] (data->internal-events data schema tools)))
 
 (defn openai-event
-  "Convert parsed SSE data to internal event via real openai backend."
-  ([data] (data->internal-event data nil nil))
-  ([data schema tools] (data->internal-event data schema tools)))
+  "Convert parsed SSE data to a single internal event (first of seq). For single-event tests."
+  ([data] (first (openai-events data)))
+  ([data schema tools] (first (openai-events data schema tools))))
 
 (defn replay-openai-fixture
   "Parse an SSE fixture and convert all events through the OpenAI event converter.
@@ -51,9 +56,7 @@
    (let [sse-events (parse-fixture fixture-path)
          data-events (sse-data-events sse-events)]
      (->> data-events
-          (map #(openai-event % schema tools))
-          (remove nil?)
-          (mapcat #(if (sequential? %) % [%]))
+          (mapcat #(openai-events % schema tools))
           vec))))
 
 (defn assemble-tool-calls
@@ -260,8 +263,7 @@
                                                   :index 1
                                                   :function {:name "search_restaurants"
                                                              :arguments ""}}]}}]}
-          result (openai-event data nil [:some-tool])]
-      (is (vector? result) "Should return a vector of events")
+          result (openai-events data nil [:some-tool])]
       (is (= 2 (count result)) "Should have 2 tool call events")
       (is (= "get_weather" (:name (first result))))
       (is (= "search_restaurants" (:name (second result)))))))
@@ -273,22 +275,21 @@
                                                   :function {:arguments "{\"city\""}}
                                                  {:index 1
                                                   :function {:arguments "{\"query\""}}]}}]}
-          result (openai-event data nil [:some-tool])]
-      (is (vector? result) "Should return a vector of events")
+          result (openai-events data nil [:some-tool])]
       (is (= 2 (count result)) "Should have 2 delta events")
       (is (= :tool-call-delta (:type (first result))))
       (is (= :tool-call-delta (:type (second result)))))))
 
-(deftest test-single-tool-call-returns-map
-  (testing "Single tool call in chunk returns a plain map (not vector)"
+(deftest test-single-tool-call-returns-seq
+  (testing "Single tool call in chunk returns a seq with one event"
     (let [data {:choices [{:index 0
                            :delta {:tool-calls [{:id "call_1"
                                                   :index 0
                                                   :function {:name "get_weather"
                                                              :arguments ""}}]}}]}
-          result (openai-event data nil [:some-tool])]
-      (is (map? result) "Single tool call should return a map")
-      (is (= :tool-call (:type result))))))
+          result (openai-events data nil [:some-tool])]
+      (is (= 1 (count result)))
+      (is (= :tool-call (:type (first result)))))))
 
 (deftest test-null-content-with-tool-calls
   (testing "A chunk with null content and tool_calls produces tool event"

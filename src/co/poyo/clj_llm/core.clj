@@ -105,87 +105,96 @@
 ;; Event stream consumer
 ;; ════════════════════════════════════════════════════════════════════
 
+(def ^:private init-state
+  "Initial accumulator for the event stream consumer."
+  {:chunks [] :tool-calls [] :tc-index {} :usage {} :finish-reason nil :done? false :error nil})
+
+(defn- next-state
+  "Pure state transition: state × event → state'.
+   No side effects, no channels, no promises."
+  [state event]
+  (case (:type event)
+    :content
+    (update state :chunks conj (:content event))
+
+    :tool-call
+    (let [idx  (or (:index event) (count (:tool-calls state)))
+          call (assoc event :arguments (or (:arguments event) ""))]
+      (-> state
+          (update :tool-calls conj call)
+          (assoc-in [:tc-index idx] (count (:tool-calls state)))))
+
+    :tool-call-delta
+    (let [pos (get (:tc-index state) (:index event))]
+      (if pos
+        (update-in state [:tool-calls pos :arguments] str (:arguments event))
+        state))
+
+    :usage
+    (update state :usage merge (dissoc event :type))
+
+    :finish
+    (assoc state :finish-reason (:reason event))
+
+    :error
+    (assoc state :done? true
+                 :error (errors/error "LLM request failed"
+                                      {:error-type :llm/server-error :event event}))
+
+    :done
+    (assoc state :done? true)
+
+    ;; Unknown event type
+    state))
+
+(defn- state->text [{:keys [chunks error]}]
+  (or error (apply str chunks)))
+
+(defn- state->usage [{:keys [usage finish-reason]} provider-opts req-start]
+  (let [u (cond-> usage finish-reason (assoc :finish-reason finish-reason))]
+    (when (seq u)
+      (let [now (System/currentTimeMillis)]
+        (assoc u :type :usage
+                 :clj-llm/provider-opts provider-opts
+                 :clj-llm/req-start req-start
+                 :clj-llm/req-end now
+                 :clj-llm/duration (- now req-start))))))
+
 (defn- consume-events
   "Consume events from source-chan, fan out to chunks/events channels,
-   and deliver promises when the stream completes."
+   and deliver promises when the stream completes.
+
+   State transitions are pure (next-state). Side effects happen after."
   [source-chan {:keys [text-chunks-chan events-chan
                        text-promise usage-promise
                        structured-promise tool-calls-promise
                        schema provider-opts req-start]}]
-  (let [finalize! (fn [text-val tool-calls-val usage-acc]
-                    (deliver text-promise text-val)
-                    (deliver tool-calls-promise tool-calls-val)
-                    (let [now (System/currentTimeMillis)]
-                      (deliver usage-promise
-                              (when (seq usage-acc)
-                                (assoc usage-acc
-                                       :type :usage
-                                       :clj-llm/provider-opts provider-opts
-                                       :clj-llm/req-start req-start
-                                       :clj-llm/req-end now
-                                       :clj-llm/duration (- now req-start)))))
-                    (when-not schema
-                      (deliver structured-promise nil))
+  (let [finalize! (fn [state]
+                    (deliver text-promise (state->text state))
+                    (deliver tool-calls-promise (not-empty (:tool-calls state)))
+                    (deliver usage-promise (state->usage state provider-opts req-start))
+                    (when-not schema (deliver structured-promise nil))
                     (a/close! text-chunks-chan)
                     (a/close! events-chan))]
 
-    ;; Consumer go-loop
-    (go-loop [chunks []
-              tool-calls []
-              tc-index {} ;; maps provider index -> position in tool-calls vec
-              usage-acc {} ;; accumulated usage across multiple :usage events
-              finish-reason nil]
+    ;; Go-loop: read event, compute next state, side-effects, recur
+    (go-loop [state init-state]
       (if-let [event (<! source-chan)]
-        (do
+        (let [state' (next-state state event)]
+          ;; Side effects: fan out to subscriber channels
           (>! events-chan event)
-          (case (:type event)
-            :content
-            (do (>! text-chunks-chan (:content event))
-                (recur (conj chunks (:content event)) tool-calls tc-index usage-acc finish-reason))
-
-            :tool-call
-            (let [idx (or (:index event) (count tool-calls))
-                  call (assoc event :arguments (or (:arguments event) ""))]
-              (recur chunks
-                     (conj tool-calls call)
-                     (assoc tc-index idx (count tool-calls))
-                     usage-acc finish-reason))
-
-            :tool-call-delta
-            (let [pos (get tc-index (:index event))]
-              (recur chunks
-                     (if pos
-                       (update-in tool-calls [pos :arguments] str (:arguments event))
-                       tool-calls)
-                     tc-index
-                     usage-acc finish-reason))
-
-            :usage
-            (recur chunks tool-calls tc-index
-                   (merge usage-acc (dissoc event :type)) finish-reason)
-
-            :finish
-            (recur chunks tool-calls tc-index usage-acc (:reason event))
-
-            :error
-            (do (when-not (realized? structured-promise)
-                  (deliver structured-promise (Exception. (str (:error event)))))
-                (finalize! (errors/error "LLM request failed" {:error-type :llm/server-error
-                                                               :event event}) nil
-                           (cond-> usage-acc finish-reason (assoc :finish-reason finish-reason))))
-
-            :done
-            (finalize! (apply str chunks) (not-empty tool-calls)
-                       (cond-> usage-acc finish-reason (assoc :finish-reason finish-reason)))
-
-            ;; Unknown event type — skip
-            (recur chunks tool-calls tc-index usage-acc finish-reason)))
-
+          (when (= :content (:type event))
+            (>! text-chunks-chan (:content event)))
+          (when (and (:error state') (not (realized? structured-promise)))
+            (deliver structured-promise (Exception. (str (:error event)))))
+          ;; Continue or finalize
+          (if (:done? state')
+            (finalize! state')
+            (recur state')))
         ;; Source channel closed without :done
-        (finalize! (apply str chunks) (not-empty tool-calls)
-                   (cond-> usage-acc finish-reason (assoc :finish-reason finish-reason)))))
+        (finalize! state)))
 
-    ;; Structured output processing (waits for text promise in a separate thread)
+    ;; Structured output processing (waits for text in a separate thread)
     (when schema
       (future
         (try
@@ -475,40 +484,40 @@
        (let [response (request provider base-opts history)
              text     @(:text response)
              _        (when (instance? Exception text) (throw text))
-             tc       (parse-tool-calls @(:tool-calls response))
-             stop?    (stop-when {:tool-calls (or tc []) :text text})]
+             tc       (or (parse-tool-calls @(:tool-calls response)) [])
+             stop?    (stop-when {:tool-calls tc :text text})]
          (if stop?
-           ;; Stop condition met - return current state
-           {:text    text
-            :history (conj history {:role :assistant :content (or text "")})
-            :steps   steps
+           {:text       text
+            :history    (conj history {:role :assistant :content (or text "")})
+            :steps      steps
             :tool-calls (not-empty tc)}
-           ;; Execute tool calls and continue
-           (if (empty? (or tc []))
-             ;; No tool calls — model is reasoning. Append text and loop.
+
+           ;; Build next history + step
+           (let [has-tc?  (seq tc)
+                 results  (when has-tc?
+                            (mapv (fn [t]
+                                    (try
+                                      {:call t :result (execute-tool-call name->fn t)}
+                                      (catch Exception e
+                                        {:call t :result (str "Error: " (.getMessage e)) :error e})))
+                                  tc))
+                 msg      (if has-tc?
+                            (tool-calls->assistant-message tc text)
+                            {:role :assistant :content (or text "")})
+                 msgs     (if has-tc?
+                            (into [msg] (mapv (fn [{:keys [call result]}]
+                                               (tool-result (:id call) (str result)))
+                                             results))
+                            [msg])
+                 next-history (into history msgs)
+                 next-steps   (if has-tc?
+                                (conj steps {:tool-calls  (vec tc)
+                                             :tool-results (mapv :result results)})
+                                steps)]
              (if (>= (inc n) max-steps)
-               {:text text :history (conj history {:role :assistant :content (or text "")}) :steps steps :truncated true}
-               (recur (conj history {:role :assistant :content (or text "")})
-                      steps
-                      (inc n)))
-             ;; Has tool calls — execute them
-             (let [msg (tool-calls->assistant-message tc text)]
-               (if (>= (inc n) max-steps)
-                 {:text text :history (conj history msg) :steps steps :truncated true}
-                 (let [results    (mapv (fn [t]
-                                          (try
-                                            {:call t :result (execute-tool-call name->fn t)}
-                                            (catch Exception e
-                                              {:call t :result (str "Error: " (.getMessage e)) :error e})))
-                                        tc)
-                       result-msgs (mapv (fn [{:keys [call result]}]
-                                          (tool-result (:id call) (str result)))
-                                        results)
-                       new-history (into (conj history msg) result-msgs)]
-                   (recur new-history
-                          (conj steps {:tool-calls (vec tc)
-                                       :tool-results (mapv :result results)})
-                          (inc n))))))))))))
+               {:text text :history next-history :steps next-steps :truncated true}
+               (recur next-history next-steps (inc n))))))))))
+
 
 
 (defn stream

@@ -66,8 +66,7 @@
    - url: full API endpoint URL
    - headers: HTTP headers map
    - body: JSON string request body
-   - event->internal: fn that converts parsed SSE data to internal event format,
-                      receives the parsed data map, returns internal event or nil
+   - event->internal: (data -> seq-of-events | nil)
    - provider-name: string for error messages
 
    Returns a channel of internal events (maps with :type key)."
@@ -102,15 +101,16 @@
                                      (recur)
 
                                      :else
-                                     (if-let [result (event->internal (::sse/data chunk))]
-                                       (let [evts (if (sequential? result) result [result])]
-                                         (loop [es (seq evts)]
-                                           (when es
-                                             (let [e (first es)]
-                                               (>! events-chan e)
-                                               (when (not= :done (:type e))
-                                                 (recur (next es))))))
-                                         (when-not (some #(= :done (:type %)) evts)
+                                     (if-let [evts (seq (event->internal (::sse/data chunk)))]
+                                       (let [done? (loop [es evts]
+                                                      (if es
+                                                        (let [e (first es)]
+                                                          (>! events-chan e)
+                                                          (if (= :done (:type e))
+                                                            true
+                                                            (recur (next es))))
+                                                        false))]
+                                         (when-not done?
                                            (recur)))
                                        (recur)))))
                                (catch Exception e
