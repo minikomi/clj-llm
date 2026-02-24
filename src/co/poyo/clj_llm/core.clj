@@ -115,14 +115,15 @@
   (let [finalize! (fn [text-val tool-calls-val usage-acc]
                     (deliver text-promise text-val)
                     (deliver tool-calls-promise tool-calls-val)
-                    (deliver usage-promise
-                            (when (seq usage-acc)
-                              (assoc usage-acc
-                                     :type :usage
-                                     :clj-llm/provider-opts provider-opts
-                                     :clj-llm/req-start req-start
-                                     :clj-llm/req-end (System/currentTimeMillis)
-                                     :clj-llm/duration (- (System/currentTimeMillis) req-start))))
+                    (let [now (System/currentTimeMillis)]
+                      (deliver usage-promise
+                              (when (seq usage-acc)
+                                (assoc usage-acc
+                                       :type :usage
+                                       :clj-llm/provider-opts provider-opts
+                                       :clj-llm/req-start req-start
+                                       :clj-llm/req-end now
+                                       :clj-llm/duration (- now req-start)))))
                     (when-not schema
                       (deliver structured-promise nil))
                     (a/close! text-chunks-chan)
