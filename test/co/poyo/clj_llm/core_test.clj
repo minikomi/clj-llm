@@ -11,9 +11,17 @@
 ;; Mock provider
 ;; ════════════════════════════════════════════════════════════════════
 
-(defrecord MockProvider [responses defaults]
+(defrecord MockProvider [responses defaults calls]
   proto/LLMProvider
-  (request-stream [_ _model _system-prompt _messages _schema _tools _tool-choice _provider-opts]
+  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+    (when calls
+      (swap! calls conj {:model model
+                         :system-prompt system-prompt
+                         :messages messages
+                         :schema schema
+                         :tools tools
+                         :tool-choice tool-choice
+                         :provider-opts provider-opts}))
     (let [ch (chan)]
       (go
         (doseq [event @responses]
@@ -26,7 +34,8 @@
   ([events] (mock-provider events {}))
   ([events defaults]
    (->MockProvider (atom events)
-                   (merge {:model "test-model"} defaults))))
+                   (merge {:model "test-model"} defaults)
+                   (atom []))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Tests
@@ -116,6 +125,35 @@
       (is (= "gpt-4o-mini" (get-in extractor [:defaults :model])))
       (is (= "extract" (get-in extractor [:defaults :system-prompt])))
       (is (= "ok" (llm/generate extractor "test"))))))
+
+(deftest test-args-forwarded-to-provider
+  (testing "model from defaults is forwarded"
+    (let [provider (mock-provider [{:type :content :content "ok"}] {:model "gpt-4o"})]
+      (llm/generate provider "test")
+      (is (= "gpt-4o" (:model (first @(:calls provider)))))))
+
+  (testing "system-prompt is forwarded"
+    (let [provider (mock-provider [{:type :content :content "ok"}])]
+      (llm/generate provider {:system-prompt "Be helpful"} "test")
+      (is (= "Be helpful" (:system-prompt (first @(:calls provider)))))))
+
+  (testing "temperature and max-tokens arrive in provider-opts"
+    (let [provider (mock-provider [{:type :content :content "ok"}])]
+      (llm/generate provider {:temperature 0.5 :max-tokens 100} "test")
+      (let [opts (:provider-opts (first @(:calls provider)))]
+        (is (= 0.5 (:temperature opts)))
+        (is (= 100 (:max_tokens opts))))))
+
+  (testing "messages are built correctly from string input"
+    (let [provider (mock-provider [{:type :content :content "ok"}])]
+      (llm/generate provider "hello")
+      (is (= [{:role :user :content "hello"}] (:messages (first @(:calls provider)))))))
+
+  (testing "messages passed through from history vector"
+    (let [provider (mock-provider [{:type :content :content "ok"}])
+          history [{:role :user :content "hi"} {:role :assistant :content "hello"}]]
+      (llm/generate provider history)
+      (is (= history (:messages (first @(:calls provider))))))))
 
 (deftest test-unknown-opts-rejected
   (testing "Unknown options throw"
@@ -234,7 +272,8 @@
                             :name "get_weather" :arguments ""}
                            {:type :tool-call-delta :index 0
                             :arguments "{\"city\":\"Tokyo\"}"}])
-                    {:model "test-model"})
+                    {:model "test-model"}
+                    (atom []))
           get-weather (with-meta
                         (fn [{:keys [city]}]
                           (reset! (.responses provider)
@@ -262,7 +301,8 @@
                             :name "done" :arguments ""}
                            {:type :tool-call-delta :index 0
                             :arguments "{\"result\":\"finished\"}"}])
-                    {:model "test-model"})
+                    {:model "test-model"}
+                    (atom []))
           done-tool (with-meta
                       (fn [{:keys [result]}]
                         (swap! call-count inc)
@@ -298,7 +338,8 @@
                             :name "lookup" :arguments ""}
                            {:type :tool-call-delta :index 0
                             :arguments "{\"id\":\"123\"}"}])
-                    {:model "test-model"})
+                    {:model "test-model"}
+                    (atom []))
           lookup (with-meta
                    (fn [{:keys [id]}]
                      (reset! (.responses provider)
