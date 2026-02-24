@@ -27,5 +27,6 @@
 /target
 /.env
 working.org
-/.clj-kondo/
+/.clj-kondo/*
+!/.clj-kondo/config.edn
 .chat-data/

@@ -1,0 +1,3 @@
+{:linters {:unused-binding {:exclude-destructured-keys-in-fn-args true}
+           :unresolved-namespace {:exclude [babashka.http-client]}}
+ :config-in-ns {co.poyo.clj-llm.net {:linters {:unused-binding {:level :off}}}}}

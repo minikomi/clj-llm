@@ -43,11 +43,6 @@
     :else
     nil))
 
-(defn- default-done-pred
-  "Default predicate to check if event signals end of stream"
-  [event]
-  (::done event))
-
 (defn parse-sse
   "Parse SSE stream from an InputStream into a channel of events.
 
@@ -65,18 +60,14 @@
      (thread
        (try
          (with-open [reader (io/reader input-stream)]
-           (try
-             (loop []
-               (if-let [line (.readLine reader)]
-                 (if-let [event (parser-fn line)]
-
-                   (do
-                     (>!! out event)
-                     (if (::done event)
-                       nil ;; Stop after emitting done
-                       (recur)))
-                   (recur))
-                 nil))))
+           (loop []
+             (when-let [line (.readLine reader)]
+               (if-let [event (parser-fn line)]
+                 (do
+                   (>!! out event)
+                   (when-not (::done event)
+                     (recur)))
+                 (recur)))))
          (catch Exception e
            (>!! out {::error e ::type :stream-error}))
          (finally
