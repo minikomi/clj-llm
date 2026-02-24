@@ -5,16 +5,23 @@
      :llm/rate-limit, :llm/invalid-key, :llm/network-error,
      :llm/server-error, :llm/invalid-request, :llm/unknown")
 
+;; Single source of truth for HTTP status → error type + message
+(def ^:private status-errors
+  {401 {:type :llm/invalid-key    :msg "Invalid API key"}
+   403 {:type :llm/invalid-key    :msg "Invalid API key"}
+   404 {:type :llm/invalid-request :msg "Resource not found"}
+   429 {:type :llm/rate-limit     :msg "Rate limit exceeded"}
+   400 {:type :llm/invalid-request :msg "Invalid request"}
+   422 {:type :llm/invalid-request :msg "Invalid request"}
+   500 {:type :llm/server-error   :msg "Server error"}
+   502 {:type :llm/server-error   :msg "Server error"}
+   503 {:type :llm/server-error   :msg "Server error"}
+   504 {:type :llm/server-error   :msg "Server error"}})
+
 (defn- status->error-type
   "Map HTTP status code to error type keyword."
   [status]
-  (case (int status)
-    (401 403) :llm/invalid-key
-    429       :llm/rate-limit
-    404       :llm/invalid-request
-    (400 422) :llm/invalid-request
-    (500 502 503 504) :llm/server-error
-    :llm/unknown))
+  (get-in status-errors [(int status) :type] :llm/unknown))
 
 (defn error
   "Create an LLM error with optional data.
@@ -40,16 +47,10 @@
 (defn parse-http-error
   "Convert HTTP response to exception with proper :error-type."
   [provider status body]
-  (let [et (status->error-type status)
-        msg (case (int status)
-              (401 403) "Invalid API key"
-              429       "Rate limit exceeded"
-              404       "Resource not found"
-              (400 422) "Invalid request"
-              (500 502 503 504) "Server error"
-              (str "HTTP " status))]
+  (let [{:keys [type msg]} (get status-errors (int status)
+                                {:type :llm/unknown :msg (str "HTTP " status)})]
     (error (str provider ": " msg)
-           {:error-type  et
+           {:error-type  type
             :status      status
             :body        body
             :retry-after (get-in body [:error :retry_after])})))

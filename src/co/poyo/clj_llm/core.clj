@@ -25,25 +25,32 @@
 (def ^:private api-forward-keys
   #{:temperature :max-tokens :top-p})
 
-(defn- validate-opts [opts]
-  (let [unknown (remove known-keys (keys opts))]
-    (when (seq unknown)
-      (throw (errors/error
-              (str "Unknown options: " (pr-str (vec unknown)))
-              {:error-type   :llm/invalid-request
-               :unknown-keys (vec unknown)
-               :valid-keys   known-keys}))))
-  opts)
+(defn- validate-opts
+  ([opts] (validate-opts opts known-keys))
+  ([opts valid-keys]
+   (let [unknown (remove valid-keys (keys opts))]
+     (when (seq unknown)
+       (throw (errors/error
+               (str "Unknown options: " (pr-str (vec unknown)))
+               {:error-type   :llm/invalid-request
+                :unknown-keys (vec unknown)
+                :valid-keys   valid-keys}))))
+   opts))
 
 ;; ════════════════════════════════════════════════════════════════════
+(defn- unwrap!
+  "Throw v if it's an exception, otherwise return it.
+   Used to propagate errors delivered into promises."
+  [v]
+  (if (instance? Exception v) (throw v) v))
+
 ;; Response record
 ;; ════════════════════════════════════════════════════════════════════
 
 (defrecord Response [chunks events text usage structured tool-calls]
   clojure.lang.IDeref
   (deref [_]
-    (let [v @text]
-      (if (instance? Exception v) (throw v) v))))
+    (unwrap! @text)))
 
 (defmethod print-method Response [r writer]
   (.write writer "#Response{:text ")
@@ -186,7 +193,9 @@
           (when (= :content (:type event))
             (>! text-chunks-chan (:content event)))
           (when (and (:error state') (not (realized? structured-promise)))
-            (deliver structured-promise (Exception. (str (:error event)))))
+            (deliver structured-promise
+                     (errors/error "LLM streaming error" {:error-type :llm/server-error
+                                                          :event event})))
           ;; Continue or finalize
           (if (:done? state')
             (finalize! state')
@@ -257,7 +266,12 @@
                       :provider-opts   provider-opts
                       :req-start       (System/currentTimeMillis)})
 
-       (->Response text-chunks events text-p usage-p structured-p tool-calls-p)))))
+       (map->Response {:chunks     text-chunks
+                       :events     events
+                       :text       text-p
+                       :usage      usage-p
+                       :structured structured-p
+                       :tool-calls tool-calls-p})))))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."
@@ -399,7 +413,7 @@
                     opts)
          response (request provider api-opts input)
          text     @(:text response)]
-     (when (instance? Exception text) (throw text))
+     (unwrap! text)
      (cond
        tools
        (let [name->fn (build-name->fn tools input-schemas)
@@ -409,8 +423,7 @@
           :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)})
 
        schema
-       (let [s @(:structured response)]
-         (if (instance? Exception s) (throw s) s))
+       (unwrap! @(:structured response))
 
        :else text))))
 
@@ -460,12 +473,7 @@
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
-   (let [unknown (remove (into known-keys agent-keys) (keys opts))]
-     (when (seq unknown)
-       (throw (errors/error
-               (str "Unknown options: " (pr-str (vec unknown)))
-               {:error-type   :llm/invalid-request
-                :unknown-keys (vec unknown)}))))
+   (validate-opts opts (into known-keys agent-keys))
    (when-not (and (sequential? tools) (seq tools))
      (throw (errors/error "run-agent requires a non-empty tools vector"
                           {:error-type :llm/invalid-request
@@ -483,7 +491,7 @@
             n 0]
        (let [response (request provider request-opts history)
              text     @(:text response)
-             _        (when (instance? Exception text) (throw text))
+             _        (unwrap! text)
              parsed-calls (or (parse-tool-calls @(:tool-calls response)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
