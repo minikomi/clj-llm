@@ -12,7 +12,7 @@ Built for Clojure developers who want maximum flexibility without sacrificing si
 | Config | `(assoc provider :defaults {...})` |
 | Text generation | `(generate ai "prompt")` → string |
 | With options | `(generate ai {:system-prompt "..."} "prompt")` |
-| Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
+| Structured output | `(generate ai {:output-schema s} "prompt")` → parsed data |
 | Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
 | Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
 | Conversations | `(generate ai history-vector)` |
@@ -88,7 +88,7 @@ The input (string or message history) is always the last argument:
 ;; => "Hello! How can I help?"
 
 ;; Schema → parsed map
-(llm/generate ai {:schema person-schema} "Marie Curie was a 66yo physicist")
+(llm/generate ai {:output-schema person-schema} "Marie Curie was a 66yo physicist")
 ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
 ```
@@ -105,7 +105,7 @@ The input (string or message history) is always the last argument:
 ;; Layer more config with merge
 (def extractor (update ai :defaults merge
                         {:system-prompt "Extract structured data"
-                         :schema person-schema}))
+                         :output-schema person-schema}))
 
 ;; Use it
 (llm/generate extractor "Marie Curie was a 66yo physicist")
@@ -138,7 +138,7 @@ The input (string or message history) is always the last argument:
    [:total [:double {:min 0}]]
    [:items [:vector [:map [:name :string] [:price :double]]]]])
 
-(llm/generate ai {:schema invoice-schema} invoice-text)
+(llm/generate ai {:output-schema invoice-schema} invoice-text)
 ;; => {:invoice-number "INV-001" :total 150.0 :items [...]}
 ```
 
@@ -239,7 +239,7 @@ For structured output after tool use, compose with `generate`:
 
 ```clojure
 (let [{:keys [history]} (llm/run-agent ai [#'lookup] "find user 123")]
-  (llm/generate ai {:schema user-schema} history))
+  (llm/generate ai {:output-schema user-schema} history))
 ;; => {:name "Alice" :status "active"}
 ```
 

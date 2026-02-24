@@ -15,7 +15,7 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (def ^:private known-keys
-  #{:model :system-prompt :schema :tools :tool-choice :temperature :max-tokens :top-p :provider-opts})
+  #{:model :system-prompt :output-schema :tools :tool-choice :temperature :max-tokens :top-p :provider-opts})
 
 (def ^:private agent-keys
   "Additional keys accepted by run-agent."
@@ -209,7 +209,7 @@
     :chunks      - channel of text chunks as they stream
     :events      - channel of raw events
     :usage       - promise of token usage info
-    :structured  - promise of parsed structured data (when :schema provided)
+    :structured  - promise of parsed structured data (when :output-schema provided)
     :tool-calls  - promise of tool calls vector (when :tools provided)
 
    Supports @(request ...) via IDeref to block and get text.
@@ -217,20 +217,20 @@
    Input is the last arg — a string (prompt) or vector (message history).
 
    (request ai \"hello\")                              ; simple
-   (request ai {:schema s} \"extract this\")            ; with opts
+   (request ai {:output-schema s} \"extract this\")            ; with opts
    (request ai {:tools t} [{:role :user ...} ...])    ; with history"
   ([provider input]
    (request provider {} input))
   ([provider opts input]
    (let [resolved      (validate-opts (helpers/deep-merge (:defaults provider) opts))
-         {:keys [model system-prompt schema tools tool-choice]} resolved
+         {:keys [model system-prompt output-schema tools tool-choice]} resolved
          _             (when-not model
                          (throw (errors/error "No model specified"
                                               {:error-type :llm/invalid-request :opts resolved})))
          provider-opts (extract-provider-opts resolved)
          messages      (build-messages input)
          source-chan   (proto/request-stream provider model system-prompt messages
-                                            schema tools tool-choice
+                                            output-schema tools tool-choice
                                             (or provider-opts {}))
          ;; Dropping buffers: slow consumers (or nobody reading :chunks/:events)
          ;; must not block the go-loop that delivers text-promise.
@@ -252,14 +252,14 @@
 
      ;; Structured output: wait for text in a separate thread, parse + validate.
      ;; Decoupled from consume-events so the event loop stays generic.
-     (if schema
+     (if output-schema
        (future
          (try
            (let [text @text-p]
              (deliver structured-p
                       (if (instance? Exception text)
                         text
-                        (parse-structured-output text schema))))
+                        (parse-structured-output text output-schema))))
            (catch Exception e
              (deliver structured-p e))))
        (deliver structured-p nil))
@@ -399,18 +399,18 @@
   "Blocking generation. Returns the natural value:
 
    - String input → string back
-   - With :schema → parsed structured data
+   - With :output-schema → parsed structured data
 
    (generate ai \"hello\")
    ;; => \"Hello!\"
 
-   (generate ai {:schema person-schema} \"extract this\")
+   (generate ai {:output-schema person-schema} \"extract this\")
    ;; => {:name \"Alice\" :age 30}
 
    Common options:
      :model          - model name string
      :system-prompt   - system message string
-     :schema          - Malli schema for structured output
+     :output-schema          - Malli schema for structured output
      :temperature     - float, e.g. 0.7
      :max-tokens      - int, max tokens to generate
      :top-p           - float, nucleus sampling
@@ -436,7 +436,7 @@
    (generate provider {} input))
   ([provider opts input]
    (let [tools (or (:tools opts) (:tools (:defaults provider)))
-         schema (or (:schema opts) (:schema (:defaults provider)))
+         output-schema (or (:output-schema opts) (:output-schema (:defaults provider)))
          input-schemas (when tools (tools->input-schemas tools))
          api-opts (if tools
                     (assoc (dissoc opts :tools) :tools input-schemas)
@@ -452,7 +452,7 @@
           :tool-calls parsed-calls
           :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)})
 
-       schema
+       output-schema
        (unwrap! @(:structured response))
 
        :else text))))
@@ -485,7 +485,7 @@
    For structured output after tool use, compose with generate:
 
      (let [{:keys [history]} (run-agent ai tools \"find user 123\")]
-       (generate ai {:schema result-schema} history))
+       (generate ai {:output-schema result-schema} history))
 
    Stop the loop explicitly:
 

@@ -41,22 +41,22 @@
 (defn openai-events
   "Convert parsed SSE data to internal events via real openai backend. Returns seq or nil."
   ([data] (data->internal-events data nil nil))
-  ([data schema tools] (data->internal-events data schema tools)))
+  ([data output-schema tools] (data->internal-events data output-schema tools)))
 
 (defn openai-event
   "Convert parsed SSE data to a single internal event (first of seq). For single-event tests."
   ([data] (first (openai-events data)))
-  ([data schema tools] (first (openai-events data schema tools))))
+  ([data output-schema tools] (first (openai-events data output-schema tools))))
 
 (defn replay-openai-fixture
   "Parse an SSE fixture and convert all events through the OpenAI event converter.
    Returns vector of non-nil internal events."
   ([fixture-path] (replay-openai-fixture fixture-path nil nil))
-  ([fixture-path schema tools]
+  ([fixture-path output-schema tools]
    (let [sse-events (parse-fixture fixture-path)
          data-events (sse-data-events sse-events)]
      (->> data-events
-          (mapcat #(openai-events % schema tools))
+          (mapcat #(openai-events % output-schema tools))
           vec))))
 
 (defn assemble-tool-calls

@@ -13,12 +13,12 @@
 
 (defrecord MockProvider [responses defaults calls]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+  (request-stream [_ model system-prompt messages output-schema tools tool-choice provider-opts]
     (when calls
       (swap! calls conj {:model model
                          :system-prompt system-prompt
                          :messages messages
-                         :schema schema
+                         :output-schema output-schema
                          :tools tools
                          :tool-choice tool-choice
                          :provider-opts provider-opts}))
@@ -50,7 +50,7 @@
   (testing "Structured output returns parsed data directly"
     (let [provider (mock-provider [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
           schema [:map [:name :string] [:age pos-int?]]]
-      (is (= {:name "Alice" :age 30} (llm/generate provider {:schema schema} "test")))))
+      (is (= {:name "Alice" :age 30} (llm/generate provider {:output-schema schema} "test")))))
 
   (testing "Error handling"
     (let [provider (mock-provider [{:type :error :error "API Error"}])]

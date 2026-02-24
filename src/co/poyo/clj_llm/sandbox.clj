@@ -19,7 +19,7 @@
 
   ;; Layer more config with update+merge
   (def extractor (update ai :defaults merge
-                        {:schema [:map [:name :string] [:age :int] [:occupation :string]]
+                        {:output-schema [:map [:name :string] [:age :int] [:occupation :string]]
                          :system-prompt "Extract structured data"}))
 
   ;; ======================================
@@ -35,7 +35,7 @@
   ;; Structured output -- returns a parsed map
   ;; ======================================
 
-  (llm/generate ai {:schema [:map [:name :string] [:age :int] [:occupation :string]]}
+  (llm/generate ai {:output-schema [:map [:name :string] [:age :int] [:occupation :string]]}
                 "Extract: Marie Curie was a 66 year old physicist")
   ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
