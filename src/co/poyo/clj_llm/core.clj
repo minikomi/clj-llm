@@ -130,14 +130,15 @@
     (go-loop [chunks []
               tool-calls []
               tc-index {} ;; maps provider index -> position in tool-calls vec
-              usage-acc {}] ;; accumulated usage across multiple :usage events
+              usage-acc {} ;; accumulated usage across multiple :usage events
+              finish-reason nil]
       (if-let [event (<! source-chan)]
         (do
           (>! events-chan event)
           (case (:type event)
             :content
             (do (>! text-chunks-chan (:content event))
-                (recur (conj chunks (:content event)) tool-calls tc-index usage-acc))
+                (recur (conj chunks (:content event)) tool-calls tc-index usage-acc finish-reason))
 
             :tool-call
             (let [idx (or (:index event) (count tool-calls))
@@ -145,7 +146,7 @@
               (recur chunks
                      (conj tool-calls call)
                      (assoc tc-index idx (count tool-calls))
-                     usage-acc))
+                     usage-acc finish-reason))
 
             :tool-call-delta
             (let [pos (get tc-index (:index event))]
@@ -154,26 +155,32 @@
                        (update-in tool-calls [pos :arguments] str (:arguments event))
                        tool-calls)
                      tc-index
-                     usage-acc))
+                     usage-acc finish-reason))
 
             :usage
             (recur chunks tool-calls tc-index
-                   (merge usage-acc (dissoc event :type)))
+                   (merge usage-acc (dissoc event :type)) finish-reason)
+
+            :finish
+            (recur chunks tool-calls tc-index usage-acc (:reason event))
 
             :error
             (do (when-not (realized? structured-promise)
                   (deliver structured-promise (Exception. (str (:error event)))))
                 (finalize! (errors/error "LLM request failed" {:error-type :llm/server-error
-                                                               :event event}) nil usage-acc))
+                                                               :event event}) nil
+                           (cond-> usage-acc finish-reason (assoc :finish-reason finish-reason))))
 
             :done
-            (finalize! (apply str chunks) (not-empty tool-calls) usage-acc)
+            (finalize! (apply str chunks) (not-empty tool-calls)
+                       (cond-> usage-acc finish-reason (assoc :finish-reason finish-reason)))
 
             ;; Unknown event type — skip
-            (recur chunks tool-calls tc-index usage-acc)))
+            (recur chunks tool-calls tc-index usage-acc finish-reason)))
 
         ;; Source channel closed without :done
-        (finalize! (apply str chunks) (not-empty tool-calls) usage-acc)))
+        (finalize! (apply str chunks) (not-empty tool-calls)
+                   (cond-> usage-acc finish-reason (assoc :finish-reason finish-reason)))))
 
     ;; Structured output processing (waits for text promise in a separate thread)
     (when schema
