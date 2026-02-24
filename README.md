@@ -28,9 +28,9 @@ Built for Clojure developers who want maximum flexibility without sacrificing si
 
 ```clojure
 ;; Same interface, any provider
-(def openai (openai/backend {:api-key-env "OPENAI_API_KEY"}))
+(def openai (openai/backend))  ;; reads OPENAI_API_KEY env var by default
 (def local  (openai/backend {:api-base "http://localhost:11434/v1"}))
-(def claude (anthropic/backend {:api-key-env "ANTHROPIC_API_KEY"}))
+(def claude (anthropic/backend))  ;; reads ANTHROPIC_API_KEY env var by default
 
 ;; Put defaults on the provider
 (def ai (assoc openai :defaults {:model "gpt-4o-mini"}))
@@ -248,21 +248,29 @@ For structured output after tool use, compose with `generate`:
 ## Provider Flexibility
 
 ```clojure
-;; OpenAI
+;; OpenAI — reads OPENAI_API_KEY env var by default
 (def openai (openai/backend))
+
+;; Static key
+(def openai (openai/backend {:api-key "sk-..."}))
+
+;; Custom key function — vault, SSM, rotation, whatever
+(def openai (openai/backend {:api-key-fn #(fetch-from-vault "openai-key")}))
+
+;; Custom env var
+(def router (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_KEY")
+                             :api-base "https://openrouter.ai/api/v1"}))
 
 ;; Local models (Ollama, LM Studio, etc)
 (def local (openai/backend {:api-base "http://localhost:11434/v1"
                             :api-key "not-needed"}))
 
-;; OpenRouter (access 100+ models)
-(def router (openai/backend {:api-key-env "OPENROUTER_API_KEY"
-                             :api-base "https://openrouter.ai/api/v1"}))
-
 ;; Same code, any provider
 (def ai (assoc any-provider :defaults {:model "gpt-4o-mini"}))
 (llm/generate ai "Same interface everywhere")
 ```
+
+The `api-key-fn` is called on every request — no caching. For expensive key lookups, wrap with `memoize` or your own TTL cache.
 
 ## Error Handling
 
