@@ -486,7 +486,10 @@
                (if (>= (inc n) max-steps)
                  {:text text :history (conj history msg) :steps steps :truncated true}
                  (let [results    (mapv (fn [t]
-                                          {:call t :result (execute-tool-call name->fn t)})
+                                          (try
+                                            {:call t :result (execute-tool-call name->fn t)}
+                                            (catch Exception e
+                                              {:call t :result (str "Error: " (.getMessage e)) :error e})))
                                         tc)
                        result-msgs (mapv (fn [{:keys [call result]}]
                                           (tool-result (:id call) (str result)))
