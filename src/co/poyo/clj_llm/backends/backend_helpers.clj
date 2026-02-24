@@ -75,7 +75,15 @@
   (let [events-chan (chan 1024)]
     (net/post-stream url headers body
                      (fn [response]
-                       (if (= 200 (:status response))
+                       (cond
+                         (:error response)
+                         (go
+                           (>! events-chan {:type :error
+                                           :error (.getMessage (:error response))
+                                           :exception (:error response)})
+                           (close! events-chan))
+
+                         (= 200 (:status response))
                          (let [sse-chan (sse/parse-sse (:body response))]
                            (go
                              (try
@@ -109,6 +117,7 @@
                                  (>! events-chan {:type :error :error e}))
                                (finally
                                  (close! events-chan)))))
+                         :else
                          (go
                            (>! events-chan (handle-error-response provider-name response))
                            (close! events-chan)))))
