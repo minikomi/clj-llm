@@ -27,11 +27,11 @@
                                messages)
         tools-config (cond
                        tools
-                       {:tools (mapv schema/malli->json-schema tools)
+                       {:tools (mapv schema/malli->tool-definition tools)
                         :tool_choice (or tool-choice "auto")}
 
                        schema
-                       {:tools [(schema/malli->json-schema schema)]
+                       {:tools [(schema/malli->tool-definition schema)]
                         :tool_choice "required"})
         api-opts (backend/convert-options-for-api opts)]
     (merge

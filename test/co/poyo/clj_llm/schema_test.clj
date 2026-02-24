@@ -106,8 +106,14 @@
 ;; Map schemas
 ;; ════════════════════════════════════════════════════════════════════
 
-(deftest test-map-depth-0-wraps-in-function
+(deftest test-map-depth-0-is-plain-object
   (let [result (schema/malli->json-schema [:map [:name :string] [:age :int]] 0)]
+    (is (= "object" (:type result)))
+    (is (= {:type "string"} (get-in result [:properties "name"])))
+    (is (= {:type "integer"} (get-in result [:properties "age"])))))
+
+(deftest test-tool-definition-wraps-in-function
+  (let [result (schema/malli->tool-definition [:map [:name :string] [:age :int]])]
     (is (= "function" (:type result)))
     (is (string? (get-in result [:function :name])))
     (is (string? (get-in result [:function :description])))
@@ -126,10 +132,10 @@
                  [:map [:required-field :string] [:optional-field {:optional true} :string]] 1)]
     (is (= ["required-field"] (get result :required)))))
 
-(deftest test-map-custom-name-description
-  (let [result (schema/malli->json-schema
+(deftest test-tool-definition-custom-name-description
+  (let [result (schema/malli->tool-definition
                  [:map {:name "my_func" :description "My function"}
-                  [:field :string]] 0)]
+                  [:field :string]])]
     (is (= "my_func" (get-in result [:function :name])))
     (is (= "My function" (get-in result [:function :description])))))
 
@@ -150,13 +156,13 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (deftest test-auto-name-sanitizes-hyphens
-  (let [result (schema/malli->json-schema [:map [:full-name :string] [:age :int]] 0)]
+  (let [result (schema/malli->tool-definition [:map [:full-name :string] [:age :int]])]
     (is (not (re-find #"-" (get-in result [:function :name])))
         "Function name should not contain hyphens")))
 
 (deftest test-auto-name-truncates-long-names
   (let [fields (mapv (fn [i] [(keyword (str "field-" i)) :string]) (range 20))
         schema (into [:map] fields)
-        result (schema/malli->json-schema schema 0)]
+        result (schema/malli->tool-definition schema)]
     (is (<= (count (get-in result [:function :name])) 64)
         "Function name should be at most 64 chars")))
