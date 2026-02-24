@@ -25,7 +25,8 @@
    Returns {::data parsed-json}, {::data {::unparsed raw-string}}, or {::done true}"
   [line]
   (cond
-    ;; Ignore event: lines - type is in the data
+    ;; OpenAI/Anthropic encode event type inside the JSON payload,
+    ;; so the SSE event: field is redundant — skip it.
     (str/starts-with? line "event:")
     nil
 
@@ -37,6 +38,8 @@
         (try
           {::data (json->kebab raw-data)}
           (catch Exception _
+            ;; Non-JSON data lines (e.g. keep-alive pings) — safe to skip.
+            ;; Consumer in backend_helpers checks ::unparsed and recurs.
             {::data {::unparsed raw-data}}))))
 
     ;; Empty line or other
@@ -69,7 +72,7 @@
                      (recur)))
                  (recur)))))
          (catch Exception e
-           (>!! out {::error e ::type :stream-error}))
+           (>!! out {::error e}))
          (finally
            (close! out))))
      out)))
