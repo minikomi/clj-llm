@@ -52,6 +52,8 @@
         (empty? (:required result)) (dissoc :required)))))
 
 (defn malli->json-schema
+  "Convert a Malli schema to a JSON Schema object.
+   Always returns a plain JSON Schema (no tool-calling wrapper)."
   ([schema] (malli->json-schema schema 0))
   ([schema depth]
    (if-not schema
@@ -78,17 +80,7 @@
            (assoc base-schema :type "array" :items (mapv #(malli->json-schema (m/form %) (inc depth)) item-schemas)
                   :minItems (count item-schemas) :maxItems (count item-schemas)))
          :map
-         (let [properties (m/properties compiled-schema)
-               base-map (merge base-schema {:type "object"} (extract-properties compiled-schema depth))]
-           (if (zero? depth)
-             (let [auto-info (infer-tool-metadata compiled-schema)
-                   name (:name properties (:name auto-info))
-                   description (:description properties (:description auto-info))]
-               {:type "function"
-                :function {:name name
-                           :description description
-                           :parameters base-map}})
-             base-map))
+         (merge base-schema {:type "object"} (extract-properties compiled-schema depth))
 
          :enum
          (let [values (m/children compiled-schema)]
@@ -116,3 +108,19 @@
 
          (assoc base-schema :type "object"))))))
 
+
+(defn malli->tool-definition
+  "Convert a Malli :map schema to a tool/function definition for LLM APIs.
+   Returns {:type 'function' :function {:name ... :description ... :parameters <json-schema>}}.
+   Name and description are taken from schema properties or auto-generated from field names."
+  [schema]
+  (let [compiled (m/schema schema)
+        properties (m/properties compiled)
+        auto-info (infer-tool-metadata compiled)
+        tool-name (:name properties (:name auto-info))
+        tool-desc (:description properties (:description auto-info))
+        json-schema (malli->json-schema schema)]
+    {:type "function"
+     :function {:name tool-name
+                :description tool-desc
+                :parameters json-schema}}))
