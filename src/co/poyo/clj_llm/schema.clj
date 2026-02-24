@@ -99,8 +99,9 @@
          (let [pattern (first (m/children compiled-schema))]
            (assoc base-schema :type "string" :pattern (str pattern)))
 
-         :maybe (malli->json-schema (m/form (first (m/children compiled-schema)))
-                                    (inc depth))
+         :maybe
+         (let [inner (malli->json-schema (m/form (first (m/children compiled-schema))) (inc depth))]
+           {"anyOf" [inner {"type" "null"}]})
 
          (assoc base-schema :type "object"))))))
 
