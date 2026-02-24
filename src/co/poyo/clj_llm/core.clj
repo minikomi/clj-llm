@@ -474,20 +474,28 @@
             :steps   steps
             :tool-calls (not-empty tc)}
            ;; Execute tool calls and continue
-           (let [msg (tool-calls->assistant-message tc text)]
+           (if (empty? (or tc []))
+             ;; No tool calls — model is reasoning. Append text and loop.
              (if (>= (inc n) max-steps)
-               {:text text :history (conj history msg) :steps steps :truncated true}
-               (let [results    (mapv (fn [t]
-                                        {:call t :result (execute-tool-call name->fn t)})
-                                      tc)
-                     result-msgs (mapv (fn [{:keys [call result]}]
-                                        (tool-result (:id call) (str result)))
-                                      results)
-                     new-history (into (conj history msg) result-msgs)]
-                 (recur new-history
-                        (conj steps {:tool-calls (vec tc)
-                                     :tool-results (mapv :result results)})
-                        (inc n)))))))))))
+               {:text text :history (conj history {:role :assistant :content (or text "")}) :steps steps :truncated true}
+               (recur (conj history {:role :assistant :content (or text "")})
+                      steps
+                      (inc n)))
+             ;; Has tool calls — execute them
+             (let [msg (tool-calls->assistant-message tc text)]
+               (if (>= (inc n) max-steps)
+                 {:text text :history (conj history msg) :steps steps :truncated true}
+                 (let [results    (mapv (fn [t]
+                                          {:call t :result (execute-tool-call name->fn t)})
+                                        tc)
+                       result-msgs (mapv (fn [{:keys [call result]}]
+                                          (tool-result (:id call) (str result)))
+                                        results)
+                       new-history (into (conj history msg) result-msgs)]
+                   (recur new-history
+                          (conj steps {:tool-calls (vec tc)
+                                       :tool-results (mapv :result results)})
+                          (inc n))))))))))))
 
 
 (defn stream
