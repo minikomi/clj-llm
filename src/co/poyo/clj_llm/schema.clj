@@ -19,39 +19,34 @@
   [compiled-schema]
   (let [children (m/children compiled-schema)
         field-names (map (comp name first) (filter vector? children))
-        name (str "extract_" (clojure.string/join "_" field-names))
-        description (str "Extract " (clojure.string/join ", " field-names) " from input")]
+        name (str "extract_" (str/join "_" field-names))
+        description (str "Extract " (str/join ", " field-names) " from input")]
     {:name name :description description}))
 
 (defn- extract-properties [map-schema depth]
-  (let [compiled-map-schema (if (m/schema? map-schema) map-schema (m/schema map-schema))
-        _ (when (not= :map (m/type compiled-map-schema))
-            (throw (ex-info "Schema must be a Malli [:map …] schema"
-                            {:expected '[:map ...]
-                             :actual   (m/type compiled-map-schema)
-                             :schema   (m/form compiled-map-schema)})))
-        children (m/children compiled-map-schema)
-        properties (reduce
-                    (fn [acc child]
-                      (if (and (vector? child) (keyword? (first child)))
-                        (let [k (first child)
-                              prop-name (name k)
-                              [props schema-val] (if (= 3 (count child))
-                                                   [(second child) (nth child 2)]
-                                                   [{} (second child)])
-                              required? (not (:optional props false))]
-                          (-> acc
-                              (assoc-in [:properties prop-name]
-                                        (cond-> (malli->json-schema schema-val (inc depth))
-                                                (contains? props :description)
-                                                (assoc :description (:description props))))
-                              (cond-> required? (update :required conj prop-name))))
-                        acc))
-                    {:properties {}, :required []}
-                    children)]
-    (if (empty? (:required properties))
-      (dissoc properties :required)
-      properties)))
+  (let [compiled (if (m/schema? map-schema) map-schema (m/schema map-schema))]
+    (when (not= :map (m/type compiled))
+      (throw (ex-info "Schema must be a Malli [:map …] schema"
+                      {:expected '[:map ...]
+                       :actual   (m/type compiled)
+                       :schema   (m/form compiled)})))
+    (let [result (reduce
+                  (fn [acc child]
+                    (if (and (vector? child) (keyword? (first child)))
+                      (let [prop-name (name (first child))
+                            [props schema-val] (if (= 3 (count child))
+                                                 [(second child) (nth child 2)]
+                                                 [{} (second child)])
+                            json-schema (cond-> (malli->json-schema schema-val (inc depth))
+                                          (contains? props :description)
+                                          (assoc :description (:description props)))]
+                        (cond-> (assoc-in acc [:properties prop-name] json-schema)
+                          (not (:optional props)) (update :required conj prop-name)))
+                      acc))
+                  {:properties {} :required []}
+                  (m/children compiled))]
+      (cond-> result
+        (empty? (:required result)) (dissoc :required)))))
 
 (defn malli->json-schema
   ([schema] (malli->json-schema schema 0))

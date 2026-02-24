@@ -5,6 +5,14 @@
                    (java.net URI)
                    (java.time Duration))))
 
+#?(:clj
+   (def ^:private http-client
+     (delay
+       (-> (HttpClient/newBuilder)
+           (.version HttpClient$Version/HTTP_2)
+           (.connectTimeout (Duration/ofSeconds 10))
+           (.build)))))
+
 (defn post-stream
   "POST `url` with `headers` and string `body`.
    Calls `cb` with {:status int :body InputStream :error ex?}."
@@ -21,20 +29,15 @@
      :clj
      (a/thread
        (try
-         (let [client (-> (HttpClient/newBuilder)
-                          (.version HttpClient$Version/HTTP_2)
-                          (.connectTimeout (Duration/ofSeconds 10))
-                          (.build))
-               request-builder (-> (HttpRequest/newBuilder)
-                                   (.uri (URI/create url))
-                                   (.timeout (Duration/ofSeconds 30))
-                                   (.POST (HttpRequest$BodyPublishers/ofString body)))]
+         (let [req-builder (-> (HttpRequest/newBuilder)
+                               (.uri (URI/create url))
+                               (.timeout (Duration/ofSeconds 30))
+                               (.POST (HttpRequest$BodyPublishers/ofString body)))]
            (doseq [[k v] headers]
-             (.header request-builder k v))
-
-           (let [response (.send client
-                                 (.build request-builder)
-                                 (HttpResponse$BodyHandlers/ofInputStream))]
+             (.header req-builder k v))
+           (let [response (.send @http-client
+                                (.build req-builder)
+                                (HttpResponse$BodyHandlers/ofInputStream))]
              (cb {:status (.statusCode response)
                   :body (.body response)
                   :error nil})))
