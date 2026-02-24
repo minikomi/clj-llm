@@ -93,7 +93,15 @@
                   :enum values))
 
          (:> :>= :< :<= := :not=)
-         (malli->json-schema (m/form (first (m/children compiled-schema))) (inc depth))
+         (let [value (first (m/children compiled-schema))
+               base-type (if (integer? value) "integer" "number")]
+           (case schema-type
+             :>    (assoc base-schema :type base-type :exclusiveMinimum value)
+             :>=   (assoc base-schema :type base-type :minimum value)
+             :<    (assoc base-schema :type base-type :exclusiveMaximum value)
+             :<=   (assoc base-schema :type base-type :maximum value)
+             :=    (assoc base-schema :type base-type :const value)
+             :not= (assoc base-schema :type base-type)))
 
          :re
          (let [pattern (first (m/children compiled-schema))]
