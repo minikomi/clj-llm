@@ -81,7 +81,7 @@
                  :value result
                  :errors (me/humanize (m/explain schema result))}))))
     (catch clojure.lang.ExceptionInfo e (throw e))
-    (catch Exception e
+    (catch Exception _
       (throw (errors/error
               "Failed to parse structured output"
               {:error-type :llm/invalid-request

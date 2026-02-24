@@ -13,7 +13,7 @@
 
 (defrecord MockProvider [responses defaults]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+  (request-stream [_ _model _system-prompt _messages _schema _tools _tool-choice _provider-opts]
     (let [ch (chan)]
       (go
         (doseq [event @responses]
@@ -129,11 +129,11 @@
                                    {:type :tool-call-delta :index 0 :arguments "{\"host\":"}
                                    {:type :tool-call-delta :index 0 :arguments "\"example.com\"}"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 5}])
-          resp (llm/request provider "test")]
-      (let [tool-calls @(:tool-calls resp)]
-        (is (= 1 (count tool-calls)))
-        (is (= "ping" (:name (first tool-calls))))
-        (is (= "{\"host\":\"example.com\"}" (:arguments (first tool-calls)))))))
+          resp (llm/request provider "test")
+          tcs @(:tool-calls resp)]
+      (is (= 1 (count tcs)))
+      (is (= "ping" (:name (first tcs))))
+      (is (= "{\"host\":\"example.com\"}" (:arguments (first tcs))))))
 
   (testing "generate with :tools executes tools and returns results"
     (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}

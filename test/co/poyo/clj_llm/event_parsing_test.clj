@@ -5,6 +5,7 @@
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.java.io :as io]
             [clojure.core.async :as a]
+            [clojure.string :as str]
             [co.poyo.clj-llm.sse :as sse]))
 
 ;; ════════════════════════════════════════════════════════════════════
@@ -179,18 +180,15 @@
 (deftest test-openai-tool-call-events
   (testing "Tool call stream from GPT-4.1-nano"
     (let [tools [:placeholder] ;; truthy, enables tool-call path
-          events (replay-openai-fixture "fixtures/openai-tool-calls.sse" nil tools)]
-
-      ;; Should have tool-call and tool-call-delta events
-      (let [tc-events (filter #(= :tool-call (:type %)) events)
-            delta-events (filter #(= :tool-call-delta (:type %)) events)]
-        (is (= 2 (count tc-events)) "Should have 2 tool calls")
-        (is (pos? (count delta-events)) "Should have argument deltas")
-
-        ;; First tool call is get_weather
-        (is (= "get_weather" (:name (first tc-events))))
-        ;; Second is search_restaurants
-        (is (= "search_restaurants" (:name (second tc-events))))))))
+          events (replay-openai-fixture "fixtures/openai-tool-calls.sse" nil tools)
+          tc-events (filter #(= :tool-call (:type %)) events)
+          delta-events (filter #(= :tool-call-delta (:type %)) events)]
+      (is (= 2 (count tc-events)) "Should have 2 tool calls")
+      (is (pos? (count delta-events)) "Should have argument deltas")
+      ;; First tool call is get_weather
+      (is (= "get_weather" (:name (first tc-events))))
+      ;; Second is search_restaurants
+      (is (= "search_restaurants" (:name (second tc-events)))))))
 
 (deftest test-openai-tool-call-assembly
   (testing "Tool call arguments assemble correctly from GPT-4.1-nano"
@@ -202,15 +200,15 @@
       ;; get_weather
       (let [tc1 (first tool-calls)]
         (is (= "get_weather" (:name tc1)))
-        (is (clojure.string/includes? (:arguments tc1) "Tokyo"))
+        (is (str/includes? (:arguments tc1) "Tokyo"))
         ;; Should be valid JSON
-        (is (clojure.string/starts-with? (.trim (:arguments tc1)) "{")))
+        (is (str/starts-with? (.trim (:arguments tc1)) "{")))
 
       ;; search_restaurants
       (let [tc2 (second tool-calls)]
         (is (= "search_restaurants" (:name tc2)))
-        (is (clojure.string/includes? (:arguments tc2) "Tokyo"))
-        (is (clojure.string/includes? (:arguments tc2) "ramen"))))))
+        (is (str/includes? (:arguments tc2) "Tokyo"))
+        (is (str/includes? (:arguments tc2) "ramen"))))))
 
 (deftest test-openai-tool-call-usage
   (testing "Usage is captured even with tool calls"
@@ -227,12 +225,11 @@
 (deftest test-minimax-tool-call-events
   (testing "Tool call stream from minimax (different delta chunking)"
     (let [tools [:placeholder]
-          events (replay-openai-fixture "fixtures/minimax-tool-calls.sse" nil tools)]
-
-      (let [tc-events (filter #(= :tool-call (:type %)) events)]
-        (is (= 2 (count tc-events)) "Should have 2 tool calls")
-        (is (= "get_weather" (:name (first tc-events))))
-        (is (= "search_restaurants" (:name (second tc-events))))))))
+          events (replay-openai-fixture "fixtures/minimax-tool-calls.sse" nil tools)
+          tc-events (filter #(= :tool-call (:type %)) events)]
+      (is (= 2 (count tc-events)) "Should have 2 tool calls")
+      (is (= "get_weather" (:name (first tc-events))))
+      (is (= "search_restaurants" (:name (second tc-events)))))))
 
 (deftest test-minimax-tool-call-assembly
   (testing "Minimax tool call arguments assemble to valid JSON"
@@ -243,15 +240,15 @@
 
       ;; get_weather - should be valid JSON with opening {
       (let [args (:arguments (first tool-calls))]
-        (is (clojure.string/starts-with? (.trim args) "{")
+        (is (str/starts-with? (.trim args) "{")
             (str "Arguments should start with {, got: " (pr-str args)))
-        (is (clojure.string/includes? args "Tokyo")))
+        (is (str/includes? args "Tokyo")))
 
       ;; search_restaurants
       (let [args (:arguments (second tool-calls))]
-        (is (clojure.string/starts-with? (.trim args) "{")
+        (is (str/starts-with? (.trim args) "{")
             (str "Arguments should start with {, got: " (pr-str args)))
-        (is (clojure.string/includes? args "Tokyo"))
+        (is (str/includes? args "Tokyo"))
         (is (re-find #"(?i)ramen" args))))))
 
 (deftest test-minimax-usage-not-swallowed
