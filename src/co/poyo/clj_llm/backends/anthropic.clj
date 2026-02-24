@@ -82,7 +82,11 @@
     "message_stop"
     {:type :done}
 
-    ("message_start" "content_block_stop" "ping")
+    "message_start"
+    (when-let [usage (get-in data [:message :usage])]
+      (into {:type :usage} usage))
+
+    ("content_block_stop" "ping")
     nil
 
     "error"

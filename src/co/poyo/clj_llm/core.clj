@@ -112,32 +112,40 @@
                        text-promise usage-promise
                        structured-promise tool-calls-promise
                        schema provider-opts req-start]}]
-  (let [finalize! (fn [text-val tool-calls-val]
+  (let [finalize! (fn [text-val tool-calls-val usage-acc]
                     (deliver text-promise text-val)
                     (deliver tool-calls-promise tool-calls-val)
-                    (when-not (realized? usage-promise)
-                      (deliver usage-promise nil))
+                    (deliver usage-promise
+                            (when (seq usage-acc)
+                              (assoc usage-acc
+                                     :type :usage
+                                     :clj-llm/provider-opts provider-opts
+                                     :clj-llm/req-start req-start
+                                     :clj-llm/req-end (System/currentTimeMillis)
+                                     :clj-llm/duration (- (System/currentTimeMillis) req-start))))
                     (a/close! text-chunks-chan)
                     (a/close! events-chan))]
 
     ;; Consumer go-loop
     (go-loop [chunks []
               tool-calls []
-              tc-index {}] ;; maps provider index -> position in tool-calls vec
+              tc-index {} ;; maps provider index -> position in tool-calls vec
+              usage-acc {}] ;; accumulated usage across multiple :usage events
       (if-let [event (<! source-chan)]
         (do
           (>! events-chan event)
           (case (:type event)
             :content
             (do (>! text-chunks-chan (:content event))
-                (recur (conj chunks (:content event)) tool-calls tc-index))
+                (recur (conj chunks (:content event)) tool-calls tc-index usage-acc))
 
             :tool-call
             (let [idx (or (:index event) (count tool-calls))
                   call (assoc event :arguments (or (:arguments event) ""))]
               (recur chunks
                      (conj tool-calls call)
-                     (assoc tc-index idx (count tool-calls))))
+                     (assoc tc-index idx (count tool-calls))
+                     usage-acc))
 
             :tool-call-delta
             (let [pos (get tc-index (:index event))]
@@ -145,31 +153,27 @@
                      (if pos
                        (update-in tool-calls [pos :arguments] str (:arguments event))
                        tool-calls)
-                     tc-index))
+                     tc-index
+                     usage-acc))
 
             :usage
-            (do (deliver usage-promise
-                        (assoc event
-                               :clj-llm/provider-opts provider-opts
-                               :clj-llm/req-start req-start
-                               :clj-llm/req-end (System/currentTimeMillis)
-                               :clj-llm/duration (- (System/currentTimeMillis) req-start)))
-                (recur chunks tool-calls tc-index))
+            (recur chunks tool-calls tc-index
+                   (merge usage-acc (dissoc event :type)))
 
             :error
             (do (when-not (realized? structured-promise)
                   (deliver structured-promise (Exception. (str (:error event)))))
                 (finalize! (errors/error "LLM request failed" {:error-type :llm/server-error
-                                                               :event event}) nil))
+                                                               :event event}) nil usage-acc))
 
             :done
-            (finalize! (apply str chunks) (not-empty tool-calls))
+            (finalize! (apply str chunks) (not-empty tool-calls) usage-acc)
 
             ;; Unknown event type — skip
-            (recur chunks tool-calls tc-index)))
+            (recur chunks tool-calls tc-index usage-acc)))
 
         ;; Source channel closed without :done
-        (finalize! (apply str chunks) (not-empty tool-calls))))
+        (finalize! (apply str chunks) (not-empty tool-calls) usage-acc)))
 
     ;; Structured output processing (waits for text promise in a separate thread)
     (when schema
