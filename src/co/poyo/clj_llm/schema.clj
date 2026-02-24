@@ -19,9 +19,12 @@
   [compiled-schema]
   (let [children (m/children compiled-schema)
         field-names (map (comp name first) (filter vector? children))
-        name (str "extract_" (str/join "_" field-names))
+        raw-name (str "extract_" (str/join "_" field-names))
+        sanitized (-> raw-name
+                      (str/replace #"[^a-zA-Z0-9_]" "_")
+                      (subs 0 (min 64 (count raw-name))))
         description (str "Extract " (str/join ", " field-names) " from input")]
-    {:name name :description description}))
+    {:name sanitized :description description}))
 
 (defn- extract-properties [map-schema depth]
   (let [compiled (if (m/schema? map-schema) map-schema (m/schema map-schema))]
