@@ -216,8 +216,8 @@
          source-chan    (proto/request-stream provider model system-prompt messages
                                              schema tools tool-choice
                                              (or provider-opts {}))
-         text-chunks   (chan 1024)
-         events        (chan 1024)
+         text-chunks   (chan (a/dropping-buffer 1024))
+         events        (chan (a/dropping-buffer 1024))
          text-p        (promise)
          usage-p       (promise)
          structured-p  (promise)
