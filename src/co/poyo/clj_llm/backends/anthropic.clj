@@ -126,7 +126,7 @@
 
    The default api-key-fn reads from the ANTHROPIC_API_KEY env var.
    Override for custom env vars, vaults, or key rotation:
-     (backend {:api-key-fn #(System/getenv "MY_KEY")})
+     (backend {:api-key-fn (fn [] (System/getenv \"MY_KEY\"))})
 
    Set :defaults on the provider to configure model, system-prompt, schema, etc."
   ([] (backend {}))
