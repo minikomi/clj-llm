@@ -381,8 +381,8 @@
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
-   (let [merged (helpers/deep-merge (:defaults provider) opts)
-         tools (:tools merged)
+   (let [tools (or (:tools opts) (:tools (:defaults provider)))
+         schema (or (:schema opts) (:schema (:defaults provider)))
          input-schemas (when tools (tools->input-schemas tools))
          api-opts (if tools
                     (assoc (dissoc opts :tools) :tools input-schemas)
@@ -398,7 +398,7 @@
           :tool-calls tc
           :tool-results (mapv (partial execute-tool-call name->fn) tc)})
 
-       (:schema merged)
+       schema
        (let [s @(:structured response)]
          (if (instance? Exception s) (throw s) s))
 
