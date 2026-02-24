@@ -6,7 +6,8 @@
             [clojure.java.io :as io]
             [clojure.core.async :as a]
             [clojure.string :as str]
-            [co.poyo.clj-llm.sse :as sse]))
+            [co.poyo.clj-llm.sse :as sse]
+            [co.poyo.clj-llm.backends.openai]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Helpers
@@ -32,59 +33,15 @@
        (remove ::sse/unparsed)))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; OpenAI event converter (inline to avoid coupling to backend ns)
-;; We test the same logic as openai/data->internal-event
+;; OpenAI event converter — delegates to real implementation
 ;; ════════════════════════════════════════════════════════════════════
 
+(def ^:private data->internal-event @#'co.poyo.clj-llm.backends.openai/data->internal-event)
+
 (defn openai-event
-  "Convert parsed SSE data to internal event, matching openai backend logic."
-  ([data] (openai-event data nil nil))
-  ([data schema tools]
-   (let [content (get-in data [:choices 0 :delta :content])
-         tool-calls (get-in data [:choices 0 :delta :tool-calls])
-         finish-reason (get-in data [:choices 0 :finish-reason])
-         usage (:usage data)]
-     (cond
-       (:error data)
-       {:type :error :error (:error data)}
-
-       (not-empty content)
-       {:type :content :content content}
-
-       tool-calls
-       (let [convert-one (fn [tool-call]
-                           (let [has-name? (get-in tool-call [:function :name])
-                                 has-args? (not-empty (get-in tool-call [:function :arguments]))]
-                             (cond
-                               (and schema has-args?)
-                               {:type :content :content (get-in tool-call [:function :arguments])}
-
-                               (and tools has-name?)
-                               {:type :tool-call
-                                :id (get tool-call :id)
-                                :index (get tool-call :index)
-                                :name (get-in tool-call [:function :name])
-                                :arguments ""}
-
-                               (and tools has-args?)
-                               {:type :tool-call-delta
-                                :index (get tool-call :index)
-                                :arguments (get-in tool-call [:function :arguments])}
-
-                               :else nil)))
-             events (keep convert-one tool-calls)]
-         (when (seq events)
-           (if (= 1 (count events))
-             (first events)
-             (vec events))))
-
-       finish-reason
-       {:type :finish :reason finish-reason}
-
-       usage
-       (into {:type :usage} usage)
-
-       :else nil))))
+  "Convert parsed SSE data to internal event via real openai backend."
+  ([data] (data->internal-event data nil nil))
+  ([data schema tools] (data->internal-event data schema tools)))
 
 (defn replay-openai-fixture
   "Parse an SSE fixture and convert all events through the OpenAI event converter.
