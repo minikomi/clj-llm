@@ -59,26 +59,31 @@
       {:type :content :content content}
 
       tool-calls
-      (let [tool-call (first tool-calls)
-            has-name? (get-in tool-call [:function :name])
-            has-args? (not-empty (get-in tool-call [:function :arguments]))]
-        (cond
-          (and schema has-args?)
-          {:type :content :content (get-in tool-call [:function :arguments])}
+      (let [convert-one (fn [tool-call]
+                          (let [has-name? (get-in tool-call [:function :name])
+                                has-args? (not-empty (get-in tool-call [:function :arguments]))]
+                            (cond
+                              (and schema has-args?)
+                              {:type :content :content (get-in tool-call [:function :arguments])}
 
-          (and tools has-name?)
-          {:type :tool-call
-           :id (get tool-call :id)
-           :index (get tool-call :index)
-           :name (get-in tool-call [:function :name])
-           :arguments ""}
+                              (and tools has-name?)
+                              {:type :tool-call
+                               :id (get tool-call :id)
+                               :index (get tool-call :index)
+                               :name (get-in tool-call [:function :name])
+                               :arguments ""}
 
-          (and tools has-args?)
-          {:type :tool-call-delta
-           :index (get tool-call :index)
-           :arguments (get-in tool-call [:function :arguments])}
+                              (and tools has-args?)
+                              {:type :tool-call-delta
+                               :index (get tool-call :index)
+                               :arguments (get-in tool-call [:function :arguments])}
 
-          :else nil))
+                              :else nil)))
+            events (keep convert-one tool-calls)]
+        (when (seq events)
+          (if (= 1 (count events))
+            (first events)
+            (vec events))))
 
       finish-reason
       {:type :finish :reason finish-reason}

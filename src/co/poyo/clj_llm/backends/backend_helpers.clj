@@ -94,10 +94,15 @@
                                      (recur)
 
                                      :else
-                                     (if-let [internal-event (event->internal (::sse/data chunk))]
-                                       (do
-                                         (>! events-chan internal-event)
-                                         (when (not= :done (:type internal-event))
+                                     (if-let [result (event->internal (::sse/data chunk))]
+                                       (let [evts (if (sequential? result) result [result])]
+                                         (loop [es (seq evts)]
+                                           (when es
+                                             (let [e (first es)]
+                                               (>! events-chan e)
+                                               (when (not= :done (:type e))
+                                                 (recur (next es))))))
+                                         (when-not (some #(= :done (:type %)) evts)
                                            (recur)))
                                        (recur)))))
                                (catch Exception e
