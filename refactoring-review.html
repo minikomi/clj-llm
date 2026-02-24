@@ -8,295 +8,84 @@
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/clojure.min.js"></script>
 <style>
-  :root {
-    --bg: #fafafa;
-    --fg: #1a1a2e;
-    --accent: #6366f1;
-    --accent-light: #eef2ff;
-    --border: #e2e8f0;
-    --code-bg: #f1f5f9;
-    --red: #ef4444;
-    --green: #22c55e;
-    --red-bg: #fef2f2;
-    --green-bg: #f0fdf4;
-    --card-bg: #fff;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: var(--bg);
-    color: var(--fg);
-    line-height: 1.7;
-    padding: 0;
-  }
-  .hero {
-    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%);
-    color: #fff;
-    padding: 4rem 2rem 3rem;
-    text-align: center;
-  }
-  .hero h1 {
-    font-size: 2.5rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin-bottom: 0.5rem;
-  }
-  .hero p {
-    font-size: 1.15rem;
-    opacity: 0.85;
-    max-width: 650px;
-    margin: 0 auto;
-  }
-  .container {
-    max-width: 880px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    max-width: 800px;
     margin: 0 auto;
     padding: 2rem 1.5rem 4rem;
-  }
-  h2 {
-    font-size: 1.65rem;
-    font-weight: 700;
-    margin-top: 3rem;
-    margin-bottom: 0.75rem;
-    color: var(--accent);
-    letter-spacing: -0.01em;
-    padding-bottom: 0.4rem;
-    border-bottom: 2px solid var(--accent-light);
-  }
-  h3 {
-    font-size: 1.15rem;
-    font-weight: 600;
-    margin-top: 1.8rem;
-    margin-bottom: 0.5rem;
-    color: #334155;
-  }
-  p, li {
-    font-size: 0.97rem;
-    color: #475569;
-  }
-  p { margin-bottom: 0.9rem; }
-  ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
-  li { margin-bottom: 0.3rem; }
-  strong { color: var(--fg); }
-  code {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 0.85em;
-    background: var(--code-bg);
-    padding: 0.15em 0.4em;
-    border-radius: 4px;
-  }
-  pre {
-    background: var(--code-bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    overflow-x: auto;
-    margin-bottom: 1.2rem;
-    font-size: 0.82rem;
+    color: #222;
     line-height: 1.6;
   }
-  pre code {
-    background: none;
-    padding: 0;
-    font-size: inherit;
+  h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
+  h1 + p { color: #666; margin-bottom: 2rem; }
+  h2 {
+    font-size: 1.3rem;
+    margin-top: 2.5rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid #ddd;
   }
-  .card {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  h3 { font-size: 1.05rem; margin-top: 1.5rem; }
+  p, li { font-size: 0.95rem; color: #333; }
+  code {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 0.85em;
+    background: #f4f4f4;
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
   }
-  .card h3 { margin-top: 0; }
-  .diff {
+  pre {
+    background: #f8f8f8;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 0.8rem 1rem;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; padding: 0; }
+  .before-after {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
+    gap: 0.75rem;
+    margin: 1rem 0;
   }
-  @media (max-width: 700px) {
-    .diff { grid-template-columns: 1fr; }
-  }
-  .diff-before, .diff-after {
-    border-radius: 8px;
-    padding: 1rem;
-    overflow-x: auto;
-  }
-  .diff-before {
-    background: var(--red-bg);
-    border: 1px solid #fecaca;
-  }
-  .diff-after {
-    background: var(--green-bg);
-    border: 1px solid #bbf7d0;
-  }
-  .diff-label {
+  @media (max-width: 650px) { .before-after { grid-template-columns: 1fr; } }
+  .before-after pre { margin: 0; }
+  .before-after .label {
     font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 0.5rem;
+    font-weight: 600;
+    color: #888;
+    margin-bottom: 0.3rem;
   }
-  .diff-before .diff-label { color: var(--red); }
-  .diff-after .diff-label { color: var(--green); }
-  .diff pre {
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin: 0;
-    font-size: 0.78rem;
-  }
-  .problems {
-    background: #fffbeb;
-    border-left: 4px solid #f59e0b;
-    padding: 0.8rem 1rem;
-    border-radius: 0 8px 8px 0;
-    margin-bottom: 1.2rem;
-  }
-  .problems strong { color: #92400e; }
-  .wins {
-    background: #f0fdf4;
-    border-left: 4px solid #22c55e;
-    padding: 0.8rem 1rem;
-    border-radius: 0 8px 8px 0;
-    margin-bottom: 1.2rem;
-  }
-  .wins strong { color: #166534; }
   table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 1.5rem;
+    margin: 1rem 0;
     font-size: 0.9rem;
   }
-  th {
-    background: var(--accent-light);
-    color: var(--accent);
-    font-weight: 600;
-    text-align: left;
-    padding: 0.6rem 0.8rem;
-  }
-  td {
-    padding: 0.6rem 0.8rem;
-    border-bottom: 1px solid var(--border);
-    color: #475569;
-  }
-  .tag {
-    display: inline-block;
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 0.15em 0.55em;
-    border-radius: 999px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .tag-pure { background: #dbeafe; color: #1e40af; }
-  .tag-uniform { background: #fae8ff; color: #86198f; }
-  .tag-dedup { background: #dcfce7; color: #166534; }
-  .tag-naming { background: #fef3c7; color: #92400e; }
-  .tag-api { background: #fce7f3; color: #9d174d; }
-  .tag-clarity { background: #e0e7ff; color: #3730a3; }
-  .motivation {
-    background: var(--accent-light);
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin: 2rem 0;
-  }
-  .motivation p { color: #4338ca; margin-bottom: 0.5rem; }
-  .motivation p:last-child { margin-bottom: 0; }
-  .stats {
-    display: flex;
-    gap: 1rem;
-    flex-wrap: wrap;
-    margin: 1.5rem 0;
-  }
-  .stat {
-    flex: 1;
-    min-width: 120px;
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1rem;
-    text-align: center;
-  }
-  .stat .num {
-    font-size: 1.8rem;
-    font-weight: 800;
-    color: var(--accent);
-    line-height: 1;
-  }
-  .stat .label {
-    font-size: 0.78rem;
-    color: #94a3b8;
-    margin-top: 0.3rem;
-  }
-  .phase-label {
-    display: inline-block;
-    font-size: 0.7rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #94a3b8;
-    margin-bottom: 0.25rem;
-  }
-  .rename-table td:first-child {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 0.82em;
-    color: var(--red);
-  }
-  .rename-table td:nth-child(2) {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 0.82em;
-    color: var(--green);
-  }
-  .commit-log {
-    font-size: 0.85rem;
-  }
-  .commit-log td:first-child {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 0.78em;
-    color: #94a3b8;
-    white-space: nowrap;
-  }
+  th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #ddd; }
+  td { padding: 0.5rem; border-bottom: 1px solid #eee; }
+  td code { font-size: 0.82em; }
+  .stats { color: #666; font-size: 0.9rem; margin-bottom: 2rem; }
 </style>
 </head>
 <body>
 
-<div class="hero">
-  <h1>Refactoring clj-llm</h1>
-  <p>From 19 bug fixes to structural decomplection and a full readability cleanup across all 11 source files.</p>
-</div>
-
-<div class="container">
+<h1>Refactoring clj-llm</h1>
+<p>After 19 bug-fix tasks, two passes to clean up accumulated complexity: structural decomplection, then a readability sweep across all 11 source files.</p>
 
 <div class="stats">
-  <div class="stat"><div class="num">74</div><div class="label">Tests passing</div></div>
-  <div class="stat"><div class="num">237</div><div class="label">Assertions</div></div>
-  <div class="stat"><div class="num">9</div><div class="label">Commits</div></div>
-  <div class="stat"><div class="num">16</div><div class="label">Files touched</div></div>
-  <div class="stat"><div class="num">1,452</div><div class="label">Lines of source</div></div>
+  74 tests, 237 assertions, 0 failures. 9 commits, 16 files touched. 1,452 lines of source.
 </div>
 
-<div class="motivation">
-  <p><strong>Why this refactor?</strong></p>
-  <p>After 19 bug-fix tasks, the code worked correctly but had accumulated structural complexity: a go-loop with 5 positional recur args, polymorphic event return types, duplicated agent branches, cryptic names, and a schema function that was two functions in a trenchcoat. Two passes made it a joy to read.</p>
-</div>
 
-<!-- ═══════════════════════════════════════════ -->
-<!-- PHASE 1                                     -->
-<!-- ═══════════════════════════════════════════ -->
+<h2>1. Pure state machine for <code>consume-events</code></h2>
 
-<div class="phase-label">Phase 1</div>
-<h2>Structural Decomplection</h2>
-<p>Three interconnected changes in a single commit (<code>9a5fe75</code>).</p>
+<p>The go-loop carried five positional <code>recur</code> arguments with state updates and channel I/O interleaved in every <code>case</code> branch. Adding a sixth accumulator meant touching every <code>recur</code>. State transitions couldn't be tested without async channels.</p>
 
-<!-- 1.1 -->
-<h3><span class="tag tag-pure">Pure</span> State Machine for <code>consume-events</code></h3>
-
-<p>The go-loop in <code>consume-events</code> is the heart of the library. It had grown to carry <strong>five positional recur arguments</strong>, with state updates and channel I/O interleaved in every <code>case</code> branch.</p>
-
-<div class="diff">
-  <div class="diff-before">
-    <div class="diff-label">✘ Before &mdash; tangled state + I/O</div>
+<div class="before-after">
+  <div>
+    <div class="label">Before</div>
     <pre><code class="language-clojure">(go-loop [chunks []
           tool-calls []
           tc-index {}
@@ -314,15 +103,14 @@
            finish-reason)
     ;; every branch repeats all 5 args</code></pre>
   </div>
-  <div class="diff-after">
-    <div class="diff-label">✔ After &mdash; pure transitions + thin loop</div>
-    <pre><code class="language-clojure">;; Pure function &mdash; no channels, no promises
+  <div>
+    <div class="label">After</div>
+    <pre><code class="language-clojure">;; Pure function, no channels
 (defn- next-state [state event]
   (case (:type event)
-    :content     (update state :chunks conj ...)
-    :tool-call   (-> state (update ...) (assoc-in ...))
-    :usage       (update state :usage merge ...)
-    :done        (assoc state :done? true)
+    :content  (update state :chunks conj ...)
+    :usage    (update state :usage merge ...)
+    :done     (assoc state :done? true)
     state))
 
 ;; Go-loop is just plumbing
@@ -330,8 +118,6 @@
   (if-let [event (&lt;! source-chan)]
     (let [state' (next-state state event)]
       (>! events-chan event)
-      (when (= :content (:type event))
-        (>! text-chunks-chan (:content event)))
       (if (:done? state')
         (finalize! state')
         (recur state')))
@@ -339,44 +125,34 @@
   </div>
 </div>
 
-<div class="wins">
-  <strong>Key wins:</strong>
-  <ul style="margin:0.5rem 0 0 1.2rem">
-    <li><code>next-state</code> is pure &mdash; testable with plain maps, no async setup</li>
-    <li>Adding accumulators = add key to <code>init-state</code> + a <code>case</code> branch. No recur args to update.</li>
-    <li>Side effects are visually separated from state logic</li>
-    <li><code>finalize!</code> takes one arg (state), not three</li>
-  </ul>
-</div>
+<p><code>next-state</code> is pure and testable with plain maps. New accumulators = add a key + a case branch. <code>finalize!</code> takes one arg, not three.</p>
 
-<!-- 1.2 -->
-<h3><span class="tag tag-uniform">Uniform</span> <code>data-&gt;internal-events</code> Always Returns Seq</h3>
 
-<p>Backend event converters returned <strong>nil, a single map, or a vector of maps</strong>, forcing conditional unwrapping downstream.</p>
+<h2>2. Uniform <code>data-&gt;internal-events</code> contract</h2>
 
-<div class="diff">
-  <div class="diff-before">
-    <div class="diff-label">✘ Before &mdash; polymorphic return</div>
+<p>Backend event converters returned nil, a single map, or a vector of maps. The caller had to <code>(if (sequential? result) result [result])</code> every time.</p>
+
+<div class="before-after">
+  <div>
+    <div class="label">Before</div>
     <pre><code class="language-clojure">;; Returns map OR vector
 (cond
-  content    {:type :content ...}       ;; map
+  content    {:type :content ...}
   tool-calls (if (= 1 (count events))
-               (first events)           ;; map
-               (vec events))            ;; vector!
+               (first events)
+               (vec events)))
 
-;; Caller must unwrap
+;; Caller unwraps
 (let [evts (if (sequential? result)
              result [result])] ...)</code></pre>
   </div>
-  <div class="diff-after">
-    <div class="diff-label">✔ After &mdash; always seq or nil</div>
-    <pre><code class="language-clojure">;; Always seq
+  <div>
+    <div class="label">After</div>
+    <pre><code class="language-clojure">;; Always returns seq or nil
 (cond
-  content     [{:type :content ...}]
-  tool-calls  (not-empty
-                (keep convert-one tool-calls))
-  finish      [{:type :finish ...}]
-  usage       [(into {:type :usage} usage)]
+  content    [{:type :content ...}]
+  tool-calls (not-empty
+               (keep convert-one tool-calls))
   :else nil)
 
 ;; Caller: no unwrapping
@@ -385,230 +161,83 @@
   </div>
 </div>
 
-<!-- 1.3 -->
-<h3><span class="tag tag-dedup">Dedup</span> Single Code Path in <code>run-agent</code></h3>
+<p>Both backends follow the same contract. One return shape to handle.</p>
 
-<p>The agent loop had two nearly-identical branches: one for tool calls, one for reasoning. Each had its own <code>max-steps</code> check, history construction, and <code>recur</code>. Merged into one <code>let</code> with one check and one <code>recur</code>.</p>
 
-<!-- ═══════════════════════════════════════════ -->
-<!-- PHASE 2                                     -->
-<!-- ═══════════════════════════════════════════ -->
+<h2>3. Single code path in <code>run-agent</code></h2>
 
-<div class="phase-label" style="margin-top: 2rem;">Phase 2</div>
-<h2>Readability Cleanup</h2>
-<p>Systematic pass across all 11 source files in 8 commits, touching 16 files total.</p>
+<p>The agent loop had two nearly-identical branches (tool calls vs. reasoning), each with its own <code>max-steps</code> check, history construction, and <code>recur</code>. Merged into one <code>let</code> that branches only on values, then one check and one <code>recur</code>. Later extracted the step-building into <code>build-agent-step</code>:</p>
 
-<!-- 2.1 -->
-<h3><span class="tag tag-naming">Naming</span> Replace Cryptic Abbreviations</h3>
-
-<table class="rename-table">
-  <thead><tr><th>Before</th><th>After</th><th>Why</th></tr></thead>
-  <tbody>
-    <tr><td>bh</td><td>backend</td><td>Non-obvious alias</td></tr>
-    <tr><td>tc</td><td>parsed-calls</td><td>Cryptic 2-letter binding (6 uses)</td></tr>
-    <tr><td>:tc-index</td><td>:tool-call-positions</td><td>Unclear what it maps</td></tr>
-    <tr><td>merged</td><td>resolved</td><td>Describes <em>how</em>, not <em>what</em></td></tr>
-    <tr><td>base-opts</td><td>request-opts</td><td>Base relative to what?</td></tr>
-    <tr><td>cb</td><td>on-response</td><td>Generic callback name</td></tr>
-    <tr><td>s, t</td><td>fn-schema, schema-type</td><td>Single letters through 4 conditionals</td></tr>
-    <tr><td>event-&gt;internal</td><td>parse-sse-data</td><td>Input isn't an "event"</td></tr>
-  </tbody>
-</table>
-
-<!-- 2.2 -->
-<h3><span class="tag tag-dedup">Consistency</span> Same Pattern, Same Code</h3>
-
-<div class="card">
-  <h3><code>unwrap!</code> helper (5 call sites)</h3>
-  <p>The check-if-exception-and-throw pattern appeared with slight variations at every promise deref. Now one function.</p>
-  <pre><code class="language-clojure">(defn- unwrap! [v]
-  (if (instance? Exception v) (throw v) v))</code></pre>
-</div>
-
-<div class="card">
-  <h3>Parameterized <code>validate-opts</code></h3>
-  <p><code>request</code> and <code>run-agent</code> both validated option keys but used different code paths with different error shapes. Now one function with an optional key set argument.</p>
-  <pre><code class="language-clojure">(defn- validate-opts
-  ([opts] (validate-opts opts known-keys))
-  ([opts valid-keys]
-   (let [unknown (remove valid-keys (keys opts))]
-     (when (seq unknown)
-       (throw (errors/error ...))))))</code></pre>
-</div>
-
-<div class="card">
-  <h3>Single <code>status-errors</code> table</h3>
-  <p><code>errors.clj</code> had two independent <code>case</code> expressions mapping HTTP status codes. Now one data table drives both <code>status-&gt;error-type</code> and <code>parse-http-error</code>.</p>
-</div>
-
-<!-- 2.3 -->
-<h3><span class="tag tag-clarity">Clarity</span> &ldquo;Why&rdquo; Comments at 10 Sites</h3>
-
-<p>Added comments where intent was non-obvious:</p>
-<ul>
-  <li><code>(dropping-buffer 1024)</code> &mdash; slow consumers must not block the go-loop that delivers promises</li>
-  <li><code>(catch ExceptionInfo e (throw e))</code> &mdash; re-throw our errors; only catch JSON parse failures below</li>
-  <li>Unknown event type &rarr; <code>state</code> &mdash; forward-compat with new provider events</li>
-  <li><code>"required" &rarr; {:type "any"}</code> in Anthropic &mdash; different vocabulary, not a bug</li>
-  <li><code>(:throw false)</code> in net.cljc &mdash; errors handled via callback</li>
-</ul>
-<p>Also removed dead <code>::type :stream-error</code> and fixed a <code>description ""</code> default that existed only to be discarded.</p>
-
-<!-- 2.4 -->
-<h3><span class="tag tag-pure">Split</span> <code>malli-&gt;json-schema</code> Dual Personality</h3>
-
-<p>At depth=0 it returned a <strong>tool definition</strong> <code>{:type "function" :function {...}}</code>. At depth&gt;0 it returned a <strong>JSON Schema</strong> <code>{:type "object" ...}</code>. The function name promised JSON Schema but delivered tool wrappers half the time.</p>
-
-<div class="diff">
-  <div class="diff-before">
-    <div class="diff-label">✘ Before &mdash; one function, two identities</div>
-    <pre><code class="language-clojure">(defn malli->json-schema [schema depth]
-  ;; At depth 0: returns tool wrapper
-  ;; At depth > 0: returns JSON Schema
-  (if (zero? depth)
-    {:type "function"
-     :function {:name name
-                :description desc
-                :parameters base-map}}
-    base-map))</code></pre>
-  </div>
-  <div class="diff-after">
-    <div class="diff-label">✔ After &mdash; two functions, clear contracts</div>
-    <pre><code class="language-clojure">(defn malli->json-schema [schema]
-  ;; Always returns plain JSON Schema
-  {:type "object" :properties ... :required ...})
-
-(defn malli->tool-definition [schema]
-  ;; Wraps for tool calling
-  {:type "function"
-   :function {:name name
-              :description desc
-              :parameters (malli->json-schema schema)}})</code></pre>
-  </div>
-</div>
-
-<!-- 2.5 -->
-<h3><span class="tag tag-clarity">Structure</span> Decouple Structured Output from Event Loop</h3>
-
-<p><code>consume-events</code> knew about <code>structured-promise</code> and <code>schema</code> &mdash; it delivered errors to the structured promise on <code>:error</code> events and spawned a future for parsing. This coupled the event consumer to a feature it shouldn't know about.</p>
-
-<div class="wins">
-  <strong>After:</strong> <code>consume-events</code> only knows about text, tool-calls, usage, and channel fan-out. The structured-output future moved to <code>request</code>, where it wraps the event loop.
-</div>
-
-<!-- 2.6 -->
-<h3><span class="tag tag-dedup">Extract</span> <code>build-agent-step</code> Helper</h3>
-
-<p>The densest block in <code>run-agent</code> &mdash; 7 bindings, conditional message construction, history assembly &mdash; became a named function. The loop body now reads as:</p>
-
-<pre><code class="language-clojure">;; The entire inner loop body
-(let [{:keys [history-msgs step]} (build-agent-step name->fn parsed-calls text)
+<pre><code class="language-clojure">(let [{:keys [history-msgs step]} (build-agent-step name->fn parsed-calls text)
       next-history (into history history-msgs)
       next-steps   (if step (conj steps step) steps)]
   (if (>= (inc n) max-steps)
     {:text text :history next-history :steps next-steps :truncated true}
     (recur next-history next-steps (inc n))))</code></pre>
 
-<!-- 2.7 -->
-<h3><span class="tag tag-api">API</span> Rename <code>:schema</code> &rarr; <code>:output-schema</code></h3>
 
-<p>The <code>:schema</code> option key shadowed the <code>schema</code> namespace alias and was ambiguous &mdash; Malli schema? JSON Schema? Structured output option? Renamed across the entire surface:</p>
+<h2>4. Naming</h2>
 
-<ul>
-  <li>Protocol parameter: <code>schema</code> &rarr; <code>output-schema</code></li>
-  <li>Both backends: <code>build-body</code>, <code>data-&gt;internal-events</code>, <code>request-stream</code></li>
-  <li>Core: option key, destructuring, docstrings</li>
-  <li>Tests, scripts, sandbox, README</li>
-</ul>
-
-<p>Internal uses of <code>:schema</code> in error data and Malli metadata lookups are unchanged &mdash; they refer to actual schemas, not the structured output option.</p>
-
-<!-- ═══════════════════════════════════════════ -->
-<!-- SUMMARY                                     -->
-<!-- ═══════════════════════════════════════════ -->
-
-<h2>Summary</h2>
+<p>Replaced abbreviations across 6 files:</p>
 
 <table>
-  <thead>
-    <tr><th>Change</th><th>Before</th><th>After</th><th>Key Win</th></tr>
-  </thead>
+  <thead><tr><th>Before</th><th>After</th><th>Why</th></tr></thead>
   <tbody>
-    <tr>
-      <td><code>consume-events</code></td>
-      <td>5 positional recur args, tangled state+I/O</td>
-      <td>Pure <code>next-state</code> fn + mechanical go-loop</td>
-      <td>Testable state transitions</td>
-    </tr>
-    <tr>
-      <td><code>data-&gt;internal-events</code></td>
-      <td>nil | map | vector</td>
-      <td>nil | seq (always)</td>
-      <td>One shape, no unwrapping</td>
-    </tr>
-    <tr>
-      <td><code>run-agent</code> loop</td>
-      <td>Two parallel branches, 2&times; max-steps</td>
-      <td>One <code>let</code>, one check, one recur</td>
-      <td>No drifting duplicates</td>
-    </tr>
-    <tr>
-      <td>Naming</td>
-      <td><code>bh</code>, <code>tc</code>, <code>s</code>, <code>cb</code></td>
-      <td><code>backend</code>, <code>parsed-calls</code>, <code>fn-schema</code>, <code>on-response</code></td>
-      <td>Reads without decoding</td>
-    </tr>
-    <tr>
-      <td>Consistency</td>
-      <td>5&times; inline exception check, 2&times; validation code</td>
-      <td><code>unwrap!</code>, parameterized <code>validate-opts</code></td>
-      <td>One pattern, one place</td>
-    </tr>
-    <tr>
-      <td><code>malli-&gt;json-schema</code></td>
-      <td>Returns tool wrapper at depth 0, schema at depth &gt; 0</td>
-      <td>Always JSON Schema; separate <code>malli-&gt;tool-definition</code></td>
-      <td>Name matches behavior</td>
-    </tr>
-    <tr>
-      <td>Structured output</td>
-      <td>Coupled to <code>consume-events</code></td>
-      <td>Lives in <code>request</code></td>
-      <td>Event loop is generic</td>
-    </tr>
-    <tr>
-      <td><code>:schema</code> option</td>
-      <td>Shadows ns alias, ambiguous</td>
-      <td><code>:output-schema</code></td>
-      <td>Unambiguous intent</td>
-    </tr>
+    <tr><td><code>bh</code></td><td><code>backend</code></td><td>Non-obvious alias</td></tr>
+    <tr><td><code>tc</code></td><td><code>parsed-calls</code></td><td>Cryptic 2-letter binding (6 uses)</td></tr>
+    <tr><td><code>:tc-index</code></td><td><code>:tool-call-positions</code></td><td>Unclear what it maps</td></tr>
+    <tr><td><code>merged</code></td><td><code>resolved</code></td><td>Describes <em>how</em>, not <em>what</em></td></tr>
+    <tr><td><code>base-opts</code></td><td><code>request-opts</code></td><td>Base relative to what?</td></tr>
+    <tr><td><code>cb</code></td><td><code>on-response</code></td><td>Generic callback name</td></tr>
+    <tr><td><code>s</code>, <code>t</code></td><td><code>fn-schema</code>, <code>schema-type</code></td><td>Single letters through 4 conditionals</td></tr>
+    <tr><td><code>event-&gt;internal</code></td><td><code>parse-sse-data</code></td><td>Input isn't an "event"</td></tr>
   </tbody>
 </table>
 
-<!-- Commit log -->
-<h2>Commit Log</h2>
 
-<table class="commit-log">
+<h2>5. Consistency</h2>
+
+<ul>
+  <li><strong><code>unwrap!</code> helper</strong> &mdash; the check-if-exception-and-throw pattern appeared 5 times with slight variations. Now one function.</li>
+  <li><strong>Parameterized <code>validate-opts</code></strong> &mdash; <code>request</code> and <code>run-agent</code> both validated keys but used different code. Now one function with an optional key set arg.</li>
+  <li><strong><code>map-&gt;Response</code></strong> &mdash; replaced 6-field positional <code>-&gt;Response</code>. Positional construction silently breaks when fields shift.</li>
+  <li><strong>Single <code>status-errors</code> table</strong> &mdash; <code>errors.clj</code> had two independent <code>case</code> expressions on HTTP status codes. Now one data table drives both.</li>
+</ul>
+
+
+<h2>6. Split <code>malli-&gt;json-schema</code></h2>
+
+<p>At depth 0 it returned a tool definition <code>{:type "function" :function {...}}</code>. At depth &gt; 0 it returned a JSON Schema <code>{:type "object" ...}</code>. The name said JSON Schema but half the time it returned a tool wrapper.</p>
+
+<p>Now <code>malli-&gt;json-schema</code> always returns plain JSON Schema. <code>malli-&gt;tool-definition</code> wraps it for tool calling. Backends call the one they need.</p>
+
+
+<h2>7. Decouple structured output from event loop</h2>
+
+<p><code>consume-events</code> knew about <code>structured-promise</code> and the output schema &mdash; it delivered errors to the promise and spawned a parsing future. Now <code>consume-events</code> only handles text, tool-calls, usage, and channel fan-out. The structured-output future lives in <code>request</code>.</p>
+
+
+<h2>8. Rename <code>:schema</code> &rarr; <code>:output-schema</code></h2>
+
+<p>The <code>:schema</code> option key shadowed the <code>schema</code> namespace alias and was ambiguous (Malli schema? JSON Schema? structured output option?). Renamed across the protocol, both backends, core, tests, scripts, and README. Internal uses in error data and Malli metadata lookups unchanged.</p>
+
+
+<h2>Commits</h2>
+
+<table>
   <thead><tr><th>Commit</th><th>Description</th></tr></thead>
   <tbody>
-    <tr><td>9a5fe75</td><td>Decomplect: pure state machine, uniform event contract, single agent path</td></tr>
-    <tr><td>256ce54</td><td>Naming pass: replace cryptic abbreviations with clear names</td></tr>
-    <tr><td>7dedabd</td><td>Consistency pass: unwrap!, unified validation, map-&gt;Response, error table</td></tr>
-    <tr><td>b9b35e9</td><td>Comments pass: add &ldquo;why&rdquo; comments, remove dead code, fix description default</td></tr>
-    <tr><td>98dbe35</td><td>Split schema dual personality: malli-&gt;json-schema vs malli-&gt;tool-definition</td></tr>
-    <tr><td>f264d52</td><td>Flatten nested let in request into single let block</td></tr>
-    <tr><td>99086a3</td><td>Decouple structured output from consume-events</td></tr>
-    <tr><td>409aeb9</td><td>Extract build-agent-step helper from run-agent loop</td></tr>
-    <tr><td>497d04b</td><td>Rename :schema to :output-schema across the entire API</td></tr>
+    <tr><td><code>9a5fe75</code></td><td>Pure state machine, uniform event contract, single agent path</td></tr>
+    <tr><td><code>256ce54</code></td><td>Naming pass</td></tr>
+    <tr><td><code>7dedabd</code></td><td>Consistency pass: unwrap!, validation, map-&gt;Response, error table</td></tr>
+    <tr><td><code>b9b35e9</code></td><td>Comments pass: "why" comments, dead code removal</td></tr>
+    <tr><td><code>98dbe35</code></td><td>Split malli-&gt;json-schema vs malli-&gt;tool-definition</td></tr>
+    <tr><td><code>f264d52</code></td><td>Flatten nested let in request</td></tr>
+    <tr><td><code>99086a3</code></td><td>Decouple structured output from consume-events</td></tr>
+    <tr><td><code>409aeb9</code></td><td>Extract build-agent-step helper</td></tr>
+    <tr><td><code>497d04b</code></td><td>Rename :schema to :output-schema</td></tr>
   </tbody>
 </table>
-
-<div class="card" style="background: linear-gradient(135deg, #eef2ff, #faf5ff); border-color: #c7d2fe; margin-top: 2rem;">
-  <h3 style="color: var(--accent); margin-top: 0;">Net result</h3>
-  <p style="color: #4338ca; margin-bottom: 0;"><strong>74 tests, 237 assertions, 0 failures.</strong> 16 files touched, 264 lines added, 225 removed. The state machine is pure and testable. The event contract is uniform. Every name says what it means. The cleanup plan is complete.</p>
-</div>
-
-</div>
 
 <script>hljs.highlightAll();</script>
 </body>
