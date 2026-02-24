@@ -15,7 +15,7 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (def ^:private known-keys
-  #{:model :system-prompt :output-schema :tools :tool-choice :temperature :max-tokens :top-p :provider-opts})
+  #{:model :system-prompt :schema :tools :tool-choice :temperature :max-tokens :top-p :provider-opts})
 
 (def ^:private agent-keys
   "Additional keys accepted by run-agent."
@@ -209,7 +209,7 @@
     :chunks      - channel of text chunks as they stream
     :events      - channel of raw events
     :usage       - promise of token usage info
-    :structured  - promise of parsed structured data (when :output-schema provided)
+    :structured  - promise of parsed structured data (when :schema provided)
     :tool-calls  - promise of tool calls vector (when :tools provided)
 
    Supports @(request ...) via IDeref to block and get text.
@@ -217,20 +217,20 @@
    Input is the last arg — a string (prompt) or vector (message history).
 
    (request ai \"hello\")                              ; simple
-   (request ai {:output-schema s} \"extract this\")            ; with opts
+   (request ai {:schema s} \"extract this\")            ; with opts
    (request ai {:tools t} [{:role :user ...} ...])    ; with history"
   ([provider input]
    (request provider {} input))
   ([provider opts input]
    (let [resolved      (validate-opts (helpers/deep-merge (:defaults provider) opts))
-         {:keys [model system-prompt output-schema tools tool-choice]} resolved
+         {:keys [model system-prompt schema tools tool-choice]} resolved
          _             (when-not model
                          (throw (errors/error "No model specified"
                                               {:error-type :llm/invalid-request :opts resolved})))
          provider-opts (extract-provider-opts resolved)
          messages      (build-messages input)
          source-chan   (proto/request-stream provider model system-prompt messages
-                                            output-schema tools tool-choice
+                                            schema tools tool-choice
                                             (or provider-opts {}))
          ;; Dropping buffers: slow consumers (or nobody reading :chunks/:events)
          ;; must not block the go-loop that delivers text-promise.
@@ -252,14 +252,14 @@
 
      ;; Structured output: wait for text in a separate thread, parse + validate.
      ;; Decoupled from consume-events so the event loop stays generic.
-     (if output-schema
+     (if schema
        (future
          (try
            (let [text @text-p]
              (deliver structured-p
                       (if (instance? Exception text)
                         text
-                        (parse-structured-output text output-schema))))
+                        (parse-structured-output text schema))))
            (catch Exception e
              (deliver structured-p e))))
        (deliver structured-p nil))
@@ -371,46 +371,23 @@
   [tool-call-id content]
   {:role :tool :tool-call-id tool-call-id :content (str content)})
 
-(defn- build-agent-step
-  "Execute tool calls and build the history messages + step record for one
-   iteration of the agent loop.
-
-   Returns {:history-msgs [assistant-msg tool-result-msgs...]
-            :step         {:tool-calls [...] :tool-results [...]}  or nil}"
-  [name->fn parsed-calls text]
-  (if (seq parsed-calls)
-    (let [results (mapv (fn [tc]
-                          (try
-                            {:call tc :result (execute-tool-call name->fn tc)}
-                            (catch Exception e
-                              {:call tc :result (str "Error: " (.getMessage e)) :error e})))
-                        parsed-calls)
-          assistant-msg  (tool-calls->assistant-message parsed-calls text)
-          result-msgs    (mapv (fn [{:keys [call result]}]
-                                 (tool-result (:id call) (str result)))
-                               results)]
-      {:history-msgs (into [assistant-msg] result-msgs)
-       :step         {:tool-calls   (vec parsed-calls)
-                      :tool-results (mapv :result results)}})
-    {:history-msgs [{:role :assistant :content (or text "")}]
-     :step         nil}))
 
 (defn generate
   "Blocking generation. Returns the natural value:
 
    - String input → string back
-   - With :output-schema → parsed structured data
+   - With :schema → parsed structured data
 
    (generate ai \"hello\")
    ;; => \"Hello!\"
 
-   (generate ai {:output-schema person-schema} \"extract this\")
+   (generate ai {:schema person-schema} \"extract this\")
    ;; => {:name \"Alice\" :age 30}
 
    Common options:
      :model          - model name string
      :system-prompt   - system message string
-     :output-schema          - Malli schema for structured output
+     :schema          - Malli schema for structured output
      :temperature     - float, e.g. 0.7
      :max-tokens      - int, max tokens to generate
      :top-p           - float, nucleus sampling
@@ -436,7 +413,7 @@
    (generate provider {} input))
   ([provider opts input]
    (let [tools (or (:tools opts) (:tools (:defaults provider)))
-         output-schema (or (:output-schema opts) (:output-schema (:defaults provider)))
+         schema (or (:schema opts) (:schema (:defaults provider)))
          input-schemas (when tools (tools->input-schemas tools))
          api-opts (if tools
                     (assoc (dissoc opts :tools) :tools input-schemas)
@@ -452,7 +429,7 @@
           :tool-calls parsed-calls
           :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)})
 
-       output-schema
+       schema
        (unwrap! @(:structured response))
 
        :else text))))
@@ -485,7 +462,7 @@
    For structured output after tool use, compose with generate:
 
      (let [{:keys [history]} (run-agent ai tools \"find user 123\")]
-       (generate ai {:output-schema result-schema} history))
+       (generate ai {:schema result-schema} history))
 
    Stop the loop explicitly:
 
@@ -523,9 +500,26 @@
             :steps      steps
             :tool-calls (not-empty parsed-calls)}
 
-           (let [{:keys [history-msgs step]} (build-agent-step name->fn parsed-calls text)
-                 next-history (into history history-msgs)
-                 next-steps   (if step (conj steps step) steps)]
+           (let [results  (when (seq parsed-calls)
+                            (mapv (fn [tc]
+                                    (try
+                                      {:call tc :result (execute-tool-call name->fn tc)}
+                                      (catch Exception e
+                                        {:call tc :result (str "Error: " (.getMessage e)) :error e})))
+                                  parsed-calls))
+                 msg      (if results
+                            (tool-calls->assistant-message parsed-calls text)
+                            {:role :assistant :content (or text "")})
+                 msgs     (if results
+                            (into [msg] (mapv (fn [{:keys [call result]}]
+                                               (tool-result (:id call) (str result)))
+                                             results))
+                            [msg])
+                 next-history (into history msgs)
+                 next-steps   (if results
+                                (conj steps {:tool-calls   (vec parsed-calls)
+                                             :tool-results (mapv :result results)})
+                                steps)]
              (if (>= (inc n) max-steps)
                {:text text :history next-history :steps next-steps :truncated true}
                (recur next-history next-steps (inc n))))))))))
