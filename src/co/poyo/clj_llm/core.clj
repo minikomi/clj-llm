@@ -123,6 +123,8 @@
                                      :clj-llm/req-start req-start
                                      :clj-llm/req-end (System/currentTimeMillis)
                                      :clj-llm/duration (- (System/currentTimeMillis) req-start))))
+                    (when-not schema
+                      (deliver structured-promise nil))
                     (a/close! text-chunks-chan)
                     (a/close! events-chan))]
 
