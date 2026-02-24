@@ -172,16 +172,15 @@
   "Consume events from source-chan, fan out to chunks/events channels,
    and deliver promises when the stream completes.
 
-   State transitions are pure (next-state). Side effects happen after."
+   State transitions are pure (next-state). This function knows nothing
+   about structured output — that concern lives in `request`."
   [source-chan {:keys [text-chunks-chan events-chan
-                       text-promise usage-promise
-                       structured-promise tool-calls-promise
-                       schema provider-opts req-start]}]
+                       text-promise usage-promise tool-calls-promise
+                       provider-opts req-start]}]
   (let [finalize! (fn [state]
                     (deliver text-promise (state->text state))
                     (deliver tool-calls-promise (not-empty (:tool-calls state)))
                     (deliver usage-promise (state->usage state provider-opts req-start))
-                    (when-not schema (deliver structured-promise nil))
                     (a/close! text-chunks-chan)
                     (a/close! events-chan))]
 
@@ -193,28 +192,12 @@
           (>! events-chan event)
           (when (= :content (:type event))
             (>! text-chunks-chan (:content event)))
-          (when (and (:error state') (not (realized? structured-promise)))
-            (deliver structured-promise
-                     (errors/error "LLM streaming error" {:error-type :llm/server-error
-                                                          :event event})))
           ;; Continue or finalize
           (if (:done? state')
             (finalize! state')
             (recur state')))
         ;; Source channel closed without :done
-        (finalize! state)))
-
-    ;; Structured output processing (waits for text in a separate thread)
-    (when schema
-      (future
-        (try
-          (let [text @text-promise]
-            (deliver structured-promise
-                     (if (instance? Exception text)
-                       text
-                       (parse-structured-output text schema))))
-          (catch Exception e
-            (deliver structured-promise e)))))))
+        (finalize! state)))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Core API
@@ -263,11 +246,23 @@
                       :events-chan        events
                       :text-promise       text-p
                       :usage-promise      usage-p
-                      :structured-promise structured-p
                       :tool-calls-promise tool-calls-p
-                      :schema            schema
                       :provider-opts     provider-opts
                       :req-start         (System/currentTimeMillis)})
+
+     ;; Structured output: wait for text in a separate thread, parse + validate.
+     ;; Decoupled from consume-events so the event loop stays generic.
+     (if schema
+       (future
+         (try
+           (let [text @text-p]
+             (deliver structured-p
+                      (if (instance? Exception text)
+                        text
+                        (parse-structured-output text schema))))
+           (catch Exception e
+             (deliver structured-p e))))
+       (deliver structured-p nil))
 
      (map->Response {:chunks     text-chunks
                      :events     events
