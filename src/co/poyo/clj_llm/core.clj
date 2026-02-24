@@ -1,13 +1,14 @@
 (ns co.poyo.clj-llm.core
   (:require
-   [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.errors :as errors]
-   [co.poyo.clj-llm.helpers :as helpers]
-   [cheshire.core :as json]
    [clojure.core.async :as a :refer [go-loop <! <!! >! chan]]
+   [clojure.set]
+   [cheshire.core :as json]
    [malli.core :as m]
    [malli.error :as me]
-   [malli.transform :as mt]))
+   [malli.transform :as mt]
+   [co.poyo.clj-llm.protocol :as proto]
+   [co.poyo.clj-llm.errors :as errors]
+   [co.poyo.clj-llm.helpers :as helpers]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Known option keys (everything else is rejected)
@@ -51,16 +52,6 @@
     (.write writer "<pending>"))
   (.write writer "}"))
 
-;; ════════════════════════════════════════════════════════════════════
-;; Provider defaults
-;; ════════════════════════════════════════════════════════════════════
-;; Provider defaults — just data on the :defaults key.
-;;
-;;   (def ai (assoc (openai/backend) :defaults {:model "gpt-4o-mini"}))
-;;   (def extractor (update ai :defaults merge {:schema person-schema}))
-;;
-;; generate merges :defaults with per-call opts (per-call wins).
-;; ════════════════════════════════════════════════════════════════════
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Internal helpers
@@ -107,14 +98,8 @@
    Promoted keys are merged into :provider-opts (explicit :provider-opts wins on conflict)."
   [opts]
   (let [promoted (select-keys opts api-forward-keys)
-        explicit (:provider-opts opts)
-        ;; rename :max-tokens -> :max_tokens for the API
-        promoted (if (contains? promoted :max-tokens)
-                   (-> promoted
-                       (assoc :max_tokens (:max-tokens promoted))
-                       (dissoc :max-tokens))
-                   promoted)]
-    (merge promoted explicit)))
+        promoted (clojure.set/rename-keys promoted {:max-tokens :max_tokens})]
+    (merge promoted (:provider-opts opts))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Event stream consumer
@@ -222,13 +207,11 @@
    (request provider {} input))
   ([provider opts input]
    (let [merged (validate-opts (helpers/deep-merge (:defaults provider) opts))
-         {:keys [model system-prompt schema tools tool-choice]} merged
-
-         _ (when-not model
-             (throw (errors/error "No model specified"
-                                  {:error-type :llm/invalid-request :opts merged})))
-
-         provider-opts (extract-provider-opts merged)
+         {:keys [model system-prompt schema tools tool-choice]} merged]
+     (when-not model
+       (throw (errors/error "No model specified"
+                            {:error-type :llm/invalid-request :opts merged})))
+     (let [provider-opts (extract-provider-opts merged)
          messages      (build-messages input)
          source-chan    (proto/request-stream provider model system-prompt messages
                                              schema tools tool-choice
@@ -251,7 +234,7 @@
                       :provider-opts   provider-opts
                       :req-start       (System/currentTimeMillis)})
 
-     (->Response text-chunks events text-p usage-p structured-p tool-calls-p))))
+       (->Response text-chunks events text-p usage-p structured-p tool-calls-p)))))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."
@@ -275,7 +258,7 @@
                                                         arguments
                                                         (json/generate-string arguments))}})
                              tool-calls)}
-    (not (empty? text)) (assoc :content text)))
+    (seq text) (assoc :content text)))
 
 (defn- resolve-tool-schema
   "Get the Malli function schema ([:=> ...] or [:-> ...]) from a tool.
@@ -329,6 +312,22 @@
   [tools]
   (mapv (comp extract-input-schema resolve-tool-schema) tools))
 
+(defn- build-name->fn
+  "Build a map from tool name (string) to tool function."
+  [tools input-schemas]
+  (into {} (map (fn [t s] [(extract-tool-name s) t]) tools input-schemas)))
+
+(defn- execute-tool-call
+  "Look up and execute a single tool call. Returns the result."
+  [name->fn tool-call]
+  (let [f (or (get name->fn (:name tool-call))
+              (throw (errors/error
+                      (str "Unknown tool: " (:name tool-call))
+                      {:error-type :llm/invalid-request
+                       :name       (:name tool-call)
+                       :available  (keys name->fn)})))]
+    (f (:arguments tool-call))))
+
 (defn generate
   "Blocking generation. Returns the natural value:
 
@@ -376,24 +375,15 @@
                     (assoc (dissoc opts :tools) :tools input-schemas)
                     opts)
          response (request provider api-opts input)
-         text     @(:text response)
-         _        (when (instance? Exception text) (throw text))]
+         text     @(:text response)]
+     (when (instance? Exception text) (throw text))
      (cond
        tools
-       (let [name->fn (into {} (map (fn [t s] [(extract-tool-name s) t]) tools input-schemas))
+       (let [name->fn (build-name->fn tools input-schemas)
              tc (or (parse-tool-calls @(:tool-calls response)) [])]
-         (if (seq tc)
-           (let [results (mapv (fn [t]
-                                (let [f (or (get name->fn (:name t))
-                                            (throw (errors/error
-                                                    (str "Unknown tool: " (:name t))
-                                                    {:error-type :llm/invalid-request
-                                                     :name (:name t)
-                                                     :available (keys name->fn)})))]
-                                  (f (:arguments t))))
-                              tc)]
-             {:text (not-empty text) :tool-calls tc :tool-results results})
-           {:text (not-empty text) :tool-calls [] :tool-results []}))
+         {:text       (not-empty text)
+          :tool-calls tc
+          :tool-results (mapv (partial execute-tool-call name->fn) tc)})
 
        (:schema merged)
        (let [s @(:structured response)]
@@ -447,18 +437,18 @@
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
-   (let [_          (let [unknown (remove (into known-keys agent-keys) (keys opts))]
-                      (when (seq unknown)
-                        (throw (errors/error
-                                (str "Unknown options: " (pr-str (vec unknown)))
-                                {:error-type   :llm/invalid-request
-                                 :unknown-keys (vec unknown)}))))
-         _          (when-not (and (sequential? tools) (seq tools))
-                      (throw (errors/error "run-agent requires a non-empty tools vector"
-                                          {:error-type :llm/invalid-request
-                                           :tools tools})))
-         input-schemas (tools->input-schemas tools)
-         name->fn   (into {} (map (fn [t s] [(extract-tool-name s) t]) tools input-schemas))
+   (let [unknown (remove (into known-keys agent-keys) (keys opts))]
+     (when (seq unknown)
+       (throw (errors/error
+               (str "Unknown options: " (pr-str (vec unknown)))
+               {:error-type   :llm/invalid-request
+                :unknown-keys (vec unknown)}))))
+   (when-not (and (sequential? tools) (seq tools))
+     (throw (errors/error "run-agent requires a non-empty tools vector"
+                          {:error-type :llm/invalid-request
+                           :tools tools})))
+   (let [input-schemas (tools->input-schemas tools)
+         name->fn   (build-name->fn tools input-schemas)
          max-steps  (or (:max-steps opts) 10)
          stop-when  (or (:stop-when opts)
                         (fn [{:keys [tool-calls]}] (empty? tool-calls)))
@@ -468,12 +458,12 @@
      (loop [history (build-messages input)
             steps []
             n 0]
-       (let [response   (request provider base-opts history)
-             text       @(:text response)
-             _          (when (instance? Exception text) (throw text))
-             tc         (parse-tool-calls @(:tool-calls response))
-             step-ctx   {:tool-calls (or tc []) :text text}]
-         (if (stop-when step-ctx)
+       (let [response (request provider base-opts history)
+             text     @(:text response)
+             _        (when (instance? Exception text) (throw text))
+             tc       (parse-tool-calls @(:tool-calls response))
+             stop?    (stop-when {:tool-calls (or tc []) :text text})]
+         (if stop?
            ;; Stop condition met - return current state
            {:text    text
             :history (conj history {:role :assistant :content (or text "")})
@@ -484,13 +474,7 @@
              (if (>= (inc n) max-steps)
                {:text text :history (conj history msg) :steps steps :truncated true}
                (let [results    (mapv (fn [t]
-                                        (let [f (or (get name->fn (:name t))
-                                                    (throw (errors/error
-                                                            (str "Unknown tool: " (:name t))
-                                                            {:error-type :llm/invalid-request
-                                                             :name (:name t)
-                                                             :available (keys name->fn)})))]
-                                          {:call t :result (f (:arguments t))}))
+                                        {:call t :result (execute-tool-call name->fn t)})
                                       tc)
                      result-msgs (mapv (fn [{:keys [call result]}]
                                         (tool-result (:id call) (str result)))

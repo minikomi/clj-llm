@@ -4,10 +4,11 @@
    [camel-snake-kebab.core :as csk]
    [cheshire.core :as json]
    [clojure.core.async :as a :refer [chan go <! >! close!]]
+   [clojure.set]
+   [clojure.walk :as walk]
    [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse]
-   [co.poyo.clj-llm.errors :as errors]
-   [clojure.walk :as walk]))
+   [co.poyo.clj-llm.errors :as errors]))
 
 (defn convert-options-for-api
   "Convert kebab-case options to snake_case format for API calls"
@@ -20,15 +21,15 @@
          x))
      opts)))
 
+(def ^:private message-key-renames
+  {:tool-calls :tool_calls
+   :tool-call-id :tool_call_id})
+
 (defn normalize-messages
   "Convert kebab-case keys in messages to snake_case for API compatibility.
    Handles :tool-calls -> :tool_calls, :tool-call-id -> :tool_call_id."
   [messages]
-  (mapv (fn [msg]
-          (cond-> msg
-            (:tool-calls msg)  (-> (assoc :tool_calls (:tool-calls msg)) (dissoc :tool-calls))
-            (:tool-call-id msg) (-> (assoc :tool_call_id (:tool-call-id msg)) (dissoc :tool-call-id))))
-        messages))
+  (mapv #(clojure.set/rename-keys % message-key-renames) messages))
 
 (defn handle-error-response
   "Parse error response from API and create appropriate error event.
@@ -73,7 +74,7 @@
   [url headers body event->internal provider-name]
   (let [events-chan (chan 1024)]
     (net/post-stream url headers body
-                     (fn handle-response [response]
+                     (fn [response]
                        (if (= 200 (:status response))
                          (let [sse-chan (sse/parse-sse (:body response))]
                            (go
