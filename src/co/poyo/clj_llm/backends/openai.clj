@@ -7,7 +7,7 @@
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.errors :as errors]
-   [co.poyo.clj-llm.backends.backend-helpers :as bh]))
+   [co.poyo.clj-llm.backends.backend-helpers :as backend]))
 
 (def ^:private default-config
   {:api-base "https://api.openai.com/v1"})
@@ -20,7 +20,7 @@
 (defn- build-body
   "Build OpenAI API request body"
   [model system-prompt messages schema tools tool-choice opts]
-  (let [messages (bh/normalize-messages messages)
+  (let [messages (backend/normalize-messages messages)
         messages-with-system (if system-prompt
                                (into [{:role "system" :content system-prompt}]
                                      messages)
@@ -33,7 +33,7 @@
                        schema
                        {:tools [(schema/malli->json-schema schema)]
                         :tool_choice "required"})
-        api-opts (bh/convert-options-for-api opts)]
+        api-opts (backend/convert-options-for-api opts)]
     (merge
      {:stream true
       :stream_options {:include_usage true}
@@ -60,20 +60,20 @@
 
       tool-calls
       (let [convert-one (fn [tool-call]
-                          (let [has-name? (get-in tool-call [:function :name])
-                                has-args? (not-empty (get-in tool-call [:function :arguments]))]
+                          (let [fn-name (get-in tool-call [:function :name])
+                                fn-args (not-empty (get-in tool-call [:function :arguments]))]
                             (cond
-                              (and schema has-args?)
+                              (and schema fn-args)
                               {:type :content :content (get-in tool-call [:function :arguments])}
 
-                              (and tools has-name?)
+                              (and tools fn-name)
                               {:type :tool-call
                                :id (get tool-call :id)
                                :index (get tool-call :index)
                                :name (get-in tool-call [:function :name])
                                :arguments ""}
 
-                              (and tools has-args?)
+                              (and tools fn-args)
                               {:type :tool-call-delta
                                :index (get tool-call :index)
                                :arguments (get-in tool-call [:function :arguments])}
@@ -105,7 +105,7 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (bh/create-event-stream url headers body
+      (backend/create-event-stream url headers body
                                   #(data->internal-events % schema tools)
                                   "openai"))))
 

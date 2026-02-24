@@ -107,7 +107,7 @@
 
 (def ^:private init-state
   "Initial accumulator for the event stream consumer."
-  {:chunks [] :tool-calls [] :tc-index {} :usage {} :finish-reason nil :done? false :error nil})
+  {:chunks [] :tool-calls [] :tool-call-positions {} :usage {} :finish-reason nil :done? false :error nil})
 
 (defn- next-state
   "Pure state transition: state × event → state'.
@@ -122,10 +122,10 @@
           call (assoc event :arguments (or (:arguments event) ""))]
       (-> state
           (update :tool-calls conj call)
-          (assoc-in [:tc-index idx] (count (:tool-calls state)))))
+          (assoc-in [:tool-call-positions idx] (count (:tool-calls state)))))
 
     :tool-call-delta
-    (let [pos (get (:tc-index state) (:index event))]
+    (let [pos (get (:tool-call-positions state) (:index event))]
       (if pos
         (update-in state [:tool-calls pos :arguments] str (:arguments event))
         state))
@@ -229,12 +229,12 @@
   ([provider input]
    (request provider {} input))
   ([provider opts input]
-   (let [merged (validate-opts (helpers/deep-merge (:defaults provider) opts))
-         {:keys [model system-prompt schema tools tool-choice]} merged]
+   (let [resolved (validate-opts (helpers/deep-merge (:defaults provider) opts))
+         {:keys [model system-prompt schema tools tool-choice]} resolved]
      (when-not model
        (throw (errors/error "No model specified"
-                            {:error-type :llm/invalid-request :opts merged})))
-     (let [provider-opts (extract-provider-opts merged)
+                            {:error-type :llm/invalid-request :opts resolved})))
+     (let [provider-opts (extract-provider-opts resolved)
          messages      (build-messages input)
          source-chan    (proto/request-stream provider model system-prompt messages
                                              schema tools tool-choice
@@ -304,10 +304,10 @@
   "Extract the input map schema from a Malli function schema.
    Supports [:=> [:cat <map-schema>] <ret>] and [:-> <map-schema> <ret>]."
   [fn-schema]
-  (let [s (m/schema fn-schema)
-        t (m/type s)
+  (let [fn-schema (m/schema fn-schema)
+        schema-type (m/type fn-schema)
         ;; :-> is a flat proxy for :=> -- deref to normalize
-        resolved (if (= :-> t) (m/deref s) s)
+        resolved (if (= :-> schema-type) (m/deref fn-schema) fn-schema)
         resolved-type (m/type resolved)]
     (when-not (= :=> resolved-type)
       (throw (errors/error
@@ -403,10 +403,10 @@
      (cond
        tools
        (let [name->fn (build-name->fn tools input-schemas)
-             tc (or (parse-tool-calls @(:tool-calls response)) [])]
+             parsed-calls (or (parse-tool-calls @(:tool-calls response)) [])]
          {:text       (not-empty text)
-          :tool-calls tc
-          :tool-results (mapv (partial execute-tool-call name->fn) tc)})
+          :tool-calls parsed-calls
+          :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)})
 
        schema
        (let [s @(:structured response)]
@@ -475,34 +475,34 @@
          max-steps  (or (:max-steps opts) 10)
          stop-when  (or (:stop-when opts)
                         (fn [{:keys [tool-calls]}] (empty? tool-calls)))
-         base-opts  (-> opts
-                        (dissoc :max-steps :stop-when)
-                        (assoc :tools input-schemas))]
+         request-opts (-> opts
+                          (dissoc :max-steps :stop-when)
+                          (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
             n 0]
-       (let [response (request provider base-opts history)
+       (let [response (request provider request-opts history)
              text     @(:text response)
              _        (when (instance? Exception text) (throw text))
-             tc       (or (parse-tool-calls @(:tool-calls response)) [])
-             stop?    (stop-when {:tool-calls tc :text text})]
+             parsed-calls (or (parse-tool-calls @(:tool-calls response)) [])
+             stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
            {:text       text
             :history    (conj history {:role :assistant :content (or text "")})
             :steps      steps
-            :tool-calls (not-empty tc)}
+            :tool-calls (not-empty parsed-calls)}
 
            ;; Build next history + step
-           (let [has-tc?  (seq tc)
+           (let [has-tc?  (seq parsed-calls)
                  results  (when has-tc?
                             (mapv (fn [t]
                                     (try
                                       {:call t :result (execute-tool-call name->fn t)}
                                       (catch Exception e
                                         {:call t :result (str "Error: " (.getMessage e)) :error e})))
-                                  tc))
+                                  parsed-calls))
                  msg      (if has-tc?
-                            (tool-calls->assistant-message tc text)
+                            (tool-calls->assistant-message parsed-calls text)
                             {:role :assistant :content (or text "")})
                  msgs     (if has-tc?
                             (into [msg] (mapv (fn [{:keys [call result]}]
@@ -511,7 +511,7 @@
                             [msg])
                  next-history (into history msgs)
                  next-steps   (if has-tc?
-                                (conj steps {:tool-calls  (vec tc)
+                                (conj steps {:tool-calls  (vec parsed-calls)
                                              :tool-results (mapv :result results)})
                                 steps)]
              (if (>= (inc n) max-steps)

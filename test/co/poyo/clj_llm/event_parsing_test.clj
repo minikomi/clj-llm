@@ -64,24 +64,24 @@
    Returns the final assembled tool calls."
   [internal-events]
   (reduce
-   (fn [{:keys [tool-calls tc-index]} event]
+   (fn [{:keys [tool-calls tool-call-positions]} event]
      (case (:type event)
        :tool-call
        (let [idx (or (:index event) (count tool-calls))
              call (assoc event :arguments (or (:arguments event) ""))]
          {:tool-calls (conj tool-calls call)
-          :tc-index (assoc tc-index idx (count tool-calls))})
+          :tool-call-positions (assoc tool-call-positions idx (count tool-calls))})
 
        :tool-call-delta
-       (let [pos (get tc-index (:index event))]
+       (let [pos (get tool-call-positions (:index event))]
          {:tool-calls (if pos
                         (update-in tool-calls [pos :arguments] str (:arguments event))
                         tool-calls)
-          :tc-index tc-index})
+          :tool-call-positions tool-call-positions})
 
        ;; pass through other events
-       {:tool-calls tool-calls :tc-index tc-index}))
-   {:tool-calls [] :tc-index {}}
+       {:tool-calls tool-calls :tool-call-positions tool-call-positions}))
+   {:tool-calls [] :tool-call-positions {}}
    internal-events))
 
 ;; ════════════════════════════════════════════════════════════════════

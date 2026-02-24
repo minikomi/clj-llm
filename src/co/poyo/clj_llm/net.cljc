@@ -15,8 +15,8 @@
 
 (defn post-stream
   "POST `url` with `headers` and string `body`.
-   Calls `cb` with {:status int :body InputStream :error ex?}."
-  [url headers body cb]
+   Calls `on-response` with {:status int :body InputStream :error ex?}."
+  [url headers body on-response]
   #?(:bb
      (future
        (try
@@ -24,9 +24,9 @@
                                                            :body body
                                                            :as :stream
                                                            :throw false})]
-           (cb {:status status :body body :error error}))
+           (on-response {:status status :body body :error error}))
          (catch Exception e
-           (cb {:status 0 :body nil :error e}))))
+           (on-response {:status 0 :body nil :error e}))))
      :clj
      (a/thread
        (try
@@ -39,8 +39,8 @@
            (let [response (.send @http-client
                                 (.build req-builder)
                                 (HttpResponse$BodyHandlers/ofInputStream))]
-             (cb {:status (.statusCode response)
-                  :body (.body response)
-                  :error nil})))
+             (on-response {:status (.statusCode response)
+                           :body (.body response)
+                           :error nil})))
          (catch Exception e
-           (cb {:status 0 :body nil :error e}))))))
+           (on-response {:status 0 :body nil :error e}))))))
