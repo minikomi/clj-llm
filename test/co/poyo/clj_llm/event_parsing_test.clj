@@ -52,26 +52,31 @@
        {:type :content :content content}
 
        tool-calls
-       (let [tool-call (first tool-calls)
-             has-name? (get-in tool-call [:function :name])
-             has-args? (not-empty (get-in tool-call [:function :arguments]))]
-         (cond
-           (and schema has-args?)
-           {:type :content :content (get-in tool-call [:function :arguments])}
+       (let [convert-one (fn [tool-call]
+                           (let [has-name? (get-in tool-call [:function :name])
+                                 has-args? (not-empty (get-in tool-call [:function :arguments]))]
+                             (cond
+                               (and schema has-args?)
+                               {:type :content :content (get-in tool-call [:function :arguments])}
 
-           (and tools has-name?)
-           {:type :tool-call
-            :id (get tool-call :id)
-            :index (get tool-call :index)
-            :name (get-in tool-call [:function :name])
-            :arguments ""}
+                               (and tools has-name?)
+                               {:type :tool-call
+                                :id (get tool-call :id)
+                                :index (get tool-call :index)
+                                :name (get-in tool-call [:function :name])
+                                :arguments ""}
 
-           (and tools has-args?)
-           {:type :tool-call-delta
-            :index (get tool-call :index)
-            :arguments (get-in tool-call [:function :arguments])}
+                               (and tools has-args?)
+                               {:type :tool-call-delta
+                                :index (get tool-call :index)
+                                :arguments (get-in tool-call [:function :arguments])}
 
-           :else nil))
+                               :else nil)))
+             events (keep convert-one tool-calls)]
+         (when (seq events)
+           (if (= 1 (count events))
+             (first events)
+             (vec events))))
 
        finish-reason
        {:type :finish :reason finish-reason}
@@ -91,6 +96,7 @@
      (->> data-events
           (map #(openai-event % schema tools))
           (remove nil?)
+          (mapcat #(if (sequential? %) % [%]))
           vec))))
 
 (defn assemble-tool-calls
@@ -283,6 +289,49 @@
                            :delta {:role "assistant" :content ""}}]}]
       (is (nil? (openai-event data))
           "Empty content with no other data should produce nil"))))
+
+(deftest test-concurrent-tool-calls-in-single-chunk
+  (testing "Multiple tool calls in a single SSE chunk are all emitted"
+    (let [data {:choices [{:index 0
+                           :delta {:role "assistant"
+                                   :content nil
+                                   :tool-calls [{:id "call_1"
+                                                  :index 0
+                                                  :function {:name "get_weather"
+                                                             :arguments ""}}
+                                                 {:id "call_2"
+                                                  :index 1
+                                                  :function {:name "search_restaurants"
+                                                             :arguments ""}}]}}]}
+          result (openai-event data nil [:some-tool])]
+      (is (vector? result) "Should return a vector of events")
+      (is (= 2 (count result)) "Should have 2 tool call events")
+      (is (= "get_weather" (:name (first result))))
+      (is (= "search_restaurants" (:name (second result)))))))
+
+(deftest test-concurrent-tool-call-deltas
+  (testing "Multiple tool call argument deltas in a single chunk are all emitted"
+    (let [data {:choices [{:index 0
+                           :delta {:tool-calls [{:index 0
+                                                  :function {:arguments "{\"city\""}}
+                                                 {:index 1
+                                                  :function {:arguments "{\"query\""}}]}}]}
+          result (openai-event data nil [:some-tool])]
+      (is (vector? result) "Should return a vector of events")
+      (is (= 2 (count result)) "Should have 2 delta events")
+      (is (= :tool-call-delta (:type (first result))))
+      (is (= :tool-call-delta (:type (second result)))))))
+
+(deftest test-single-tool-call-returns-map
+  (testing "Single tool call in chunk returns a plain map (not vector)"
+    (let [data {:choices [{:index 0
+                           :delta {:tool-calls [{:id "call_1"
+                                                  :index 0
+                                                  :function {:name "get_weather"
+                                                             :arguments ""}}]}}]}
+          result (openai-event data nil [:some-tool])]
+      (is (map? result) "Single tool call should return a map")
+      (is (= :tool-call (:type result))))))
 
 (deftest test-null-content-with-tool-calls
   (testing "A chunk with null content and tool_calls produces tool event"
