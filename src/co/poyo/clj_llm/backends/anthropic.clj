@@ -46,8 +46,8 @@
       (assoc base-body :system system-prompt)
       base-body)))
 
-(defn- data->internal-event
-  "Convert Anthropic SSE event to our internal event format.
+(defn- data->internal-events
+  "Convert Anthropic SSE event to a seq of internal events (or nil).
    In schema mode, tool input JSON is treated as content.
    In tools mode, tool use blocks are emitted as :tool-call events."
   [data schema tools]
@@ -55,42 +55,42 @@
     "content_block_delta"
     (cond
       (not-empty (get-in data [:delta :text]))
-      {:type :content :content (get-in data [:delta :text])}
+      [{:type :content :content (get-in data [:delta :text])}]
 
       (and schema (not-empty (get-in data [:delta :partial-json])))
-      {:type :content :content (get-in data [:delta :partial-json])}
+      [{:type :content :content (get-in data [:delta :partial-json])}]
 
       (and tools (not-empty (get-in data [:delta :partial-json])))
-      {:type :tool-call-delta
-       :index (:index data)
-       :arguments (get-in data [:delta :partial-json])}
+      [{:type :tool-call-delta
+        :index (:index data)
+        :arguments (get-in data [:delta :partial-json])}]
 
       :else nil)
 
     "content_block_start"
     (when (and tools (= "tool_use" (get-in data [:content_block :type])))
-      {:type :tool-call
-       :id (get-in data [:content_block :id])
-       :index (:index data)
-       :name (get-in data [:content_block :name])
-       :arguments ""})
+      [{:type :tool-call
+        :id (get-in data [:content_block :id])
+        :index (:index data)
+        :name (get-in data [:content_block :name])
+        :arguments ""}])
 
     "message_delta"
     (when-let [usage (:usage data)]
-      (into {:type :usage} usage))
+      [(into {:type :usage} usage)])
 
     "message_stop"
-    {:type :done}
+    [{:type :done}]
 
     "message_start"
     (when-let [usage (get-in data [:message :usage])]
-      (into {:type :usage} usage))
+      [(into {:type :usage} usage)])
 
     ("content_block_stop" "ping")
     nil
 
     "error"
-    {:type :error :error (:error data)}
+    [{:type :error :error (:error data)}]
 
     ;; Unknown event type
     nil))
@@ -112,7 +112,7 @@
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
       (bh/create-event-stream url headers body
-                                  #(data->internal-event % schema tools)
+                                  #(data->internal-events % schema tools)
                                   "anthropic"))))
 
 (def ^:private anthropic-config-keys #{:api-key :api-key-fn :api-base :api-version})

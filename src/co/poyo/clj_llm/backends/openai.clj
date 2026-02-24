@@ -42,8 +42,8 @@
      api-opts
      tools-config)))
 
-(defn- data->internal-event
-  "Convert OpenAI chunk to our event format.
+(defn- data->internal-events
+  "Convert OpenAI chunk to a seq of internal events (or nil).
    In schema mode, tool calls are treated as content.
    In tools mode, tool calls are emitted as :tool-call events."
   [data schema tools]
@@ -53,10 +53,10 @@
         usage (:usage data)]
     (cond
       (:error data)
-      {:type :error :error (:error data)}
+      [{:type :error :error (:error data)}]
 
       (not-empty content)
-      {:type :content :content content}
+      [{:type :content :content content}]
 
       tool-calls
       (let [convert-one (fn [tool-call]
@@ -80,16 +80,13 @@
 
                               :else nil)))
             events (keep convert-one tool-calls)]
-        (when (seq events)
-          (if (= 1 (count events))
-            (first events)
-            (vec events))))
+        (not-empty events))
 
       finish-reason
-      {:type :finish :reason finish-reason}
+      [{:type :finish :reason finish-reason}]
 
       usage
-      (into {:type :usage} usage)
+      [(into {:type :usage} usage)]
 
       :else nil)))
 
@@ -109,7 +106,7 @@
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
       (bh/create-event-stream url headers body
-                                  #(data->internal-event % schema tools)
+                                  #(data->internal-events % schema tools)
                                   "openai"))))
 
 (def ^:private openai-config-keys #{:api-key :api-key-fn :api-base})
