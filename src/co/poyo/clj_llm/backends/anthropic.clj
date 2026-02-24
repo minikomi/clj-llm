@@ -19,7 +19,7 @@
 
 (defn- build-body
   "Build Anthropic API request body"
-  [model system-prompt messages schema tools tool-choice opts]
+  [model system-prompt messages output-schema tools tool-choice opts]
   (let [messages (backend/normalize-messages messages)
         tools-config (cond
                        tools
@@ -31,8 +31,8 @@
                                               (= tool-choice "required") {:type "any"}
                                               :else (or tool-choice {:type "auto"}))))
 
-                       schema
-                       {:tools [(schema/malli->tool-definition schema)]
+                       output-schema
+                       {:tools [(schema/malli->tool-definition output-schema)]
                         :tool_choice {:type "any"}})
         api-opts (backend/convert-options-for-api opts)
         max-tokens (or (:max_tokens api-opts) 4096)
@@ -49,16 +49,16 @@
 
 (defn- data->internal-events
   "Convert Anthropic SSE event to a seq of internal events (or nil).
-   In schema mode, tool input JSON is treated as content.
+   In output-schema mode, tool input JSON is treated as content.
    In tools mode, tool use blocks are emitted as :tool-call events."
-  [data schema tools]
+  [data output-schema tools]
   (case (:type data)
     "content_block_delta"
     (cond
       (not-empty (get-in data [:delta :text]))
       [{:type :content :content (get-in data [:delta :text])}]
 
-      (and schema (not-empty (get-in data [:delta :partial-json])))
+      (and output-schema (not-empty (get-in data [:delta :partial-json])))
       [{:type :content :content (get-in data [:delta :partial-json])}]
 
       (and tools (not-empty (get-in data [:delta :partial-json])))
@@ -103,7 +103,7 @@
 
 (defrecord AnthropicBackend [api-base api-key-fn api-version defaults]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+  (request-stream [_ model system-prompt messages output-schema tools tool-choice provider-opts]
     (let [api-key (api-key-fn)
           _ (when-not api-key
               (throw (errors/error "API key function returned nil"
@@ -112,9 +112,9 @@
           headers {"x-api-key" api-key
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
-          body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
+          body (json/generate-string (build-body model system-prompt messages output-schema tools tool-choice provider-opts))]
       (backend/create-event-stream url headers body
-                                  #(data->internal-events % schema tools)
+                                  #(data->internal-events % output-schema tools)
                                   "anthropic"))))
 
 (def ^:private anthropic-config-keys #{:api-key :api-key-fn :api-base :api-version})
@@ -130,7 +130,7 @@
    Override for custom env vars, vaults, or key rotation:
      (backend {:api-key-fn (fn [] (System/getenv \"MY_KEY\"))})
 
-   Set :defaults on the provider to configure model, system-prompt, schema, etc."
+   Set :defaults on the provider to configure model, system-prompt, output-schema, etc."
   ([] (backend {}))
   ([config]
    (let [unknown (seq (remove anthropic-config-keys (keys config)))]

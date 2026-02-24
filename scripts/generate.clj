@@ -24,7 +24,7 @@
 ;; Structured output — returns a map
 (println "\n--- structured ---")
 (println (llm/generate ai
-                       {:schema [:map
+                       {:output-schema [:map
                                 [:name :string]
                                 [:age :int]
                                 [:occupation :string]]}
@@ -33,7 +33,7 @@
 ;; Nested schema
 (println "\n--- nested schema ---")
 (println (llm/generate ai
-                       {:schema [:map
+                       {:output-schema [:map
                                 [:name :string]
                                 [:founded :int]
                                 [:employees [:vector [:map
@@ -47,7 +47,7 @@
 (println "\n--- layered defaults ---")
 (def extractor
   (update ai :defaults merge {:system-prompt "Extract structured data."
-                              :schema [:map [:name :string] [:age :int] [:occupation :string]]}))
+                              :output-schema [:map [:name :string] [:age :int] [:occupation :string]]}))
 
 (println (llm/generate extractor "Marie Curie was a 66 year old physicist"))
 (println (llm/generate extractor "Albert Einstein was a 76 year old theoretical physicist"))

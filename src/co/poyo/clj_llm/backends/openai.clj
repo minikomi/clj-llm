@@ -19,7 +19,7 @@
 
 (defn- build-body
   "Build OpenAI API request body"
-  [model system-prompt messages schema tools tool-choice opts]
+  [model system-prompt messages output-schema tools tool-choice opts]
   (let [messages (backend/normalize-messages messages)
         messages-with-system (if system-prompt
                                (into [{:role "system" :content system-prompt}]
@@ -30,8 +30,8 @@
                        {:tools (mapv schema/malli->tool-definition tools)
                         :tool_choice (or tool-choice "auto")}
 
-                       schema
-                       {:tools [(schema/malli->tool-definition schema)]
+                       output-schema
+                       {:tools [(schema/malli->tool-definition output-schema)]
                         :tool_choice "required"})
         api-opts (backend/convert-options-for-api opts)]
     (merge
@@ -44,9 +44,9 @@
 
 (defn- data->internal-events
   "Convert OpenAI chunk to a seq of internal events (or nil).
-   In schema mode, tool calls are treated as content.
+   In output-schema mode, tool calls are treated as content.
    In tools mode, tool calls are emitted as :tool-call events."
-  [data schema tools]
+  [data output-schema tools]
   (let [content (get-in data [:choices 0 :delta :content])
         tool-calls (get-in data [:choices 0 :delta :tool-calls])
         finish-reason (get-in data [:choices 0 :finish-reason])
@@ -63,7 +63,7 @@
                           (let [fn-name (get-in tool-call [:function :name])
                                 fn-args (not-empty (get-in tool-call [:function :arguments]))]
                             (cond
-                              (and schema fn-args)
+                              (and output-schema fn-args)
                               {:type :content :content (get-in tool-call [:function :arguments])}
 
                               (and tools fn-name)
@@ -96,7 +96,7 @@
 
 (defrecord OpenAIBackend [api-base api-key-fn defaults]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+  (request-stream [_ model system-prompt messages output-schema tools tool-choice provider-opts]
     (let [api-key (api-key-fn)
           _ (when-not api-key
               (throw (errors/error "API key function returned nil"
@@ -104,9 +104,9 @@
           url (str api-base "/chat/completions")
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
-          body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
+          body (json/generate-string (build-body model system-prompt messages output-schema tools tool-choice provider-opts))]
       (backend/create-event-stream url headers body
-                                  #(data->internal-events % schema tools)
+                                  #(data->internal-events % output-schema tools)
                                   "openai"))))
 
 (def ^:private openai-config-keys #{:api-key :api-key-fn :api-base})
@@ -121,7 +121,7 @@
    Override for custom env vars, vaults, or key rotation:
      (backend {:api-key-fn (fn [] (System/getenv \"MY_KEY\"))})
 
-   Set :defaults on the provider to configure model, system-prompt, schema, etc."
+   Set :defaults on the provider to configure model, system-prompt, output-schema, etc."
   ([] (backend {}))
   ([config]
    (let [unknown (seq (remove openai-config-keys (keys config)))]
