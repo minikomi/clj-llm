@@ -158,7 +158,7 @@
 (deftest test-unknown-opts-rejected
   (testing "Unknown options throw"
     (let [provider (mock-provider [{:type :content :content "ok"}])]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unknown options"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid options"
             (llm/generate provider {:bogus true} "test"))))))
 
 (deftest test-tool-calls

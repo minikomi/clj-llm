@@ -6,36 +6,58 @@
    [malli.core :as m]
    [malli.error :as me]
    [malli.transform :as mt]
+   [malli.util :as mu]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.errors :as errors]
    [co.poyo.clj-llm.helpers :as helpers]))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Known option keys (everything else is rejected)
+;; Option schemas (parse, don't validate)
 ;; ════════════════════════════════════════════════════════════════════
 
-(def ^:private known-keys
-  #{:model :system-prompt :schema :tools :tool-choice :temperature :max-tokens :top-p :provider-opts})
+(def ^:private opts-schema
+  "Schema for generate/request options."
+  [:map {:closed true}
+   [:model {:optional true} :string]
+   [:system-prompt {:optional true} :string]
+   [:schema {:optional true} :any]
+   [:tools {:optional true} :any]
+   [:tool-choice {:optional true} :any]
+   [:temperature {:optional true} number?]
+   [:max-tokens {:optional true} :int]
+   [:top-p {:optional true} number?]
+   [:provider-opts {:optional true} [:map-of :keyword :any]]])
 
-(def ^:private agent-keys
-  "Additional keys accepted by run-agent."
-  #{:tools :tool-choice :max-steps :stop-when})
+(def ^:private agent-opts-schema
+  "Schema for run-agent options (superset of opts-schema)."
+  (mu/merge opts-schema
+            [:map {:closed true}
+             [:max-steps {:optional true} :int]
+             [:stop-when {:optional true} fn?]]))
 
 ;; Keys that get forwarded to the provider API (not consumed by clj-llm itself)
 (def ^:private api-forward-keys
   #{:temperature :max-tokens :top-p})
 
-(defn- validate-opts
-  ([opts] (validate-opts opts known-keys))
-  ([opts valid-keys]
-   (let [unknown (remove valid-keys (keys opts))]
-     (when (seq unknown)
+(defn- parse-opts
+  "Parse options against a malli schema. Returns a map with clj-llm keys
+   and :provider-opts merged from api-forward-keys + explicit :provider-opts.
+   Throws on unknown keys or invalid types."
+  ([opts] (parse-opts opts opts-schema))
+  ([opts schema]
+   (let [explanation (m/explain schema opts)]
+     (when explanation
        (throw (errors/error
-               (str "Unknown options: " (pr-str (vec unknown)))
-               {:error-type   :llm/invalid-request
-                :unknown-keys (vec unknown)
-                :valid-keys   valid-keys}))))
-   opts))
+               (str "Invalid options: " (pr-str (me/humanize explanation)))
+               {:error-type :llm/invalid-request
+                :errors     (me/humanize explanation)})))
+     (let [provider-opts (not-empty
+                          (merge
+                           (-> (select-keys opts api-forward-keys)
+                               (clojure.set/rename-keys {:max-tokens :max_tokens}))
+                           (:provider-opts opts)))]
+       (cond-> (apply dissoc opts (concat api-forward-keys [:provider-opts]))
+         provider-opts (assoc :provider-opts provider-opts))))))
 
 ;; ════════════════════════════════════════════════════════════════════
 (defn- unwrap!
@@ -100,14 +122,6 @@
                   (str "Input must be a string, vector, or nil — got " (type input))
                   {:error-type :llm/invalid-request
                    :input input}))))
-
-(defn- extract-provider-opts
-  "Pull :temperature, :max-tokens, :top-p and :provider-opts from merged opts.
-   Promoted keys are merged into :provider-opts (explicit :provider-opts wins on conflict)."
-  [opts]
-  (let [promoted (select-keys opts api-forward-keys)
-        promoted (clojure.set/rename-keys promoted {:max-tokens :max_tokens})]
-    (merge promoted (:provider-opts opts))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Event stream consumer
@@ -222,12 +236,11 @@
   ([provider input]
    (request provider {} input))
   ([provider opts input]
-   (let [resolved      (validate-opts (helpers/deep-merge (:defaults provider) opts))
-         {:keys [model system-prompt schema tools tool-choice]} resolved
+   (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
+         (parse-opts (helpers/deep-merge (:defaults provider) opts))
          _             (when-not model
                          (throw (errors/error "No model specified"
-                                              {:error-type :llm/invalid-request :opts resolved})))
-         provider-opts (extract-provider-opts resolved)
+                                              {:error-type :llm/invalid-request :opts parsed})))
          messages      (build-messages input)
          source-chan   (proto/request-stream provider model system-prompt messages
                                             schema tools tool-choice
@@ -473,18 +486,17 @@
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
-   (validate-opts opts (into known-keys agent-keys))
-   (when-not (and (sequential? tools) (seq tools))
-     (throw (errors/error "run-agent requires a non-empty tools vector"
-                          {:error-type :llm/invalid-request
-                           :tools tools})))
-   (let [input-schemas (tools->input-schemas tools)
+   (let [parsed (parse-opts opts agent-opts-schema)
+         _      (when-not (and (sequential? tools) (seq tools))
+                  (throw (errors/error "run-agent requires a non-empty tools vector"
+                                       {:error-type :llm/invalid-request
+                                        :tools tools})))
+         input-schemas (tools->input-schemas tools)
          name->fn   (build-name->fn tools input-schemas)
-         max-steps  (or (:max-steps opts) 10)
-         stop-when  (or (:stop-when opts)
+         max-steps  (or (:max-steps parsed) 10)
+         stop-when  (or (:stop-when parsed)
                         (fn [{:keys [tool-calls]}] (empty? tool-calls)))
-         request-opts (-> opts
-                          (dissoc :max-steps :stop-when)
+         request-opts (-> (dissoc parsed :max-steps :stop-when)
                           (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
