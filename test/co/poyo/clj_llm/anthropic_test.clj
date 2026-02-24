@@ -5,8 +5,8 @@
 (def ^:private data->events @#'co.poyo.clj-llm.backends.anthropic/data->internal-events)
 (defn- data->event
   "Return the first (and typically only) event for single-event tests."
-  [data output-schema tools]
-  (first (data->events data output-schema tools)))
+  [data schema tools]
+  (first (data->events data schema tools)))
 (def ^:private build-body @#'co.poyo.clj-llm.backends.anthropic/build-body)
 
 ;; ════════════════════════════════════════════════════════════════════
