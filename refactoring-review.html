@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>clj-llm Refactoring Review</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/clojure.min.js"></script>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a2e;
+    --accent: #6366f1;
+    --accent-light: #eef2ff;
+    --border: #e2e8f0;
+    --code-bg: #f1f5f9;
+    --red: #ef4444;
+    --green: #22c55e;
+    --red-bg: #fef2f2;
+    --green-bg: #f0fdf4;
+    --card-bg: #fff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.7;
+    padding: 0;
+  }
+  .hero {
+    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #4338ca 100%);
+    color: #fff;
+    padding: 4rem 2rem 3rem;
+    text-align: center;
+  }
+  .hero h1 {
+    font-size: 2.5rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin-bottom: 0.5rem;
+  }
+  .hero p {
+    font-size: 1.15rem;
+    opacity: 0.85;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  .container {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 4rem;
+  }
+  h2 {
+    font-size: 1.65rem;
+    font-weight: 700;
+    margin-top: 3rem;
+    margin-bottom: 0.75rem;
+    color: var(--accent);
+    letter-spacing: -0.01em;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid var(--accent-light);
+  }
+  h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-top: 1.8rem;
+    margin-bottom: 0.5rem;
+    color: #334155;
+  }
+  p, li {
+    font-size: 0.97rem;
+    color: #475569;
+  }
+  p { margin-bottom: 0.9rem; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
+  li { margin-bottom: 0.3rem; }
+  strong { color: var(--fg); }
+  code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.85em;
+    background: var(--code-bg);
+    padding: 0.15em 0.4em;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    overflow-x: auto;
+    margin-bottom: 1.2rem;
+    font-size: 0.82rem;
+    line-height: 1.6;
+  }
+  pre code {
+    background: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .card h3 { margin-top: 0; }
+  .diff {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  @media (max-width: 700px) {
+    .diff { grid-template-columns: 1fr; }
+  }
+  .diff-before, .diff-after {
+    border-radius: 8px;
+    padding: 1rem;
+    overflow-x: auto;
+  }
+  .diff-before {
+    background: var(--red-bg);
+    border: 1px solid #fecaca;
+  }
+  .diff-after {
+    background: var(--green-bg);
+    border: 1px solid #bbf7d0;
+  }
+  .diff-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+  }
+  .diff-before .diff-label { color: var(--red); }
+  .diff-after .diff-label { color: var(--green); }
+  .diff pre {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-size: 0.78rem;
+  }
+  .problems {
+    background: #fffbeb;
+    border-left: 4px solid #f59e0b;
+    padding: 0.8rem 1rem;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 1.2rem;
+  }
+  .problems strong { color: #92400e; }
+  .wins {
+    background: #f0fdf4;
+    border-left: 4px solid #22c55e;
+    padding: 0.8rem 1rem;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 1.2rem;
+  }
+  .wins strong { color: #166534; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+  }
+  th {
+    background: var(--accent-light);
+    color: var(--accent);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+  }
+  td {
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    color: #475569;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.15em 0.55em;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .tag-pure { background: #dbeafe; color: #1e40af; }
+  .tag-uniform { background: #fae8ff; color: #86198f; }
+  .tag-dedup { background: #dcfce7; color: #166534; }
+  .motivation {
+    background: var(--accent-light);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 2rem 0;
+  }
+  .motivation p { color: #4338ca; margin-bottom: 0.5rem; }
+  .motivation p:last-child { margin-bottom: 0; }
+  .stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 1.5rem 0;
+  }
+  .stat {
+    flex: 1;
+    min-width: 140px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    text-align: center;
+  }
+  .stat .num {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+  }
+  .stat .label {
+    font-size: 0.78rem;
+    color: #94a3b8;
+    margin-top: 0.3rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>Decomplecting clj-llm</h1>
+  <p>Pure state machines, uniform contracts, and eliminated duplication across the event pipeline.</p>
+</div>
+
+<div class="container">
+
+<div class="stats">
+  <div class="stat"><div class="num">73</div><div class="label">Tests passing</div></div>
+  <div class="stat"><div class="num">234</div><div class="label">Assertions</div></div>
+  <div class="stat"><div class="num">+11</div><div class="label">Net lines changed</div></div>
+  <div class="stat"><div class="num">3</div><div class="label">Decomplections</div></div>
+</div>
+
+<div class="motivation">
+  <p><strong>Why this refactor?</strong></p>
+  <p>After 19 bug-fix tasks, three areas had accumulated structural complexity: a go-loop with 5 positional recur args, a polymorphic event return type (nil | map | vector), and duplicated branches in the agent loop. Each individually was fine; together they made the code harder to reason about and easier to break.</p>
+</div>
+
+<!-- ═══════════ SECTION 1 ═══════════ -->
+
+<h2><span class="tag tag-pure">Pure</span> 1. State Machine for <code>consume-events</code></h2>
+
+<p>The go-loop in <code>consume-events</code> is the heart of the library — it reads SSE events from a source channel, accumulates text/tool-calls/usage, and delivers promises. It had grown to carry <strong>five positional recur arguments</strong>, with state updates and channel I/O interleaved in every <code>case</code> branch.</p>
+
+<div class="problems">
+  <strong>Problems:</strong> Adding a 6th accumulator means touching every <code>recur</code> call. Can't test state transitions without async channels. Side effects and state logic are interleaved.
+</div>
+
+<div class="diff">
+  <div class="diff-before">
+    <div class="diff-label">✘ Before — tangled state + I/O</div>
+    <pre><code class="language-clojure">(go-loop [chunks []
+          tool-calls []
+          tc-index {}
+          usage-acc {}
+          finish-reason nil]
+  (if-let [event (&lt;! source-chan)]
+    (do
+      (>! events-chan event)
+      (case (:type event)
+        :content
+        (do (>! text-chunks-chan (:content event))
+            (recur (conj chunks (:content event))
+                   tool-calls tc-index
+                   usage-acc finish-reason))
+        :usage
+        (recur chunks tool-calls tc-index
+               (merge usage-acc ...)
+               finish-reason)
+        :done
+        (finalize! (apply str chunks)
+                   (not-empty tool-calls)
+                   (cond-> usage-acc ...))
+        ;; every branch repeats all 5 args</code></pre>
+  </div>
+  <div class="diff-after">
+    <div class="diff-label">✔ After — pure transitions + thin loop</div>
+    <pre><code class="language-clojure">;; Pure function — no channels, no promises
+(defn- next-state [state event]
+  (case (:type event)
+    :content     (update state :chunks conj ...)
+    :tool-call   (-> state (update ...) (assoc-in ...))
+    :usage       (update state :usage merge ...)
+    :finish      (assoc state :finish-reason ...)
+    :error       (assoc state :done? true :error ...)
+    :done        (assoc state :done? true)
+    state))
+
+;; Go-loop is just plumbing
+(go-loop [state init-state]
+  (if-let [event (&lt;! source-chan)]
+    (let [state' (next-state state event)]
+      (>! events-chan event)
+      (when (= :content (:type event))
+        (>! text-chunks-chan (:content event)))
+      (if (:done? state')
+        (finalize! state')
+        (recur state')))
+    (finalize! state)))</code></pre>
+  </div>
+</div>
+
+<div class="wins">
+  <strong>What this buys:</strong>
+  <ul style="margin:0.5rem 0 0 1.2rem">
+    <li><code>next-state</code> is a pure function — testable with plain maps, no async setup</li>
+    <li>Adding new accumulators = add a key to <code>init-state</code> + a <code>case</code> branch. No recur args to update.</li>
+    <li>Side effects are visually separated from state logic</li>
+    <li><code>finalize!</code> takes one arg (state), not three</li>
+  </ul>
+</div>
+
+<p>Derivation functions extract final values cleanly:</p>
+<pre><code class="language-clojure">(defn- state->text [{:keys [chunks error]}]
+  (or error (apply str chunks)))
+
+(defn- state->usage [{:keys [usage finish-reason]} provider-opts req-start]
+  (let [u (cond-> usage finish-reason (assoc :finish-reason finish-reason))]
+    (when (seq u)
+      (assoc u :type :usage
+               :clj-llm/provider-opts provider-opts
+               :clj-llm/req-start req-start
+               :clj-llm/req-end (System/currentTimeMillis) ...))))</code></pre>
+
+<!-- ═══════════ SECTION 2 ═══════════ -->
+
+<h2><span class="tag tag-uniform">Uniform</span> 2. <code>event->internal</code> Always Returns Seq</h2>
+
+<p>Backend event converters (<code>data->internal-event</code> in OpenAI and Anthropic) had a polymorphic return: <strong>nil</strong>, a <strong>single map</strong>, or a <strong>vector of maps</strong>. This forced <code>backend_helpers</code> to conditionally unwrap every result.</p>
+
+<div class="problems">
+  <strong>Problems:</strong> Caller must handle three return shapes. <code>(if (sequential? ...) ...)</code> is a code smell. Nested <code>loop</code> inside a <code>go</code> block is fragile with core.async macro limitations.
+</div>
+
+<div class="diff">
+  <div class="diff-before">
+    <div class="diff-label">✘ Before — polymorphic return</div>
+    <pre><code class="language-clojure">;; OpenAI: returns map OR vector
+(defn- data->internal-event [data schema tools]
+  (cond
+    content  {:type :content ...}   ;; map
+    tool-calls
+      (let [events (keep convert-one tool-calls)]
+        (when (seq events)
+          (if (= 1 (count events))
+            (first events)   ;; map
+            (vec events))))  ;; vector!
+    ...))
+
+;; backend_helpers: must unwrap
+(if-let [result (event->internal ...)]
+  (let [evts (if (sequential? result)
+               result
+               [result])]
+    ...))</code></pre>
+  </div>
+  <div class="diff-after">
+    <div class="diff-label">✔ After — always seq or nil</div>
+    <pre><code class="language-clojure">;; OpenAI: always seq
+(defn- data->internal-events [data schema tools]
+  (cond
+    content     [{:type :content ...}]
+    tool-calls  (not-empty
+                  (keep convert-one tool-calls))
+    finish      [{:type :finish ...}]
+    usage       [(into {:type :usage} usage)]
+    :else nil))
+
+;; backend_helpers: no unwrapping
+(if-let [evts (seq (event->internal ...))]
+  (let [done? (loop [es evts]
+                ...)]
+    (when-not done? (recur)))
+  (recur))</code></pre>
+  </div>
+</div>
+
+<div class="wins">
+  <strong>What this buys:</strong>
+  <ul style="margin:0.5rem 0 0 1.2rem">
+    <li>One return shape to handle — no conditional wrapping at the call site</li>
+    <li>The <code>done?</code> flag replaces <code>(some #(= :done ...) evts)</code> — computed during the loop, not after</li>
+    <li>Both backends (<code>openai.clj</code>, <code>anthropic.clj</code>) follow the same contract</li>
+  </ul>
+</div>
+
+<!-- ═══════════ SECTION 3 ═══════════ -->
+
+<h2><span class="tag tag-dedup">Dedup</span> 3. Single Code Path in <code>run-agent</code></h2>
+
+<p>The agent loop had two nearly-identical branches: one for "has tool calls" and one for "no tool calls (model reasoning)". Each had its own <code>max-steps</code> check, history construction, and <code>recur</code>.</p>
+
+<div class="problems">
+  <strong>Problems:</strong> <code>max-steps</code> check duplicated (2×). History construction duplicated with slightly different shapes. Adding a new field to the return map means editing both branches.
+</div>
+
+<div class="diff">
+  <div class="diff-before">
+    <div class="diff-label">✘ Before — two parallel branches</div>
+    <pre><code class="language-clojure">(if (empty? (or tc []))
+  ;; No tool calls
+  (if (>= (inc n) max-steps)
+    {:text text :history ... :truncated true}
+    (recur (conj history {:role :assistant
+                          :content text})
+           steps (inc n)))
+  ;; Has tool calls
+  (let [msg (tool-calls->assistant-message tc text)]
+    (if (>= (inc n) max-steps)       ;; dup!
+      {:text text :history ... :truncated true}
+      (let [results (mapv ... tc)
+            ...]
+        (recur new-history
+               (conj steps ...)
+               (inc n))))))</code></pre>
+  </div>
+  <div class="diff-after">
+    <div class="diff-label">✔ After — one path, branch on values</div>
+    <pre><code class="language-clojure">(let [has-tc?  (seq tc)
+      results  (when has-tc? (mapv ... tc))
+      msg      (if has-tc?
+                 (tool-calls->assistant-message tc text)
+                 {:role :assistant :content text})
+      msgs     (if has-tc?
+                 (into [msg] (mapv ... results))
+                 [msg])
+      next-history (into history msgs)
+      next-steps   (if has-tc?
+                     (conj steps {:tool-calls ...
+                                  :tool-results ...})
+                     steps)]
+  (if (>= (inc n) max-steps)  ;; once!
+    {:text text :history next-history
+     :steps next-steps :truncated true}
+    (recur next-history next-steps (inc n))))</code></pre>
+  </div>
+</div>
+
+<div class="wins">
+  <strong>What this buys:</strong>
+  <ul style="margin:0.5rem 0 0 1.2rem">
+    <li>One <code>max-steps</code> check, one <code>recur</code>, one return-map shape</li>
+    <li>New return fields go in one place</li>
+    <li><code>has-tc?</code> is a value, not a control-flow fork</li>
+  </ul>
+</div>
+
+<!-- ═══════════ SUMMARY ═══════════ -->
+
+<h2>Summary</h2>
+
+<table>
+  <thead>
+    <tr><th>Area</th><th>Before</th><th>After</th><th>Key Win</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>consume-events</code></td>
+      <td>5 positional recur args, tangled state+I/O</td>
+      <td>Pure <code>next-state</code> fn + mechanical go-loop</td>
+      <td>Testable state transitions</td>
+    </tr>
+    <tr>
+      <td><code>event->internal</code></td>
+      <td>nil | map | vector</td>
+      <td>nil | seq (always)</td>
+      <td>One shape, no conditional unwrapping</td>
+    </tr>
+    <tr>
+      <td><code>run-agent</code></td>
+      <td>Two parallel branches, 2× max-steps</td>
+      <td>One <code>let</code>, one check, one recur</td>
+      <td>No drifting duplicates</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="card" style="background: linear-gradient(135deg, #eef2ff, #faf5ff); border-color: #c7d2fe;">
+  <h3 style="color: var(--accent); margin-top: 0;">Net result</h3>
+  <p style="color: #4338ca; margin-bottom: 0;"><strong>73 tests, 234 assertions, 0 failures.</strong> +166 lines added, −155 removed. The state machine is pure and testable. The event contract is uniform. The agent loop has one path.</p>
+</div>
+
+</div>
+
+<script>hljs.highlightAll();</script>
+</body>
+</html>
