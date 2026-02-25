@@ -14,6 +14,7 @@ Built for Clojure developers who want maximum flexibility without sacrificing si
 | With options | `(generate ai {:system-prompt "..."} "prompt")` |
 | Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
 | Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
+| Tool hooks | `:on-tool-calls`, `:on-tool-result` — observe the agent in real time |
 | Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
 | Conversations | `(generate ai history-vector)` |
 | Full access | `(request ai "prompt")` → Response record |
@@ -244,6 +245,26 @@ For structured output after tool use, compose with `generate`:
 ```
 
 `generate` does not accept tools — it's a pure value function. If getting the value requires tool calls, use `run-agent`.
+
+### Observing tool execution
+
+Use `:on-tool-calls` and `:on-tool-result` to watch the agent work in real time — for logging, progress UI, streaming updates, etc:
+
+```clojure
+(llm/run-agent ai [#'geocode #'get-weather]
+  {:on-tool-calls  (fn [{:keys [step tool-calls]}]
+                     (println "Step" step "→" (mapv :name tool-calls)))
+   :on-tool-result (fn [{:keys [tool-call result]}]
+                     (println "  " (:name tool-call) "=>" (subs result 0 (min 60 (count result)))))
+  "Weather in Tokyo?")
+;; Step 0 → ["geocode"]
+;;   geocode => {"name":"Tokyo","country":"Japan","latitude":35.6895
+;; Step 1 → ["get_weather"]
+;;   get_weather => {"temperature_c":20.1,"conditions":"Clear sky"
+;; => {:text "It's currently 20.1°C in Tokyo..." :steps [...] ...}
+```
+
+Both callbacks receive the current `:step` index (0-based). `:on-tool-result` also includes `:error` (the exception) when a tool throws.
 
 ## Provider Flexibility
 
