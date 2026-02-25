@@ -33,7 +33,9 @@
   (mu/merge opts-schema
             [:map {:closed true}
              [:max-steps {:optional true} :int]
-             [:stop-when {:optional true} fn?]]))
+             [:stop-when {:optional true} fn?]
+             [:on-tool-calls {:optional true} fn?]
+             [:on-tool-result {:optional true} fn?]]))
 
 ;; Keys that get forwarded to the provider API (not consumed by clj-llm itself)
 (def ^:private api-forward-keys
@@ -464,6 +466,12 @@
      :stop-when       - (fn [{:keys [tool-calls text]}] ...) called after each LLM
                         response, before executing tools. Return truthy to stop.
                         Default: stop when no tool calls (model is done).
+     :on-tool-calls   - (fn [{:keys [step tool-calls text]}] ...) called when the
+                        model returns tool calls, before they are executed. Useful
+                        for logging, UI updates, or progress indicators.
+     :on-tool-result  - (fn [{:keys [step tool-call result error]}] ...) called
+                        after each individual tool finishes. :error is the exception
+                        if the tool threw (result will be the error string).
      :model, :system-prompt, :temperature, :max-tokens, :top-p, :provider-opts
 
    Returns {:text ... :history ... :steps [...] :tool-calls ...}
@@ -482,7 +490,16 @@
      ;; Stop when the model calls the 'done' tool
      (run-agent ai tools {:stop-when (fn [{:keys [tool-calls]}]
                                        (some #(= \"done\" (:name %)) tool-calls))}
-       \"do the thing\")"
+       \"do the thing\")
+
+   Watch tool execution in real time:
+
+     (run-agent ai tools
+       {:on-tool-calls  (fn [{:keys [step tool-calls]}]
+                          (println \"Step\" step \"calling:\" (map :name tool-calls)))
+        :on-tool-result (fn [{:keys [step tool-call result]}]
+                          (println \" \" (:name tool-call) \"->\" (subs result 0 80)))}
+       \"research this topic\")"
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
@@ -496,7 +513,9 @@
          max-steps  (or (:max-steps parsed) 10)
          stop-when  (or (:stop-when parsed)
                         (fn [{:keys [tool-calls]}] (empty? tool-calls)))
-         request-opts (-> (dissoc parsed :max-steps :stop-when)
+         on-tool-calls  (:on-tool-calls parsed)
+         on-tool-result (:on-tool-result parsed)
+         request-opts (-> (dissoc parsed :max-steps :stop-when :on-tool-calls :on-tool-result)
                           (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
@@ -512,12 +531,20 @@
             :steps      steps
             :tool-calls (not-empty parsed-calls)}
 
-           (let [results  (when (seq parsed-calls)
+           (let [_        (when (and on-tool-calls (seq parsed-calls))
+                            (on-tool-calls {:step n :tool-calls parsed-calls :text text}))
+                 results  (when (seq parsed-calls)
                             (mapv (fn [tc]
-                                    (try
-                                      {:call tc :result (execute-tool-call name->fn tc)}
-                                      (catch Exception e
-                                        {:call tc :result (str "Error: " (.getMessage e)) :error e})))
+                                    (let [r (try
+                                              {:call tc :result (execute-tool-call name->fn tc)}
+                                              (catch Exception e
+                                                {:call tc :result (str "Error: " (.getMessage e)) :error e}))]
+                                      (when on-tool-result
+                                        (on-tool-result {:step n
+                                                         :tool-call tc
+                                                         :result (:result r)
+                                                         :error (:error r)}))
+                                      r))
                                   parsed-calls))
                  msg      (if results
                             (tool-calls->assistant-message parsed-calls text)
