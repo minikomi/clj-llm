@@ -70,6 +70,41 @@ That's too many things. The SSE streaming + channel management could be its own 
 - **`run-agent`** — 60-line let-heavy loop. Could extract `execute-step` to separate "run one iteration" from "loop control".
 - **`stream`, `stream-print`, `events`** — thin wrappers, fine.
 
+## Style principles
+
+### Flat early-exit with `cond`
+Prefer top-level `cond` over nested `when`/`let`/`if`. Each branch is an early exit — reads top to bottom.
+
+```clojure
+;; yes
+(cond
+  (not (str/starts-with? line "data:")) nil
+  (str/ends-with? line "[DONE]")        {:done true}
+  :else (try ...))
+
+;; no
+(when (str/starts-with? line "data:")
+  (let [raw ...]
+    (if (= raw "[DONE]") {:done true} ...)))
+```
+
+### `let` inside `try`, name each step
+When work can fail, put the `let` inside the `try` so all fallible steps are covered by one catch. Name intermediate values — don't nest calls.
+
+```clojure
+;; yes
+(try
+  (let [raw (str/trim (subs line 5))
+        parsed (json/parse-string raw)]
+    {:data (transform parsed)})
+  (catch Exception _ nil))
+
+;; no
+(let [raw (str/trim (subs line 5))]
+  (try {:data (transform (json/parse-string raw))}
+       (catch Exception _ nil)))
+```
+
 ### Priority order for core.clj
 1. Simplify `parse-opts` — stop fighting open maps
 2. Extract agent step logic from `run-agent` loop

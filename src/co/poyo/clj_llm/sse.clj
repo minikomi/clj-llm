@@ -20,12 +20,14 @@
 (defn parse-line
   "Parse one SSE line. Returns {:data map}, {:done true}, or nil."
   [line]
-  (when (str/starts-with? line "data:")
-    (let [raw (str/trim (subs line 5))]
-      (if (= raw "[DONE]")
-        {:done true}
-        (try {:data (cske/transform-keys ->kebab-key (json/parse-string raw))}
-             (catch Exception _ nil))))))
+  (cond
+    (not (str/starts-with? line "data:")) nil
+    (str/ends-with? line "[DONE]")        {:done true}
+    :else (try
+            (let [raw (str/trim (subs line 5))
+                  parsed (json/parse-string raw)]
+              {:data (cske/transform-keys ->kebab-key parsed)})
+            (catch Exception _ nil))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; HTTP error handling (private)
