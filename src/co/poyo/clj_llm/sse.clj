@@ -1,5 +1,5 @@
 (ns co.poyo.clj-llm.sse
-  "SSE parsing and streaming: parse lines, read streams, return reducibles of events."
+  "SSE streaming: blocking reducible over parsed server-sent events."
   (:require
    [camel-snake-kebab.core :as csk]
    [camel-snake-kebab.extras :as cske]
@@ -8,68 +8,36 @@
    [clojure.string :as str]
    [co.poyo.clj-llm.net :as net]))
 
-;; ════════════════════════════════════════════════════════════════════
-;; Line parsing
-;; ════════════════════════════════════════════════════════════════════
-
-;; SSE streams repeat the same small set of keys on every chunk — memoize
-;; to avoid repeated string manipulation.
 (def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
-(defn parse-line
-  "Parse one SSE line. Returns {:data map}, {:done true}, or nil."
+(defn- parse-sse-line
+  "Parse one SSE data line into a kebab-cased map, or nil."
   [line]
-  (cond
-    (not (str/starts-with? line "data:")) nil
-    (str/ends-with? line "[DONE]")        {:done true}
-    :else (try
-            (let [raw (str/trim (subs line 5))
-                  parsed (json/parse-string raw)]
-              {:data (cske/transform-keys ->kebab-key parsed)})
-            (catch Exception _ nil))))
+  (when (str/starts-with? line "data:")
+    (try
+      (let [raw (str/trim (subs line 5))]
+        (cske/transform-keys ->kebab-key (json/parse-string raw)))
+      (catch Exception _ nil))))
 
-;; ════════════════════════════════════════════════════════════════════
-;; HTTP error handling (private)
-;; ════════════════════════════════════════════════════════════════════
+(def ^:private xf-sse
+  "Transducer: raw SSE lines → parsed data maps. Stops at [DONE]."
+  (comp
+    (remove #(str/ends-with? % "[DONE]"))
+    (keep parse-sse-line)))
 
-(defn- read-body
-  "Read response body as string, attempt JSON parse."
-  [response]
+(defn- read-error-body
+  "Read response body, attempt JSON parse."
+  [{:keys [body]}]
   (try
-    (let [raw (cond
-                (string? (:body response)) (:body response)
-                (instance? java.io.InputStream (:body response)) (slurp (:body response))
-                :else (str (:body response)))]
+    (let [raw (if (string? body) body (slurp body))]
       (try (json/parse-string raw true)
            (catch Exception _ raw)))
     (catch Exception _ nil)))
 
-(defn- error-event
-  "Build an :error event from an HTTP error response."
-  [provider-name response]
-  {:type   :error
-   :status (:status response)
-   :body   (read-body response)})
-
-;; ════════════════════════════════════════════════════════════════════
-;; Stream reading
-;; ════════════════════════════════════════════════════════════════════
-
-(def xf-parse
-  "Transducer: raw SSE lines → parsed data maps. Stops at [DONE]."
-  (comp
-    (keep parse-line)
-    (halt-when :done)
-    (map :data)))
-
 (defn event-stream
   "Returns a blocking reducible of parsed SSE data maps.
    Manages the HTTP connection lifecycle during reduce.
-   Error responses are delivered as a single {:type :error ...} element.
-
-   Usage:
-     (reduce (fn [_ data] (prn data)) nil
-             (event-stream url headers body \"openai\"))"
+   Error responses are delivered as a single {:type :error ...} element."
   [url headers body provider-name]
   (reify clojure.lang.IReduceInit
     (reduce [_ f init]
@@ -81,9 +49,11 @@
 
             (= 200 status)
             (with-open [reader (io/reader body)]
-              (transduce xf-parse f init (line-seq reader)))
+              (transduce xf-sse f init (line-seq reader)))
 
             :else
-            (f init (error-event provider-name response))))
+            (f init {:type :error
+                     :status status
+                     :body (read-error-body response)})))
         (catch Exception e
           (f init {:type :error :error (str e)}))))))

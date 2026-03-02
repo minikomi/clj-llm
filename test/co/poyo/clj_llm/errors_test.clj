@@ -3,8 +3,10 @@
   (:require [clojure.test :refer [deftest testing is]]
             [co.poyo.clj-llm.sse]))
 
-(def ^:private error-event
-  @#'co.poyo.clj-llm.sse/error-event)
+(defn- error-event [_provider-name {:keys [status body]}]
+  {:type :error
+   :status status
+   :body (@#'co.poyo.clj-llm.sse/read-error-body {:body body})})
 
 (deftest test-error-event-json-body
   (testing "Surfaces parsed JSON error body"
