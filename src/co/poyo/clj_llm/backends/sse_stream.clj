@@ -1,11 +1,8 @@
-(ns co.poyo.clj-llm.backends.backend-helpers
-  "Shared utilities for LLM backend implementations."
+(ns co.poyo.clj-llm.backends.sse-stream
+  "HTTP SSE streaming: POST to an endpoint, parse the event stream, return a channel."
   (:require
-   [camel-snake-kebab.core :as csk]
    [cheshire.core :as json]
    [clojure.core.async :as a :refer [chan close!]]
-   [clojure.set]
-   [clojure.walk :as walk]
    [clojure.java.io :as io]
    [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse]))
@@ -33,23 +30,6 @@
               :status      status
               :body        body
               :retry-after (get-in body [:error :retry_after])})))
-
-(defn convert-options-for-api
-  "Convert kebab-case option keys to snake_case for API calls."
-  [opts]
-  (when opts
-    (walk/postwalk
-     (fn [x] (if (map? x) (update-keys x csk/->snake_case_keyword) x))
-     opts)))
-
-(def ^:private message-key-renames
-  {:tool-calls :tool_calls
-   :tool-call-id :tool_call_id})
-
-(defn normalize-messages
-  "Rename kebab-case keys to snake_case in messages for API compatibility."
-  [messages]
-  (mapv #(clojure.set/rename-keys % message-key-renames) messages))
 
 (defn- parse-error-body
   "Read response body as string, attempt JSON parse."
