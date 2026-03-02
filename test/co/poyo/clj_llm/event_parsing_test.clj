@@ -4,7 +4,6 @@
    Tests replay them through the SSE parser and backend event converters."
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.java.io :as io]
-            [clojure.core.async :as a]
             [clojure.string :as str]
             [co.poyo.clj-llm.sse :as sse]
             [co.poyo.clj-llm.backends.openai]))
@@ -14,21 +13,18 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (defn parse-fixture
-  "Parse an SSE fixture file through the SSE parser.
-   Returns a vector of all events from the channel."
+  "Parse an SSE fixture file through the SSE line parser.
+   Returns a vector of all parsed events."
   [fixture-path]
-  (let [input-stream (io/input-stream (io/resource fixture-path))
-        ch (sse/parse-sse input-stream)]
-    (loop [events []]
-      (if-let [event (a/<!! ch)]
-        (recur (conj events event))
-        events))))
+  (with-open [reader (io/reader (io/resource fixture-path))]
+    (->> (line-seq reader)
+         (keep sse/parse-line)
+         vec)))
 
 (defn sse-data-events
   "Extract just the parsed data maps from SSE events (skip done/error)."
   [events]
-  (->> events
-       (keep ::sse/data)))
+  (keep :data events))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; OpenAI event converter — delegates to real implementation
@@ -90,10 +86,9 @@
   (testing "SSE parser produces events from simple text fixture"
     (let [events (parse-fixture "fixtures/openai-simple-text.sse")]
       (is (pos? (count events)) "Should produce events")
-      (is (some ::sse/done events) "Should end with done event")
-      (is (every? #(or (::sse/data %) (::sse/done %) (::sse/error %))
-                  events)
-          "All events should be data, done, or error"))))
+      (is (some :done events) "Should end with done event")
+      (is (every? #(or (:data %) (:done %)) events)
+          "All events should be data or done"))))
 
 (deftest test-sse-parser-tool-calls
   (testing "SSE parser handles tool call fixtures"
@@ -102,7 +97,7 @@
       (testing fixture
         (let [events (parse-fixture fixture)]
           (is (pos? (count events)))
-          (is (some ::sse/done events)))))))
+          (is (some :done events)))))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Tests: OpenAI Simple Text

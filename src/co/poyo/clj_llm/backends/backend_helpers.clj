@@ -3,9 +3,10 @@
   (:require
    [camel-snake-kebab.core :as csk]
    [cheshire.core :as json]
-   [clojure.core.async :as a :refer [chan go <! >! close!]]
+   [clojure.core.async :as a :refer [chan go >! close! thread]]
    [clojure.set]
    [clojure.walk :as walk]
+   [clojure.java.io :as io]
    [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse]))
 
@@ -75,51 +76,42 @@
        :exception (ex-info (str "Failed to parse error: " (.getMessage e))
                            {:response response})})))
 
-(defn- pipe-sse-events
-  "Pipe SSE events through parse-sse-data into out-chan."
-  [sse-chan parse-sse-data out-chan]
-  (go
+(defn- stream-sse-events
+  "Read SSE lines from input-stream, parse through convert-fn, write to out."
+  [input-stream convert-fn out]
+  (thread
     (try
-      (loop []
-        (when-let [chunk (<! sse-chan)]
-          (cond
-            (::sse/done chunk)
-            (>! out-chan {:type :done})
-
-            (::sse/error chunk)
-            (do (>! out-chan {:type :error :error (::sse/error chunk)})
-                (recur))
-
-            :else
-            (let [evts (seq (parse-sse-data (::sse/data chunk)))
-                  done? (when evts
-                          (loop [[e & more] evts]
-                            (>! out-chan e)
-                            (if (= :done (:type e))
-                              true
-                              (when more (recur more)))))]
-              (when-not done? (recur))))))
+      (with-open [reader (io/reader input-stream)]
+        (loop []
+          (when-let [line (.readLine reader)]
+            (when-let [{:keys [data done]} (sse/parse-line line)]
+              (if done
+                (a/>!! out {:type :done})
+                (let [evts (seq (convert-fn data))]
+                  (doseq [e evts] (a/>!! out e))
+                  (when-not (some #(= :done (:type %)) evts)
+                    (recur))))))))
       (catch Exception e
-        (>! out-chan {:type :error :error e}))
+        (a/>!! out {:type :error :error e}))
       (finally
-        (close! out-chan)))))
+        (close! out)))))
 
 (defn create-event-stream
   "POST to a streaming API and return a channel of internal events.
-   parse-sse-data: (data-map -> seq-of-event-maps | nil)"
-  [url headers body parse-sse-data provider-name]
+   convert-fn: (data-map -> seq-of-event-maps | nil)"
+  [url headers body convert-fn provider-name]
   (let [out (chan 1024)]
     (net/post-stream url headers body
       (fn [{:keys [error status body] :as response}]
         (cond
           error
-          (go (>! out {:type :error :error (.getMessage error) :exception error})
+          (do (a/>!! out {:type :error :error (.getMessage error) :exception error})
               (close! out))
 
           (= 200 status)
-          (pipe-sse-events (sse/parse-sse body) parse-sse-data out)
+          (stream-sse-events body convert-fn out)
 
           :else
-          (go (>! out (error-event provider-name response))
+          (do (a/>!! out (error-event provider-name response))
               (close! out)))))
     out))
