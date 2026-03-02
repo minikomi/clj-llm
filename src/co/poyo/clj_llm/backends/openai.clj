@@ -6,7 +6,6 @@
    [cheshire.core :as json]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.errors :as errors]
    [co.poyo.clj-llm.backends.backend-helpers :as backend]))
 
 (def ^:private default-config
@@ -99,8 +98,8 @@
   (request-stream [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
     (let [api-key (api-key-fn)
           _ (when-not api-key
-              (throw (errors/error "API key function returned nil"
-                                   {:provider "openai"})))
+              (throw (ex-info "API key function returned nil"
+                              {:provider "openai"})))
           url (str api-base "/chat/completions")
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}

@@ -8,7 +8,6 @@
    [malli.transform :as mt]
    [malli.util :as mu]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.errors :as errors]
 ))
 
 ;; ════════════════════════════════════════════════════════════════════
@@ -49,7 +48,7 @@
   ([opts schema]
    (let [explanation (m/explain schema opts)]
      (when explanation
-       (throw (errors/error
+       (throw (ex-info
                (str "Invalid options: " (pr-str (me/humanize explanation)))
                {:error-type :llm/invalid-request
                 :errors     (me/humanize explanation)})))
@@ -96,7 +95,7 @@
           result (m/decode schema parsed mt/json-transformer)]
       (if (m/validate schema result)
         result
-        (throw (errors/error
+        (throw (ex-info
                 "Schema validation failed"
                 {:error-type :llm/invalid-request
                  :schema schema
@@ -105,7 +104,7 @@
     ;; Re-throw our own errors (schema validation); only catch parse failures below
     (catch clojure.lang.ExceptionInfo e (throw e))
     (catch Exception _
-      (throw (errors/error
+      (throw (ex-info
               "Failed to parse structured output"
               {:error-type :llm/invalid-request
                :schema schema :input text})))))
@@ -120,7 +119,7 @@
     (string? input) [{:role :user :content input}]
     (vector? input) input
     (nil? input)    []
-    :else (throw (errors/error
+    :else (throw (ex-info
                   (str "Input must be a string, vector, or nil — got " (type input))
                   {:error-type :llm/invalid-request
                    :input input}))))
@@ -162,8 +161,8 @@
 
     :error
     (assoc state :done? true
-                 :error (errors/error "LLM request failed"
-                                      {:error-type :llm/server-error :event event}))
+                 :error (ex-info "LLM request failed"
+                                 {:error-type :llm/server-error :event event}))
 
     :done
     (assoc state :done? true)
@@ -241,8 +240,8 @@
    (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
          (parse-opts (merge (:defaults provider) opts))
          _             (when-not model
-                         (throw (errors/error "No model specified"
-                                              {:error-type :llm/invalid-request :opts parsed})))
+                         (throw (ex-info "No model specified"
+                                         {:error-type :llm/invalid-request :opts parsed})))
          messages      (build-messages input)
          source-chan   (proto/request-stream provider
                         {:model model :system-prompt system-prompt :messages messages
@@ -324,7 +323,7 @@
         ;; Check Malli's global function registry (populated by m/=>)
         (when-let [ns-sym (some-> (:ns m) ns-name)]
           (:schema (get-in (m/function-schemas) [ns-sym (:name m)])))
-        (throw (errors/error
+        (throw (ex-info
                 "Tool missing Malli schema. Use {:malli/schema ...}, mx/defn, or m/=>."
                 {:error-type :llm/invalid-request :tool tool})))))
 
@@ -338,13 +337,13 @@
         resolved (if (= :-> schema-type) (m/deref fn-schema) fn-schema)
         resolved-type (m/type resolved)]
     (when-not (= :=> resolved-type)
-      (throw (errors/error
+      (throw (ex-info
               "Tool schema must be [:=> [:cat ...] <return>] or [:-> <input> <return>]"
               {:error-type :llm/invalid-request :schema fn-schema})))
     (let [input-schema (first (m/children resolved))
           args (m/children (m/schema input-schema))]
       (when (empty? args)
-        (throw (errors/error
+        (throw (ex-info
                 "Tool function schema has no input arguments"
                 {:error-type :llm/invalid-request :schema fn-schema})))
       (first args))))
@@ -354,7 +353,7 @@
   [schema]
   (let [props (try (m/properties (m/schema schema)) (catch Exception _ nil))]
     (or (:name props)
-        (throw (errors/error
+        (throw (ex-info
                 "Tool schema missing :name in properties"
                 {:error-type :llm/invalid-request :schema schema})))))
 
@@ -372,7 +371,7 @@
   "Look up and execute a single tool call. Returns the result."
   [name->fn tool-call]
   (let [f (or (get name->fn (:name tool-call))
-              (throw (errors/error
+              (throw (ex-info
                       (str "Unknown tool: " (:name tool-call))
                       {:error-type :llm/invalid-request
                        :name       (:name tool-call)
@@ -506,9 +505,9 @@
   ([provider tools opts input]
    (let [parsed (parse-opts opts agent-opts-schema)
          _      (when-not (and (sequential? tools) (seq tools))
-                  (throw (errors/error "run-agent requires a non-empty tools vector"
-                                       {:error-type :llm/invalid-request
-                                        :tools tools})))
+                  (throw (ex-info "run-agent requires a non-empty tools vector"
+                                   {:error-type :llm/invalid-request
+                                    :tools tools})))
          input-schemas (tools->input-schemas tools)
          name->fn   (build-name->fn tools input-schemas)
          max-steps  (or (:max-steps parsed) 10)

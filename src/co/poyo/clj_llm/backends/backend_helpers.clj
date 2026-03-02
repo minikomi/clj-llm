@@ -7,8 +7,31 @@
    [clojure.set]
    [clojure.walk :as walk]
    [co.poyo.clj-llm.net :as net]
-   [co.poyo.clj-llm.sse :as sse]
-   [co.poyo.clj-llm.errors :as errors]))
+   [co.poyo.clj-llm.sse :as sse]))
+
+;; Single source of truth for HTTP status → error type + message
+(def ^:private status-errors
+  {401 {:type :llm/invalid-key    :msg "Invalid API key"}
+   403 {:type :llm/invalid-key    :msg "Invalid API key"}
+   404 {:type :llm/invalid-request :msg "Resource not found"}
+   429 {:type :llm/rate-limit     :msg "Rate limit exceeded"}
+   400 {:type :llm/invalid-request :msg "Invalid request"}
+   422 {:type :llm/invalid-request :msg "Invalid request"}
+   500 {:type :llm/server-error   :msg "Server error"}
+   502 {:type :llm/server-error   :msg "Server error"}
+   503 {:type :llm/server-error   :msg "Server error"}
+   504 {:type :llm/server-error   :msg "Server error"}})
+
+(defn- parse-http-error
+  "Convert HTTP response to exception with proper :error-type."
+  [provider status body]
+  (let [{:keys [type msg]} (get status-errors (int status)
+                                {:type :llm/unknown :msg (str "HTTP " status)})]
+    (ex-info (str provider ": " msg)
+             {:error-type  type
+              :status      status
+              :body        body
+              :retry-after (get-in body [:error :retry_after])})))
 
 (defn convert-options-for-api
   "Convert kebab-case option keys to snake_case for API calls."
@@ -42,15 +65,15 @@
   [provider-name response]
   (try
     (let [body (parse-error-body response)
-          ex (errors/parse-http-error provider-name (:status response) body)]
+          ex (parse-http-error provider-name (:status response) body)]
       {:type :error :error (.getMessage ex) :status (:status response)
        :provider-error body :exception ex})
     (catch Exception e
       {:type :error
        :error (str "HTTP " (:status response) ": " (:body response))
        :status (:status response)
-       :exception (errors/error (str "Failed to parse error: " (.getMessage e))
-                                {:response response})})))
+       :exception (ex-info (str "Failed to parse error: " (.getMessage e))
+                           {:response response})})))
 
 (defn- pipe-sse-events
   "Pipe SSE events through parse-sse-data into out-chan."

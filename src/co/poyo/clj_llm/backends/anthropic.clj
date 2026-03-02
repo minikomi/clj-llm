@@ -4,7 +4,6 @@
    [cheshire.core :as json]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.errors :as errors]
    [co.poyo.clj-llm.backends.backend-helpers :as backend]))
 
 (def ^:private default-config
@@ -106,8 +105,8 @@
   (request-stream [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
     (let [api-key (api-key-fn)
           _ (when-not api-key
-              (throw (errors/error "API key function returned nil"
-                                   {:provider "anthropic"})))
+              (throw (ex-info "API key function returned nil"
+                              {:provider "anthropic"})))
           url (str api-base "/v1/messages")
           headers {"x-api-key" api-key
                    "anthropic-version" api-version
