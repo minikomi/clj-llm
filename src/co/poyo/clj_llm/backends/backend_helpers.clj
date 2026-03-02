@@ -11,14 +11,11 @@
    [co.poyo.clj-llm.errors :as errors]))
 
 (defn convert-options-for-api
-  "Convert kebab-case options to snake_case format for API calls"
+  "Convert kebab-case option keys to snake_case for API calls."
   [opts]
   (when opts
     (walk/postwalk
-     (fn [x]
-       (if (map? x)
-         (update-keys x csk/->snake_case_keyword)
-         x))
+     (fn [x] (if (map? x) (update-keys x csk/->snake_case_keyword) x))
      opts)))
 
 (def ^:private message-key-renames
@@ -26,96 +23,80 @@
    :tool-call-id :tool_call_id})
 
 (defn normalize-messages
-  "Convert kebab-case keys in messages to snake_case for API compatibility.
-   Handles :tool-calls -> :tool_calls, :tool-call-id -> :tool_call_id."
+  "Rename kebab-case keys to snake_case in messages for API compatibility."
   [messages]
   (mapv #(clojure.set/rename-keys % message-key-renames) messages))
 
-(defn handle-error-response
-  "Parse error response from API and create appropriate error event.
-   provider-name is a string like \"openai\" or \"anthropic\"."
+(defn- parse-error-body
+  "Read response body as string, attempt JSON parse."
+  [response]
+  (let [body-str (cond
+                   (string? (:body response)) (:body response)
+                   (instance? java.io.InputStream (:body response)) (slurp (:body response))
+                   :else (str (:body response)))]
+    (try (json/parse-string body-str true)
+         (catch Exception _ body-str))))
+
+(defn- error-event
+  "Build an :error event map from a provider error response."
   [provider-name response]
   (try
-    (let [body-str (cond
-                     (string? (:body response)) (:body response)
-                     (instance? java.io.InputStream (:body response)) (slurp (:body response))
-                     :else (str (:body response)))
-          body (try
-                 (json/parse-string body-str true)
-                 (catch Exception _
-                   body-str))
-          status (:status response)
-          error (errors/parse-http-error provider-name status body)]
-      {:type :error
-       :error (.getMessage error)
-       :status status
-       :provider-error body
-       :exception error})
+    (let [body (parse-error-body response)
+          ex (errors/parse-http-error provider-name (:status response) body)]
+      {:type :error :error (.getMessage ex) :status (:status response)
+       :provider-error body :exception ex})
     (catch Exception e
       {:type :error
        :error (str "HTTP " (:status response) ": " (:body response))
        :status (:status response)
-       :exception (errors/error
-                   (str "Failed to parse error response: " (.getMessage e))
-                   {:response response})})))
+       :exception (errors/error (str "Failed to parse error: " (.getMessage e))
+                                {:response response})})))
+
+(defn- pipe-sse-events
+  "Pipe SSE events through parse-sse-data into out-chan."
+  [sse-chan parse-sse-data out-chan]
+  (go
+    (try
+      (loop []
+        (when-let [chunk (<! sse-chan)]
+          (cond
+            (::sse/done chunk)
+            (>! out-chan {:type :done})
+
+            (::sse/error chunk)
+            (do (>! out-chan {:type :error :error (::sse/error chunk)})
+                (recur))
+
+            :else
+            (let [evts (seq (parse-sse-data (::sse/data chunk)))
+                  done? (when evts
+                          (loop [[e & more] evts]
+                            (>! out-chan e)
+                            (if (= :done (:type e))
+                              true
+                              (when more (recur more)))))]
+              (when-not done? (recur))))))
+      (catch Exception e
+        (>! out-chan {:type :error :error e}))
+      (finally
+        (close! out-chan)))))
 
 (defn create-event-stream
-  "Create an event channel from an SSE streaming API call.
-
-   Takes:
-   - url: full API endpoint URL
-   - headers: HTTP headers map
-   - body: JSON string request body
-   - parse-sse-data: (data -> seq-of-events | nil)
-   - provider-name: string for error messages
-
-   Returns a channel of internal events (maps with :type key)."
+  "POST to a streaming API and return a channel of internal events.
+   parse-sse-data: (data-map -> seq-of-event-maps | nil)"
   [url headers body parse-sse-data provider-name]
-  (let [events-chan (chan 1024)]
+  (let [out (chan 1024)]
     (net/post-stream url headers body
-                     (fn [response]
-                       (cond
-                         (:error response)
-                         (go
-                           (>! events-chan {:type :error
-                                           :error (.getMessage (:error response))
-                                           :exception (:error response)})
-                           (close! events-chan))
+      (fn [{:keys [error status body] :as response}]
+        (cond
+          error
+          (go (>! out {:type :error :error (.getMessage error) :exception error})
+              (close! out))
 
-                         (= 200 (:status response))
-                         (let [sse-chan (sse/parse-sse (:body response))]
-                           (go
-                             (try
-                               (loop []
-                                 (when-let [chunk (<! sse-chan)]
-                                   (cond
-                                     (::sse/done chunk)
-                                     (>! events-chan {:type :done})
+          (= 200 status)
+          (pipe-sse-events (sse/parse-sse body) parse-sse-data out)
 
-                                     (::sse/error chunk)
-                                     (do
-                                       (>! events-chan {:type :error :error (::sse/error chunk)})
-                                       (recur))
-
-                                     :else
-                                     (if-let [evts (seq (parse-sse-data (::sse/data chunk)))]
-                                       (let [done? (loop [es evts]
-                                                      (if es
-                                                        (let [e (first es)]
-                                                          (>! events-chan e)
-                                                          (if (= :done (:type e))
-                                                            true
-                                                            (recur (next es))))
-                                                        false))]
-                                         (when-not done?
-                                           (recur)))
-                                       (recur)))))
-                               (catch Exception e
-                                 (>! events-chan {:type :error :error e}))
-                               (finally
-                                 (close! events-chan)))))
-                         :else
-                         (go
-                           (>! events-chan (handle-error-response provider-name response))
-                           (close! events-chan)))))
-    events-chan))
+          :else
+          (go (>! out (error-event provider-name response))
+              (close! out)))))
+    out))
