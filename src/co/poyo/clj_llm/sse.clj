@@ -1,4 +1,5 @@
 (ns co.poyo.clj-llm.sse
+  "SSE line parsing and event stream construction."
   (:require
    [camel-snake-kebab.core :as csk]
    [camel-snake-kebab.extras :as cske]
@@ -6,95 +7,61 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [co.poyo.clj-llm.net :as net])
-  (:import (java.io Closeable)))
+  (:import (java.io Closeable BufferedReader)))
 
 (def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
-(defn- parse-sse-line
-  [line]
+(defn- parse-data
+  "Given one SSE line, return:
+   - ::done for \"data: [DONE]\"
+   - event map for JSON \"data:\" lines
+   - nil otherwise"
+  [^String line]
   (when (str/starts-with? line "data:")
     (let [raw (str/trim (subs line 5))]
       (cond
-        (= raw "[DONE]")
-        {:type :done}
-
+        (= raw "[DONE]") ::done
         :else
         (try
-          {:type :event
-           :data (cske/transform-keys
-                  ->kebab-key
-                  (json/parse-string raw))}
-          (catch Exception _
-            nil))))))
+          (cske/transform-keys ->kebab-key (json/parse-string raw))
+          (catch Exception _ nil))))))
 
-(deftype SseStream [^java.io.BufferedReader r closed?]
-  Closeable
-  (close [_]
-    (when (compare-and-set! closed? false true)
-      (.close r)))
-
-  clojure.lang.IReduceInit
-  (reduce [this rf init]
-    (try
-      (loop [acc init]
-        (if (reduced? acc)
-          @acc
-          (if-let [line (.readLine r)]
-            (let [parsed (parse-sse-line line)]
-              (cond
-                (= (:type parsed) :done)
-                acc
-
-                (= (:type parsed) :event)
-                (recur (rf acc (:data parsed)))
-
-                :else
-                (recur acc)))
-            acc)))
-      (finally
-        (.close ^Closeable this)))))
-
-(deftype ErrorStream [err]
-  Closeable
-  (close [_] nil)
-
-  clojure.lang.IReduceInit
-  (reduce [_ rf init]
-    (rf init err)))
-
-(deftype XformedStream [xf ^Closeable stream]
-  Closeable
-  (close [_] (.close stream))
-
-  clojure.lang.IReduceInit
-  (reduce [_ rf init]
-    (.reduce ^clojure.lang.IReduceInit stream (xf rf) init)))
-
-(defn xform
-  "Wrap a Closeable+IReduceInit stream with a transducer.
-   Returns a new Closeable+IReduceInit."
-  [xf stream]
-  (->XformedStream xf stream))
+(defn ->ReduceStream
+  "Create a Closeable + IReduceInit from a close-fn and a reduce-fn."
+  [close-fn reduce-fn]
+  (reify
+    java.io.Closeable (close [_] (close-fn))
+    clojure.lang.IReduceInit (reduce [_ rf init] (reduce-fn rf init))))
 
 (defn open-event-stream
-  "Returns a Closeable + Reducible stream of event maps.
-   Always closes when reduced."
+  "POST to an SSE endpoint.
+   Returns a Closeable+IReduceInit of parsed event maps.
+   Throws on setup/HTTP errors. Always closes when reduced."
   [url headers req-body]
-  (try
-    (let [{:keys [error status body]} (net/post-stream url headers req-body)]
-      (cond
-        error
-        (->ErrorStream
-         {:type :error :error (.getMessage ^Exception error)})
-
-        (not= 200 status)
-        (->ErrorStream
-         {:type :error :status status})
-
-        :else
-        (->SseStream
-         (io/reader body)
-         (atom false))))
-    (catch Exception e
-      (->ErrorStream
-       {:type :error :error (.getMessage e)}))))
+  (let [{:keys [error status body]} (net/post-stream url headers req-body)]
+    (when error
+      (throw (ex-info "SSE request failed"
+                      {:type :sse/request-failed}
+                      ^Throwable error)))
+    (when (not= 200 status)
+      (throw (ex-info "SSE HTTP error"
+                      {:type :sse/http-error
+                       :status status})))
+    (let [^BufferedReader r (io/reader body)]
+      (->ReduceStream
+       #(.close r)
+       (fn [rf init]
+         (try
+           (loop [acc init]
+             (cond
+               (reduced? acc) @acc
+               :else
+               (if-let [line (.readLine r)]
+                 (let [x (parse-data line)]
+                   (cond
+                     (nil? x) (recur acc)
+                     (= x ::done) acc
+                     :else (recur (rf acc x))))
+                 acc)))
+           (finally
+             (.close r))))))))
