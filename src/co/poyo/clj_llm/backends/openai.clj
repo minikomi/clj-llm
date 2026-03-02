@@ -96,7 +96,7 @@
 
 (defrecord OpenAIBackend [api-base api-key-fn defaults]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+  (request-stream [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
     (let [api-key (api-key-fn)
           _ (when-not api-key
               (throw (errors/error "API key function returned nil"

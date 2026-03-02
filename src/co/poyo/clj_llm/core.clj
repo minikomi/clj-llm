@@ -244,9 +244,10 @@
                          (throw (errors/error "No model specified"
                                               {:error-type :llm/invalid-request :opts parsed})))
          messages      (build-messages input)
-         source-chan   (proto/request-stream provider model system-prompt messages
-                                            schema tools tool-choice
-                                            (or provider-opts {}))
+         source-chan   (proto/request-stream provider
+                        {:model model :system-prompt system-prompt :messages messages
+                         :schema schema :tools tools :tool-choice tool-choice
+                         :provider-opts (or provider-opts {})})
          ;; Dropping buffers: slow consumers (or nobody reading :chunks/:events)
          ;; must not block the go-loop that delivers text-promise.
          text-chunks   (chan (a/dropping-buffer 1024))
