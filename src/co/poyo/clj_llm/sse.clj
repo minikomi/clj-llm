@@ -7,26 +7,26 @@
    [clojure.walk :as walk]
    [camel-snake-kebab.core :as csk]))
 
-(defn- parse-json-kebab [s]
-  (->> (json/parse-string s)
-       (walk/postwalk (fn [x]
-                        (if (map? x)
-                          (update-keys x (comp keyword csk/->kebab-case))
-                          x)))))
+(def ^:private buf-size 1024)
+
+(defn- kebab-keys [m]
+  (walk/postwalk
+   (fn [x] (if (map? x) (update-keys x (comp keyword csk/->kebab-case)) x))
+   m))
 
 (defn- parse-line [line]
   (when (str/starts-with? line "data:")
     (let [raw (str/trim (subs line 5))]
       (if (= raw "[DONE]")
         {::done true}
-        (try {::data (parse-json-kebab raw)}
+        (try {::data (-> raw json/parse-string kebab-keys)}
              (catch Exception _ nil))))))
 
 (defn parse-sse
   "Parse an SSE InputStream into a channel.
    Events are {::data map}, {::done true}, or {::error ex}."
   [input-stream]
-  (let [out (chan 1024)]
+  (let [out (chan buf-size)]
     (thread
       (try
         (with-open [reader (io/reader input-stream)]
