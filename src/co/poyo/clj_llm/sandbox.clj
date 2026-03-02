@@ -2,8 +2,7 @@
   "REPL-friendly examples for clj-llm"
   (:require [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.backends.openai :as openai]
-            [cheshire.core :as json]
-            [clojure.core.async :refer [<!!]]))
+            [cheshire.core :as json]))
 
 (comment
 
@@ -23,39 +22,41 @@
                          :system-prompt "Extract structured data"}))
 
   ;; ======================================
-  ;; Basic text -- returns a string
+  ;; Basic text -- returns a result map
   ;; ======================================
 
   (llm/generate ai "What is 2+2?")
-  ;; => "2+2 equals 4."
+  ;; => {:text "2+2 equals 4." :usage {:prompt-tokens 10 :completion-tokens 8}}
 
-  (llm/generate ai {:system-prompt "You are a poet"} "Write a haiku")
+  (:text (llm/generate ai {:system-prompt "You are a poet"} "Write a haiku"))
 
   ;; ======================================
-  ;; Structured output -- returns a parsed map
+  ;; Structured output -- :structured key in result
   ;; ======================================
 
   (llm/generate ai {:schema [:map [:name :string] [:age :int] [:occupation :string]]}
                 "Extract: Marie Curie was a 66 year old physicist")
-  ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
+  ;; => {:text "..." :structured {:name "Marie Curie" :age 66 :occupation "physicist"} :usage {...}}
 
   ;; Or use a pre-configured extractor
-  (llm/generate extractor "Marie Curie was a 66 year old physicist")
+  (:structured (llm/generate extractor "Marie Curie was a 66 year old physicist"))
   ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
   ;; ======================================
   ;; Streaming
   ;; ======================================
 
-  ;; Print as it streams, returns full text
+  ;; Print as it streams, returns result map
   (llm/stream-print ai "Tell me a story about a robot.")
+  ;; prints chunks as they arrive
+  ;; => {:text "Once upon a time..." :usage {...}}
 
-  ;; Raw channel
-  (let [ch (llm/stream ai "Count to 5")]
-    (loop []
-      (when-let [chunk (<!! ch)]
-        (print chunk) (flush)
-        (recur))))
+  ;; Custom streaming via reduce over request
+  (reduce (fn [acc event]
+            (when (= :content (:type event))
+              (print (:content event)) (flush))
+            (conj acc event))
+          [] (llm/request ai "Count to 5"))
 
   ;; ======================================
   ;; Tool calling -- defns with Malli schemas
@@ -105,23 +106,26 @@
   (llm/run-agent ai [#'geocode #'get-weather] "What's the weather in Tokyo?")
   ;; => {:text "It's currently 20.1°C in Tokyo with light wind."
   ;;     :history [...]
-  ;;     :steps [{:tool-calls [...] :tool-results [...]} ...]}
+  ;;     :steps [{:tool-calls [...] :tool-results [...]} ...]
+  ;;     :usage {:prompt-tokens ... :completion-tokens ...}}
 
   ;; ======================================
-  ;; Full response (prompt)
+  ;; Raw event stream
   ;; ======================================
 
-  (def resp (llm/request ai "Explain AI briefly"))
-  @resp              ;; text (IDeref)
-  @(:text resp)      ;; same
-  @(:usage resp)     ;; token counts
+  ;; request returns a reducible of events
+  (reduce (fn [acc event]
+            (println (:type event) (dissoc event :type))
+            (conj acc event))
+          [] (llm/request ai "Explain AI briefly"))
 
   ;; ======================================
-  ;; Composition -- threading just works
+  ;; Composition -- threading with :text
   ;; ======================================
 
   (->> "Raw technical document with some errors"
        (llm/generate ai {:system-prompt "Fix grammar"})
+       :text
        (llm/generate ai {:system-prompt "Translate to French"}))
 
   ;; ======================================
@@ -133,7 +137,7 @@
 
   (defn chat! [msg]
     (swap! conversation conj {:role :user :content msg})
-    (let [text (llm/generate ai @conversation)]
+    (let [{:keys [text]} (llm/generate ai @conversation)]
       (swap! conversation conj {:role :assistant :content text})
       text))
 
