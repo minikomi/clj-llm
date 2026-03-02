@@ -82,13 +82,14 @@
   (with-open [reader (io/reader input-stream)]
     (loop []
       (when-let [line (.readLine reader)]
-        (when-let [{:keys [data done]} (sse/parse-line line)]
+        (if-let [{:keys [data done]} (sse/parse-line line)]
           (if done
             (a/>!! out {:type :done})
             (let [evts (seq (convert-fn data))]
               (doseq [e evts] (a/>!! out e))
               (when-not (some #(= :done (:type %)) evts)
-                (recur)))))))))
+                (recur))))
+          (recur))))))
 
 (defn create-event-stream
   "POST to a streaming API and return a channel of internal events.
