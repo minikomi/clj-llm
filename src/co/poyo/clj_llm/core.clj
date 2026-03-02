@@ -9,7 +9,7 @@
    [malli.util :as mu]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.errors :as errors]
-   [co.poyo.clj-llm.helpers :as helpers]))
+))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas (parse, don't validate)
@@ -239,7 +239,7 @@
    (request provider {} input))
   ([provider opts input]
    (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
-         (parse-opts (helpers/deep-merge (:defaults provider) opts))
+         (parse-opts (merge (:defaults provider) opts))
          _             (when-not model
                          (throw (errors/error "No model specified"
                                               {:error-type :llm/invalid-request :opts parsed})))
