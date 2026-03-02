@@ -249,16 +249,17 @@ a { color:#8ab4f8; text-decoration:none }
                                             "\n\n") false))
                          sb (StringBuilder.)]
                      ;; Stream chunks via reduce over events
-                     (reduce (fn [_ event]
-                               (when (= :content (:type event))
-                                 (.append sb (:content event))
-                                 (send-sse! "message"
-                                   (str (render-msgs messages)
-                                        (hic [:div.m.assistant
-                                              [:div.r "assistant"]
-                                              [:div.b (raw-string (md->html (.toString sb))) [:span.dot]]])))))
-                             nil
-                             (llm/request ai llm-history))
+                     (with-open [events (llm/request ai llm-history)]
+                       (reduce (fn [_ event]
+                                 (when (= :content (:type event))
+                                   (.append sb (:content event))
+                                   (send-sse! "message"
+                                     (str (render-msgs messages)
+                                          (hic [:div.m.assistant
+                                                [:div.r "assistant"]
+                                                [:div.b (raw-string (md->html (.toString sb))) [:span.dot]]])))))
+                               nil
+                               events))
                      ;; Done
                      (let [assistant-msg {:role "assistant" :content (md->html (.toString sb))}
                            all-msgs (conj messages assistant-msg)

@@ -20,23 +20,25 @@
 
 ;; request: reduce over raw events for full control
 (println "\n--- request + reduce ---")
-(let [text (reduce (fn [sb event]
-                     (when (= :content (:type event))
-                       (print (:content event))
-                       (flush)
-                       (.append sb (:content event)))
-                     sb)
-                   (StringBuilder.)
-                   (llm/request ai "Count from 1 to 5, one per line"))]
-  (println)
-  (println "Got back:" (.length text) "chars"))
+(with-open [events (llm/request ai "Count from 1 to 5, one per line")]
+  (let [text (reduce (fn [sb event]
+                       (when (= :content (:type event))
+                         (print (:content event))
+                         (flush)
+                         (.append sb (:content event)))
+                       sb)
+                     (StringBuilder.)
+                     events)]
+    (println)
+    (println "Got back:" (.length text) "chars")))
 
 ;; request with opts
 (println "\n--- request with system prompt ---")
-(reduce (fn [_ event]
-          (when (= :content (:type event))
-            (print (:content event))
-            (flush)))
-        nil
-        (llm/request ai {:system-prompt "Respond only in ALL CAPS"} "Say hello"))
+(with-open [events (llm/request ai {:system-prompt "Respond only in ALL CAPS"} "Say hello")]
+  (reduce (fn [_ event]
+            (when (= :content (:type event))
+              (print (:content event))
+              (flush)))
+          nil
+          events))
 (println)
