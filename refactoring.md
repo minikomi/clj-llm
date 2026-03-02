@@ -133,28 +133,17 @@ Babashka was fine because it exits on main thread completion regardless.
 
 ### What changed
 
-**sse.clj: 78 → 24 lines.** Now exports a single transducer `sse/xf`
-(SSE lines → parsed data maps). No IO, no channels, no HTTP. Just:
+**sse.clj: 78 → 50 lines.** Now exports a single `event-stream` function
+that takes `(url headers body)`, makes the HTTP request, and returns a lazy
+seq of parsed SSE event maps. Reader auto-closes on stream exhaustion.
+No channels, no core.async.
+
+**Backends: plain seq operations.** Each backend maps its domain converter
+over `sse/event-stream`. No transducer composition, no IReduceInit.
 
 ```clojure
-(def xf
-  (comp
-    (remove #(str/ends-with? % "[DONE]"))
-    (keep parse-sse-line)))
-```
-
-**Backends: pure transducer composition.** Each backend composes `sse/xf`
-with its own event transform, then wraps in a `reify IReduceInit` that
-owns the HTTP lifecycle (`with-open`, error handling). No channels, no
-threads, no core.async dependency.
-
-```clojure
-;; openai.clj — the entire request-stream impl
-(let [xf (comp sse/xf (mapcat #(data->events % schema tools)))]
-  (reify clojure.lang.IReduceInit
-    (reduce [_ f init]
-      (with-open [reader (io/reader body)]
-        (transduce xf f init (line-seq reader))))))
+;; openai.clj
+(mapcat #(data->events % schema tools) (sse/event-stream url headers body))
 ```
 
 OpenAI uses `mapcat` (one SSE chunk can carry multiple tool-call entries).
@@ -181,18 +170,18 @@ available for future use.
 ### After
 
 ```
-After: daemon thread → blocking reduce → backend reducible → sse/xf → HTTP IO
-       core.clj        core.clj          backend (pure)     sse (pure)
+After: daemon thread → blocking reduce → backend lazy seq → sse/event-stream → HTTP IO
+       core.clj        core.clj          backend            sse.clj
 ```
 
-One thread, zero intermediate channels, zero go-loops. Backends are pure
-(no async, no IO management). SSE is a transducer definition.
+One thread, zero intermediate channels, zero go-loops. SSE is a lazy seq
+with auto-closing resource management.
 
 ### Line counts
 
 | File | Before | After | Change |
 |------|--------|-------|--------|
-| sse.clj | 78 | 24 | -54 (transducer only) |
+| sse.clj | 78 | 50 | -28 (event-stream lazy seq) |
 | net.cljc | 42 | 42 | unchanged |
 | util.clj | — | 8 | new (run-daemon!) |
 | openai.clj | 129 | 149 | +20 (owns HTTP lifecycle) |
@@ -203,34 +192,30 @@ One thread, zero intermediate channels, zero go-loops. Backends are pure
 
 72 tests, 216 assertions, 0 failures.
 
-## Phase 4: `sse/lines` — three-stage pipe
+## Phase 4: `sse/event-stream` — lazy seq with resource management
 
-The streaming pipeline is now three clear stages composed with `eduction`:
+`sse/lines` (IReduceInit) and `sse/xf` (transducer) collapsed into a single
+`sse/event-stream` function. Returns a lazy seq of parsed SSE event maps.
+Reader auto-closes when the stream is exhausted or hits `[DONE]`.
 
-```
-lines → SSE data maps → domain events
-sse/lines    sse/xf       backend-specific
-```
+Errors come back as `[{:type :error ...}]` — same seq interface, no special
+casing needed by callers.
 
-`sse/lines` takes `(url headers body)`, manages the HTTP connection lifecycle,
-and returns raw SSE strings. `sse/xf` is a pure transducer from lines to parsed
-data maps. Backends compose both with their own domain converter:
+Backends now just use standard seq functions:
 
 ```clojure
 ;; OpenAI
-(eduction (comp sse/xf (mapcat #(data->events % schema tools)))
-          (sse/lines url headers body))
+(mapcat #(data->events % schema tools) (sse/event-stream url headers body))
 
 ;; Anthropic
-(eduction (comp sse/xf (keep #(data->event % schema tools)))
-          (sse/lines url headers body))
+(keep #(data->event % schema tools) (sse/event-stream url headers body))
 ```
 
-Each layer does one thing. No functions passed down — just data flowing through.
+No eduction, no transducer composition, no IReduceInit. Just lazy seqs.
 
 ### To write a new backend:
 1. `build-body` — construct the API request body
 2. `data->event(s)` — convert one parsed SSE data map to internal events
-3. `eduction` the pipe: `(comp sse/xf your-xf)` over `(sse/lines url headers body)`
+3. `(keep your-fn (sse/event-stream url headers body))`
 
 72 tests, 216 assertions, 0 failures.
