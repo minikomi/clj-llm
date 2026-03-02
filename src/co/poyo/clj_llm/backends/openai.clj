@@ -3,10 +3,13 @@
    
    Supports OpenAI, OpenRouter, Together.ai, and any OpenAI-compatible endpoint."
   (:require
+   [camel-snake-kebab.core :as csk]
    [cheshire.core :as json]
+   [clojure.set]
+   [clojure.walk :as walk]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.backends.backend-helpers :as backend]))
+   [co.poyo.clj-llm.backends.sse-stream :as sse-stream]))
 
 (def ^:private default-config
   {:api-base "https://api.openai.com/v1"})
@@ -16,10 +19,20 @@
   []
   (System/getenv "OPENAI_API_KEY"))
 
+(defn- convert-options-for-api [opts]
+  (when opts
+    (walk/postwalk
+     (fn [x] (if (map? x) (update-keys x csk/->snake_case_keyword) x))
+     opts)))
+
+(defn- normalize-messages [messages]
+  (mapv #(clojure.set/rename-keys % {:tool-calls :tool_calls
+                                     :tool-call-id :tool_call_id}) messages))
+
 (defn- build-body
   "Build OpenAI API request body"
   [model system-prompt messages schema tools tool-choice opts]
-  (let [messages (backend/normalize-messages messages)
+  (let [messages (normalize-messages messages)
         messages-with-system (if system-prompt
                                (into [{:role "system" :content system-prompt}]
                                      messages)
@@ -32,7 +45,7 @@
                        schema
                        {:tools [(schema/malli->tool-definition schema)]
                         :tool_choice "required"})
-        api-opts (backend/convert-options-for-api opts)]
+        api-opts (convert-options-for-api opts)]
     (merge
      {:stream true
       :stream_options {:include_usage true}
@@ -104,9 +117,9 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (backend/create-event-stream url headers body
-                                  #(data->internal-events % schema tools)
-                                  "openai"))))
+      (sse-stream/create-event-stream url headers body
+                                       #(data->internal-events % schema tools)
+                                       "openai"))))
 
 (defn backend
   "Create an OpenAI provider.
