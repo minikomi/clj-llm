@@ -1,14 +1,12 @@
 (ns co.poyo.clj-llm.core
   (:require
-   [clojure.core.async :as a :refer [<!! chan]]
    [clojure.set]
    [cheshire.core :as json]
    [malli.core :as m]
    [malli.error :as me]
    [malli.transform :as mt]
    [malli.util :as mu]
-   [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.util :as util]))
+   [co.poyo.clj-llm.protocol :as proto]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas (parse, don't validate)
@@ -61,28 +59,57 @@
          provider-opts (assoc :provider-opts provider-opts))))))
 
 ;; ════════════════════════════════════════════════════════════════════
-(defn- unwrap!
-  "Throw v if it's an exception, otherwise return it.
-   Used to propagate errors delivered into promises."
-  [v]
-  (if (instance? Exception v) (throw v) v))
-
-
-;; Response record
+;; Event state machine
 ;; ════════════════════════════════════════════════════════════════════
 
-(defrecord Response [chunks events text usage structured tool-calls]
-  clojure.lang.IDeref
-  (deref [_]
-    (unwrap! @text)))
+(def ^:private init-state
+  "Initial accumulator for the event stream consumer."
+  {:chunks [] :tool-calls [] :tool-call-positions {} :usage {} :finish-reason nil :error nil})
 
-(defmethod print-method Response [r writer]
-  (.write writer "#Response{:text ")
-  (if (realized? (:text r))
-    (.write writer (pr-str @(:text r)))
-    (.write writer "<pending>"))
-  (.write writer "}"))
+(defn- next-state
+  "Pure state transition: state × event → state'.
+   No side effects."
+  [state event]
+  (case (:type event)
+    :content
+    (update state :chunks conj (:content event))
 
+    :tool-call
+    (let [idx  (or (:index event) (count (:tool-calls state)))
+          call (assoc event :arguments (or (:arguments event) ""))]
+      (-> state
+          (update :tool-calls conj call)
+          (assoc-in [:tool-call-positions idx] (count (:tool-calls state)))))
+
+    :tool-call-delta
+    (let [pos (get (:tool-call-positions state) (:index event))]
+      (if pos
+        (update-in state [:tool-calls pos :arguments] str (:arguments event))
+        state))
+
+    :usage
+    (update state :usage merge (dissoc event :type))
+
+    :finish
+    (assoc state :finish-reason (:reason event))
+
+    :error
+    (assoc state :error (ex-info "LLM request failed"
+                                 {:error-type :llm/server-error :event event}))
+
+    :done state
+
+    ;; Forward-compat: ignore event types we don't recognize yet
+    state))
+
+(defn- finalize-state
+  "Turn accumulated state into a result map."
+  [{:keys [chunks error usage finish-reason tool-calls]}]
+  (if error
+    (throw error)
+    (cond-> {:text (apply str chunks)}
+      (seq usage)      (assoc :usage (cond-> usage finish-reason (assoc :finish-reason finish-reason)))
+      (seq tool-calls) (assoc :tool-calls tool-calls))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Internal helpers
@@ -125,166 +152,42 @@
                   {:error-type :llm/invalid-request
                    :input input}))))
 
-;; ════════════════════════════════════════════════════════════════════
-;; Event stream consumer
-;; ════════════════════════════════════════════════════════════════════
-
-(def ^:private init-state
-  "Initial accumulator for the event stream consumer."
-  {:chunks [] :tool-calls [] :tool-call-positions {} :usage {} :finish-reason nil :done? false :error nil})
-
-(defn- next-state
-  "Pure state transition: state × event → state'.
-   No side effects, no channels, no promises."
-  [state event]
-  (case (:type event)
-    :content
-    (update state :chunks conj (:content event))
-
-    :tool-call
-    (let [idx  (or (:index event) (count (:tool-calls state)))
-          call (assoc event :arguments (or (:arguments event) ""))]
-      (-> state
-          (update :tool-calls conj call)
-          (assoc-in [:tool-call-positions idx] (count (:tool-calls state)))))
-
-    :tool-call-delta
-    (let [pos (get (:tool-call-positions state) (:index event))]
-      (if pos
-        (update-in state [:tool-calls pos :arguments] str (:arguments event))
-        state))
-
-    :usage
-    (update state :usage merge (dissoc event :type))
-
-    :finish
-    (assoc state :finish-reason (:reason event))
-
-    :error
-    (assoc state :done? true
-                 :error (ex-info "LLM request failed"
-                                 {:error-type :llm/server-error :event event}))
-
-    :done
-    (assoc state :done? true)
-
-    ;; Forward-compat: ignore event types we don't recognize yet
-    state))
-
-(defn- state->text [{:keys [chunks error]}]
-  (or error (apply str chunks)))
-
-(defn- state->usage [{:keys [usage finish-reason]} provider-opts req-start]
-  (let [u (cond-> usage finish-reason (assoc :finish-reason finish-reason))]
-    (when (seq u)
-      (let [now (System/currentTimeMillis)]
-        (assoc u :type :usage
-                 :clj-llm/provider-opts provider-opts
-                 :clj-llm/req-start req-start
-                 :clj-llm/req-end now
-                 :clj-llm/duration (- now req-start))))))
-
-(defn- consume-events
-  "Blocking. Reduces over event-source, fans out to chunks/events channels,
-   delivers promises when done.
-
-   State transitions are pure (next-state). This function knows nothing
-   about structured output — that concern lives in `request`."
-  [event-source {:keys [text-chunks-chan events-chan
-                        text-promise usage-promise tool-calls-promise
-                        provider-opts req-start]}]
-  (let [finalize! (fn [state]
-                    (deliver text-promise (state->text state))
-                    (deliver tool-calls-promise (not-empty (:tool-calls state)))
-                    (deliver usage-promise (state->usage state provider-opts req-start))
-                    (a/close! text-chunks-chan)
-                    (a/close! events-chan))
-        final-state
-        (try
-          (reduce (fn [state event]
-                    (let [state' (next-state state event)]
-                      (a/>!! events-chan event)
-                      (when (= :content (:type event))
-                        (a/>!! text-chunks-chan (:content event)))
-                      (if (:done? state')
-                        (reduced state')
-                        state')))
-                  init-state event-source)
-          (catch Exception e
-            (assoc init-state :error e)))]
-    (finalize! final-state)))
+(defn- request-events
+  "Build and return the event reducible for the given provider + opts + input."
+  [provider opts input]
+  (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
+        (parse-opts (merge (:defaults provider) opts))
+        _        (when-not model
+                   (throw (ex-info "No model specified"
+                                   {:error-type :llm/invalid-request :opts parsed})))
+        messages (build-messages input)]
+    (proto/request-stream provider
+      {:model model :system-prompt system-prompt :messages messages
+       :schema schema :tools tools :tool-choice tool-choice
+       :provider-opts (or provider-opts {})})))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
 
 (defn request
-  "Send a request to the LLM provider. Returns a Response record with:
-    :text        - promise of full text string
-    :chunks      - channel of text chunks as they stream
-    :events      - channel of raw events
-    :usage       - promise of token usage info
-    :structured  - promise of parsed structured data (when :schema provided)
-    :tool-calls  - promise of tool calls vector (when :tools provided)
+  "Returns the raw event reducible from the provider.
+   Reduce over it to consume events however you like.
 
-   Supports @(request ...) via IDeref to block and get text.
+   (reduce (fn [acc event]
+             (when (= :content (:type event))
+               (print (:content event)) (flush))
+             (conj acc event))
+           [] (llm/request ai \"hello\"))
 
-   Input is the last arg — a string (prompt) or vector (message history).
+   Events are maps with :type — :content, :tool-call, :tool-call-delta,
+   :usage, :finish, :error, :done.
 
-   (request ai \"hello\")                              ; simple
-   (request ai {:schema s} \"extract this\")            ; with opts
-   (request ai {:tools t} [{:role :user ...} ...])    ; with history"
+   Input is last — string or message-history vector."
   ([provider input]
    (request provider {} input))
   ([provider opts input]
-   (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
-         (parse-opts (merge (:defaults provider) opts))
-         _             (when-not model
-                         (throw (ex-info "No model specified"
-                                         {:error-type :llm/invalid-request :opts parsed})))
-         messages      (build-messages input)
-         event-source  (proto/request-stream provider
-                         {:model model :system-prompt system-prompt :messages messages
-                          :schema schema :tools tools :tool-choice tool-choice
-                          :provider-opts (or provider-opts {})})
-         ;; Dropping buffers: slow consumers (or nobody reading :chunks/:events)
-         ;; won't block the thread that delivers promises.
-         text-chunks   (chan (a/dropping-buffer 1024))
-         events        (chan (a/dropping-buffer 1024))
-         text-p        (promise)
-         usage-p       (promise)
-         structured-p  (promise)
-         tool-calls-p  (promise)]
-
-     ;; Single daemon thread: reduce over events, fan out, deliver promises.
-     (util/run-daemon!
-       (fn []
-         (consume-events event-source
-                         {:text-chunks-chan   text-chunks
-                          :events-chan        events
-                          :text-promise       text-p
-                          :usage-promise      usage-p
-                          :tool-calls-promise tool-calls-p
-                          :provider-opts      provider-opts
-                          :req-start          (System/currentTimeMillis)})
-         ;; Structured output: parse + validate now that text is ready.
-         (if schema
-           (try
-             (let [text @text-p]
-               (deliver structured-p
-                        (if (instance? Exception text)
-                          text
-                          (parse-structured-output text schema))))
-             (catch Exception e
-               (deliver structured-p e)))
-           (deliver structured-p nil))))
-
-     (map->Response {:chunks     text-chunks
-                     :events     events
-                     :text       text-p
-                     :usage      usage-p
-                     :structured structured-p
-                     :tool-calls tool-calls-p}))))
+   (request-events provider opts input)))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."
@@ -388,16 +291,19 @@
 
 
 (defn generate
-  "Blocking generation. Returns the natural value:
-
-   - String input → string back
-   - With :schema → parsed structured data
+  "Blocking generation. Returns a result map:
 
    (generate ai \"hello\")
-   ;; => \"Hello!\"
+   ;; => {:text \"Hello!\" :usage {:prompt-tokens 5 :completion-tokens 10}}
 
    (generate ai {:schema person-schema} \"extract this\")
-   ;; => {:name \"Alice\" :age 30}
+   ;; => {:text \"{...}\" :structured {:name \"Alice\" :age 30} :usage {...}}
+
+   (generate ai {:tools [#'get-weather]} \"Weather in Tokyo?\")
+   ;; => {:text nil
+   ;;     :tool-calls [{:id \"call_1\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
+   ;;     :tool-results [\"Sunny, 22C in Tokyo\"]
+   ;;     :usage {...}}
 
    Common options:
      :model          - model name string
@@ -412,18 +318,8 @@
 
    (->> \"raw text\"
         (llm/generate ai {:system-prompt \"Fix grammar\"})
-        (llm/generate ai {:system-prompt \"Translate to French\"}))
-
-   When :tools are provided, makes a single LLM call, executes any tool calls,
-   and returns a map with all results:
-
-   (generate ai {:tools [#'get-weather]} \"Weather in Tokyo?\")
-   ;; => {:text nil
-   ;;     :tool-calls [{:id \"call_1\" :name \"get_weather\" :arguments {:city \"Tokyo\"}}]
-   ;;     :tool-results [\"Sunny, 22C in Tokyo\"]}
-
-   For multi-turn tool loops, use `run-agent`.
-   For streaming/usage, use `request`."
+        :text
+        (llm/generate ai {:system-prompt \"Translate to French\"}))"
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
@@ -433,23 +329,23 @@
          api-opts (if tools
                     (assoc (dissoc opts :tools) :tools input-schemas)
                     opts)
-         response (request provider api-opts input)
-         text     @(:text response)]
-     (unwrap! text)
+         event-source (request-events provider api-opts input)
+         result (finalize-state (reduce next-state init-state event-source))]
      (cond
        tools
        (let [name->fn (build-name->fn tools input-schemas)
-             parsed-calls (or (parse-tool-calls @(:tool-calls response)) [])]
-         {:text       (not-empty text)
-          :tool-calls parsed-calls
-          :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)})
+             parsed-calls (or (parse-tool-calls (:tool-calls result)) [])]
+         (cond-> {:text       (not-empty (:text result))
+                  :tool-calls parsed-calls
+                  :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)}
+           (:usage result) (assoc :usage (:usage result))))
 
        schema
-       (unwrap! @(:structured response))
+       (cond-> {:text (:text result)
+                :structured (parse-structured-output (:text result) schema)}
+         (:usage result) (assoc :usage (:usage result)))
 
-       :else text))))
-
-
+       :else result))))
 
 
 (defn run-agent
@@ -467,39 +363,12 @@
                         response, before executing tools. Return truthy to stop.
                         Default: stop when no tool calls (model is done).
      :on-tool-calls   - (fn [{:keys [step tool-calls text]}] ...) called when the
-                        model returns tool calls, before they are executed. Useful
-                        for logging, UI updates, or progress indicators.
+                        model returns tool calls, before they are executed.
      :on-tool-result  - (fn [{:keys [step tool-call result error]}] ...) called
-                        after each individual tool finishes. :error is the exception
-                        if the tool threw (result will be the error string).
+                        after each individual tool finishes.
      :model, :system-prompt, :temperature, :max-tokens, :top-p, :provider-opts
 
-   Returns {:text ... :history ... :steps [...] :tool-calls ...}
-     :text       - final text response (string)
-     :history    - full message history (reusable)
-     :steps      - vec of {:tool-calls [...] :tool-results [...]} per iteration
-     :tool-calls - pending tool calls when :stop-when fired (nil otherwise)
-
-   For structured output after tool use, compose with generate:
-
-     (let [{:keys [history]} (run-agent ai tools \"find user 123\")]
-       (generate ai {:schema result-schema} history))
-
-   Stop the loop explicitly:
-
-     ;; Stop when the model calls the 'done' tool
-     (run-agent ai tools {:stop-when (fn [{:keys [tool-calls]}]
-                                       (some #(= \"done\" (:name %)) tool-calls))}
-       \"do the thing\")
-
-   Watch tool execution in real time:
-
-     (run-agent ai tools
-       {:on-tool-calls  (fn [{:keys [step tool-calls]}]
-                          (println \"Step\" step \"calling:\" (map :name tool-calls)))
-        :on-tool-result (fn [{:keys [step tool-call result]}]
-                          (println \" \" (:name tool-call) \"->\" (subs result 0 80)))}
-       \"research this topic\")"
+   Returns {:text ... :history ... :steps [...] :tool-calls ... :usage ...}"
   ([provider tools input]
    (run-agent provider tools {} input))
   ([provider tools opts input]
@@ -520,16 +389,16 @@
      (loop [history (build-messages input)
             steps []
             n 0]
-       (let [response (request provider request-opts history)
-             text     @(:text response)
-             _        (unwrap! text)
-             parsed-calls (or (parse-tool-calls @(:tool-calls response)) [])
+       (let [event-source (request-events provider request-opts history)
+             {:keys [text usage] :as result} (finalize-state (reduce next-state init-state event-source))
+             parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
-           {:text       text
-            :history    (conj history {:role :assistant :content (or text "")})
-            :steps      steps
-            :tool-calls (not-empty parsed-calls)}
+           (cond-> {:text       text
+                    :history    (conj history {:role :assistant :content (or text "")})
+                    :steps      steps
+                    :tool-calls (not-empty parsed-calls)}
+             usage (assoc :usage usage))
 
            (let [_        (when (and on-tool-calls (seq parsed-calls))
                             (on-tool-calls {:step n :tool-calls parsed-calls :text text}))
@@ -560,55 +429,27 @@
                                              :tool-results (mapv :result results)})
                                 steps)]
              (if (>= (inc n) max-steps)
-               {:text text :history next-history :steps next-steps :truncated true}
+               (cond-> {:text text :history next-history :steps next-steps :truncated true}
+                 usage (assoc :usage usage))
                (recur next-history next-steps (inc n))))))))))
 
 
-
-
-(defn stream
-  "Returns a channel of text chunks as they stream from the LLM.
-   Input is last — string or message-history vector.
-
-   (let [ch (llm/stream ai \"Count to 10\")]
-     (loop []
-       (when-let [chunk (<!! ch)]
-         (print chunk) (flush)
-         (recur))))"
-  ([provider input]
-   (stream provider {} input))
-  ([provider opts input]
-   (:chunks (request provider opts input))))
-
 (defn stream-print
-  "Stream text to *out*, printing chunks as they arrive. Returns the full text string.
+  "Stream text to *out*, printing chunks as they arrive.
+   Returns the full result map with :text and :usage.
    Great for REPL use.
 
-   (stream-print ai \"Tell me a story\")"
+   (stream-print ai \"Tell me a story\")
+   ;; prints chunks as they arrive, returns {:text \"...\" :usage {...}}"
   ([provider input]
    (stream-print provider {} input))
   ([provider opts input]
-   (let [ch (stream provider opts input)
-         sb (StringBuilder.)]
-     (loop []
-       (when-let [chunk (<!! ch)]
-         (.append sb chunk)
-         (print chunk)
-         (flush)
-         (recur)))
+   (let [event-source (request-events provider opts input)
+         state (reduce (fn [state event]
+                         (when (= :content (:type event))
+                           (print (:content event))
+                           (flush))
+                         (next-state state event))
+                       init-state event-source)]
      (println)
-     (.toString sb))))
-
-(defn events
-  "Returns a channel of raw SSE events from the LLM.
-   Each event is a map with :type (:content, :tool-call, :tool-call-delta,
-   :usage, :error, :done, :finish) and type-specific keys.
-
-   Use this when you need fine-grained control over the event stream.
-   For most cases, prefer `stream` (text chunks) or `request` (full response).
-
-   Input is last — string or message-history vector."
-  ([provider input]
-   (events provider {} input))
-  ([provider opts input]
-   (:events (request provider opts input))))
+     (finalize-state state))))

@@ -3,7 +3,6 @@
   (:require [clojure.test :refer [deftest testing is]]
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
-            [clojure.core.async :refer [<!!]]
             [clojure.string :as str]
             [malli.core]))
 
@@ -33,72 +32,60 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (deftest test-generate
-  (testing "Text generation returns string"
+  (testing "Text generation returns result map with :text"
     (let [provider (mock-provider [{:type :content :content "Hello "}
                                    {:type :content :content "world!"}])]
-      (is (= "Hello world!" (llm/generate provider "test")))))
+      (is (= "Hello world!" (:text (llm/generate provider "test"))))))
 
-  (testing "Structured output returns parsed data directly"
+  (testing "Structured output returns :structured in result map"
     (let [provider (mock-provider [{:type :content :content "{\"name\":\"Alice\",\"age\":30}"}])
-          schema [:map [:name :string] [:age pos-int?]]]
-      (is (= {:name "Alice" :age 30} (llm/generate provider {:schema schema} "test")))))
+          schema [:map [:name :string] [:age pos-int?]]
+          result (llm/generate provider {:schema schema} "test")]
+      (is (= {:name "Alice" :age 30} (:structured result)))
+      (is (string? (:text result)))))
 
   (testing "Error handling"
     (let [provider (mock-provider [{:type :error :error "API Error"}])]
       (is (thrown? Exception (llm/generate provider "test"))))))
 
-(deftest test-request
-  (testing "Rich response object"
-    (let [provider (mock-provider [{:type :content :content "Response text"}
-                                   {:type :usage :prompt-tokens 10 :completion-tokens 20}])
-          resp (llm/request provider "test")]
-      ;; IDeref gives text
-      (is (= "Response text" @resp))
-      ;; Direct promise access
-      (is (= "Response text" @(:text resp)))
-      ;; Usage
-      (let [usage @(:usage resp)]
-        (is (= :usage (:type usage)))
-        (is (= 10 (:prompt-tokens usage)))
-        (is (= 20 (:completion-tokens usage)))))))
+(deftest test-generate-returns-usage
+  (testing "Usage is included in generate result"
+    (let [provider (mock-provider [{:type :content :content "hi"}
+                                   {:type :usage :prompt-tokens 10 :completion-tokens 20}])]
+      (is (= 10 (get-in (llm/generate provider "test") [:usage :prompt-tokens]))))))
 
-(deftest test-stream
-  (testing "Streaming text chunks"
-    (let [provider (mock-provider [{:type :content :content "Hello "}
-                                   {:type :content :content "streaming "}
-                                   {:type :content :content "world!"}])
-          chunks (llm/stream provider "test")
-          collected (atom [])]
-      (loop []
-        (when-let [chunk (<!! chunks)]
-          (swap! collected conj chunk)
-          (recur)))
-      (is (= ["Hello " "streaming " "world!"] @collected)))))
-
-(deftest test-events
-  (testing "Raw event access"
-    (let [provider (mock-provider [{:type :content :content "Hi"}
+(deftest test-request-returns-reducible
+  (testing "request returns a reducible of events"
+    (let [provider (mock-provider [{:type :content :content "hello"}
                                    {:type :usage :prompt-tokens 5 :completion-tokens 10}])
-          events (llm/events provider "test")
-          collected (atom [])]
-      (loop []
-        (when-let [event (<!! events)]
-          (swap! collected conj event)
-          (when-not (= :done (:type event))
-            (recur))))
-      (is (= 3 (count @collected)))
-      (is (= :content (:type (first @collected))))
-      (is (= :usage (:type (second @collected)))))))
+          events (reduce conj [] (llm/request provider "test"))]
+      (is (= 3 (count events)))
+      (is (= :content (:type (first events))))
+      (is (= :usage (:type (second events))))
+      (is (= :done (:type (nth events 2)))))))
+
+(deftest test-stream-print
+  (testing "stream-print prints and returns result map"
+    (let [provider (mock-provider [{:type :content :content "one "}
+                                   {:type :content :content "two "}
+                                   {:type :content :content "three"}
+                                   {:type :usage :prompt-tokens 5 :completion-tokens 10}])
+          result (atom nil)
+          output (with-out-str
+                   (reset! result (llm/stream-print provider "test")))]
+      (is (str/includes? output "one two three"))
+      (is (= "one two three" (:text @result)))
+      (is (= 5 (get-in @result [:usage :prompt-tokens]))))))
 
 (deftest test-message-building
   (testing "With system prompt"
     (let [provider (mock-provider [{:type :content :content "OK"}])]
-      (is (= "OK" (llm/generate provider {:system-prompt "Be helpful"} "Hello")))))
+      (is (= "OK" (:text (llm/generate provider {:system-prompt "Be helpful"} "Hello"))))))
 
   (testing "Direct message history"
     (let [provider (mock-provider [{:type :content :content "OK"}])
           messages [{:role :user :content "Hello"}]]
-      (is (= "OK" (llm/generate provider messages))))))
+      (is (= "OK" (:text (llm/generate provider messages)))))))
 
 (deftest test-provider-defaults
   (testing "Provider with defaults on :defaults key"
@@ -107,7 +94,7 @@
                                        :system-prompt "you are a cat"})]
       (is (= "gpt-4o" (get-in agent [:defaults :model])))
       (is (= "you are a cat" (get-in agent [:defaults :system-prompt])))
-      (is (= "meow" (llm/generate agent "hi")))))
+      (is (= "meow" (:text (llm/generate agent "hi"))))))
 
   (testing "Layering defaults with update+merge"
     (let [base (mock-provider [{:type :content :content "ok"}])
@@ -115,7 +102,7 @@
           extractor (update ai :defaults merge {:system-prompt "extract"})]
       (is (= "gpt-4o-mini" (get-in extractor [:defaults :model])))
       (is (= "extract" (get-in extractor [:defaults :system-prompt])))
-      (is (= "ok" (llm/generate extractor "test"))))))
+      (is (= "ok" (:text (llm/generate extractor "test")))))))
 
 (deftest test-args-forwarded-to-provider
   (testing "model from defaults is forwarded"
@@ -153,16 +140,21 @@
             (llm/generate provider {:bogus true} "test"))))))
 
 (deftest test-tool-calls
-  (testing "Tool call accumulation via request"
+  (testing "Tool call accumulation via request + reduce"
     (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
                                    {:type :tool-call-delta :index 0 :arguments "{\"host\":"}
                                    {:type :tool-call-delta :index 0 :arguments "\"example.com\"}"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 5}])
-          resp (llm/request provider "test")
-          tcs @(:tool-calls resp)]
-      (is (= 1 (count tcs)))
-      (is (= "ping" (:name (first tcs))))
-      (is (= "{\"host\":\"example.com\"}" (:arguments (first tcs))))))
+          ;; Use generate to get assembled tool calls
+          ping-fn (with-meta
+                    (fn [{:keys [host]}] (str "pong " host))
+                    {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping a host"}
+                                              [:host :string]]]
+                                       :string]})
+          result (llm/generate provider {:tools [ping-fn]} "ping example.com")]
+      (is (= 1 (count (:tool-calls result))))
+      (is (= "ping" (:name (first (:tool-calls result)))))
+      (is (= {:host "example.com"} (:arguments (first (:tool-calls result)))))))
 
   (testing "generate with :tools executes tools and returns results"
     (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
@@ -353,20 +345,9 @@
       (is (= "call_abc" (:tool-call-id msg)))
       (is (= "Sunny, 22°C" (:content msg))))))
 
-(deftest test-generate-return-consistency
-  (testing "generate returns string for simple text"
-    (let [provider (mock-provider [{:type :content :content "hi"}])]
-      (is (string? (llm/generate provider "test")))
-      (is (= "hi" (llm/generate provider "test"))))))
-
-(deftest test-stream-print
-  (testing "stream-print returns text string"
-    (let [provider (mock-provider [{:type :content :content "one "}
-                                   {:type :content :content "two "}
-                                   {:type :content :content "three"}])
-          output (with-out-str
-                   (let [result (llm/stream-print provider "test")]
-                     (is (string? result))
-                     (is (= "one two three" result))))]
-      ;; Verify it printed to stdout
-      (is (clojure.string/includes? output "one two three")))))
+(deftest test-generate-return-map
+  (testing "generate always returns a map with :text"
+    (let [provider (mock-provider [{:type :content :content "hi"}])
+          result (llm/generate provider "test")]
+      (is (map? result))
+      (is (= "hi" (:text result))))))
