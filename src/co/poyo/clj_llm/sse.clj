@@ -1,10 +1,9 @@
 (ns co.poyo.clj-llm.sse
-  "SSE parsing and streaming: parse lines, read streams, return channels of events."
+  "SSE parsing and streaming: parse lines, read streams, return reducibles of events."
   (:require
    [camel-snake-kebab.core :as csk]
    [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
-   [clojure.core.async :as a :refer [chan close!]]
    [clojure.java.io :as io]
    [clojure.string :as str]
    [co.poyo.clj-llm.net :as net]))
@@ -63,26 +62,28 @@
     (halt-when :done)
     (map :data)))
 
-(defn create-event-stream
-  "POST to a streaming API and return a channel of raw SSE data maps.
-   Channel closes when the stream ends. Error events have :type :error."
+(defn event-stream
+  "Returns a blocking reducible of parsed SSE data maps.
+   Manages the HTTP connection lifecycle during reduce.
+   Error responses are delivered as a single {:type :error ...} element.
+
+   Usage:
+     (reduce (fn [_ data] (prn data)) nil
+             (event-stream url headers body \"openai\"))"
   [url headers body provider-name]
-  (let [out (chan 1024)]
-    (future
+  (reify clojure.lang.IReduceInit
+    (reduce [_ f init]
       (try
         (let [{:keys [error status body] :as response} (net/post-stream url headers body)]
           (cond
             error
-            (a/>!! out {:type :error :error (.getMessage error)})
+            (f init {:type :error :error (.getMessage ^Exception error)})
 
             (= 200 status)
             (with-open [reader (io/reader body)]
-              (run! #(a/>!! out %) (sequence xf-parse (line-seq reader))))
+              (transduce xf-parse f init (line-seq reader)))
 
             :else
-            (a/>!! out (error-event provider-name response))))
+            (f init (error-event provider-name response))))
         (catch Exception e
-          (a/>!! out {:type :error :error (str e)}))
-        (finally
-          (close! out))))
-    out))
+          (f init {:type :error :error (str e)}))))))
