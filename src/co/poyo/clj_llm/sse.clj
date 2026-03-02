@@ -67,26 +67,23 @@
    Manages the HTTP connection lifecycle during reduce.
    Error responses are delivered as a single {:type :error ...} element.
 
-   Accepts an optional transducer `xf` that is composed after SSE parsing:
-     (event-stream url headers body \"openai\"
-       (mapcat data->internal-events))"
-  ([url headers body provider-name]
-   (event-stream url headers body provider-name nil))
-  ([url headers body provider-name xf]
-   (reify clojure.lang.IReduceInit
-     (reduce [_ f init]
-       (try
-         (let [{:keys [error status body] :as response} (net/post-stream url headers body)
-               xf* (cond-> xf-parse xf (comp xf))]
-           (cond
-             error
-             (f init {:type :error :error (.getMessage ^Exception error)})
+   Usage:
+     (reduce (fn [_ data] (prn data)) nil
+             (event-stream url headers body \"openai\"))"
+  [url headers body provider-name]
+  (reify clojure.lang.IReduceInit
+    (reduce [_ f init]
+      (try
+        (let [{:keys [error status body] :as response} (net/post-stream url headers body)]
+          (cond
+            error
+            (f init {:type :error :error (.getMessage ^Exception error)})
 
-             (= 200 status)
-             (with-open [reader (io/reader body)]
-               (transduce xf* f init (line-seq reader)))
+            (= 200 status)
+            (with-open [reader (io/reader body)]
+              (transduce xf-parse f init (line-seq reader)))
 
-             :else
-             (f init (error-event provider-name response))))
-         (catch Exception e
-           (f init {:type :error :error (str e)})))))))
+            :else
+            (f init (error-event provider-name response))))
+        (catch Exception e
+          (f init {:type :error :error (str e)}))))))
