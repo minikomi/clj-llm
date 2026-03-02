@@ -202,3 +202,38 @@ One thread, zero intermediate channels, zero go-loops. Backends are pure
 | **Total** | **1452** | **1296** | **-156** |
 
 72 tests, 216 assertions, 0 failures.
+
+## Phase 4: `sse/event-stream` — parsed SSE data stream
+
+Both backends had identical HTTP + SSE plumbing: POST, error handling,
+`with-open` reader, `transduce` with `sse/xf`. Extracted that into
+`sse/event-stream` which takes `(url headers body)` and returns an
+`IReduceInit` of parsed SSE data maps (kebab-cased).
+
+Backends get the stream and handle conversion themselves with `eduction`:
+
+```clojure
+;; OpenAI (1:N — one SSE chunk can carry multiple tool calls)
+(eduction (mapcat #(data->events % schema tools))
+          (sse/event-stream url headers body))
+
+;; Anthropic (1:1 or 1:0)
+(eduction (keep #(data->event % schema tools))
+          (sse/event-stream url headers body))
+```
+
+`sse/event-stream` owns HTTP lifecycle + SSE parsing. Backends own domain
+event conversion. No functions passed down — each layer returns data.
+
+### To write a new backend:
+1. `build-body` — construct the API request body
+2. `data->event(s)` — convert one parsed SSE data map to internal events
+3. `eduction` your converter over `sse/event-stream`
+
+| File | Before | After | Change |
+|------|--------|-------|--------|
+| sse.clj | 24 | 46 | +22 (gained event-stream) |
+| openai.clj | 149 | 137 | -12 (lost plumbing) |
+| anthropic.clj | 161 | 149 | -12 (lost plumbing) |
+
+72 tests, 216 assertions, 0 failures.
