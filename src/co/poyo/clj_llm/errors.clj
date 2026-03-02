@@ -18,11 +18,6 @@
    503 {:type :llm/server-error   :msg "Server error"}
    504 {:type :llm/server-error   :msg "Server error"}})
 
-(defn- status->error-type
-  "Map HTTP status code to error type keyword."
-  [status]
-  (get-in status-errors [(int status) :type] :llm/unknown))
-
 (defn error
   "Create an LLM error with optional data.
    If :error-type is not provided, defaults to :llm/unknown."
