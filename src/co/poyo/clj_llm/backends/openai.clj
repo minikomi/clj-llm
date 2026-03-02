@@ -119,19 +119,22 @@
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
       (let [out-ch (chan 1024)]
-        (future
-          (try
-            (reduce (fn [_ data]
-                      (if (= :error (:type data))
-                        (a/>!! out-ch data)
-                        (doseq [e (data->internal-events data schema tools)]
-                          (a/>!! out-ch e))))
-                    nil
-                    (sse/event-stream url headers body "openai"))
-            (catch Exception e
-              (a/>!! out-ch {:type :error :error (str e)}))
-            (finally
-              (close! out-ch))))
+        (doto (Thread.
+                (fn []
+                  (try
+                    (reduce (fn [_ data]
+                              (if (= :error (:type data))
+                                (a/>!! out-ch data)
+                                (doseq [e (data->internal-events data schema tools)]
+                                  (a/>!! out-ch e))))
+                            nil
+                            (sse/event-stream url headers body "openai"))
+                    (catch Exception e
+                      (a/>!! out-ch {:type :error :error (str e)}))
+                    (finally
+                      (close! out-ch)))))
+          (.setDaemon true)
+          (.start))
         out-ch))))
 
 (defn backend

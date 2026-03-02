@@ -268,15 +268,18 @@
      ;; Structured output: wait for text in a separate thread, parse + validate.
      ;; Decoupled from consume-events so the event loop stays generic.
      (if schema
-       (future
-         (try
-           (let [text @text-p]
-             (deliver structured-p
-                      (if (instance? Exception text)
-                        text
-                        (parse-structured-output text schema))))
-           (catch Exception e
-             (deliver structured-p e))))
+       (doto (Thread.
+               (fn []
+                 (try
+                   (let [text @text-p]
+                     (deliver structured-p
+                              (if (instance? Exception text)
+                                text
+                                (parse-structured-output text schema))))
+                   (catch Exception e
+                     (deliver structured-p e)))))
+         (.setDaemon true)
+         (.start))
        (deliver structured-p nil))
 
      (map->Response {:chunks     text-chunks
