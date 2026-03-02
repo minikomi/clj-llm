@@ -125,14 +125,8 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [raw (sse/event-stream url headers body "anthropic")]
-        (reify clojure.lang.IReduceInit
-          (reduce [_ f init]
-            (reduce (fn [acc data]
-                      (if (= :error (:type data))
-                        (f acc data)
-                        (reduce f acc (data->internal-events data schema tools))))
-                    init raw)))))))
+      (eduction (mapcat #(data->internal-events % schema tools))
+                (sse/event-stream url headers body "anthropic")))))
 
 (defn backend
   "Create an Anthropic provider.
