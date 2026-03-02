@@ -8,7 +8,8 @@
    [clojure.core.async :as a :refer [chan close!]]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.sse :as sse]))
+   [co.poyo.clj-llm.sse :as sse]
+   [co.poyo.clj-llm.util :as util]))
 
 (def ^:private default-config
   {:api-base "https://api.anthropic.com"
@@ -127,7 +128,7 @@
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
       (let [out-ch (chan 1024)]
-        (sse/run-daemon!
+        (util/run-daemon!
           (fn []
             (try
               (reduce (fn [_ data]
