@@ -25,12 +25,10 @@
         events))))
 
 (defn sse-data-events
-  "Extract just the parsed data maps from SSE events (skip done/error/unparsed)."
+  "Extract just the parsed data maps from SSE events (skip done/error)."
   [events]
   (->> events
-       (filter ::sse/data)
-       (map ::sse/data)
-       (remove ::sse/unparsed)))
+       (keep ::sse/data)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; OpenAI event converter — delegates to real implementation
