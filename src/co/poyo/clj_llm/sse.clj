@@ -48,11 +48,9 @@
 (defn- error-event
   "Build an :error event from an HTTP error response."
   [provider-name response]
-  (let [status (:status response)
-        body   (read-body response)]
-    {:type   :error
-     :status status
-     :body   body}))
+  {:type   :error
+   :status (:status response)
+   :body   (read-body response)})
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Stream reading
@@ -62,16 +60,16 @@
   "Read SSE lines from input-stream, convert and write to out channel."
   [input-stream convert-fn out]
   (with-open [reader (io/reader input-stream)]
-    (loop []
-      (when-let [line (.readLine reader)]
-        (if-let [{:keys [data done]} (parse-line line)]
-          (if done
-            (a/>!! out {:type :done})
-            (let [evts (seq (convert-fn data))]
-              (doseq [e evts] (a/>!! out e))
-              (when-not (some #(= :done (:type %)) evts)
-                (recur))))
-          (recur))))))
+    (reduce (fn [_ line]
+              (when-let [{:keys [data done]} (parse-line line)]
+                (if done
+                  (do (a/>!! out {:type :done}) (reduced nil))
+                  (let [evts (seq (convert-fn data))]
+                    (run! #(a/>!! out %) evts)
+                    (when (some #(= :done (:type %)) evts)
+                      (reduced nil))))))
+            nil
+            (line-seq reader))))
 
 (defn create-event-stream
   "POST to a streaming API and return a channel of internal events.
