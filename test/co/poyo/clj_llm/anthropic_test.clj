@@ -2,11 +2,7 @@
   (:require [clojure.test :refer [deftest testing is]]
             [co.poyo.clj-llm.backends.anthropic]))
 
-(def ^:private data->events @#'co.poyo.clj-llm.backends.anthropic/data->internal-events)
-(defn- data->event
-  "Return the first (and typically only) event for single-event tests."
-  [data schema tools]
-  (first (data->events data schema tools)))
+(def ^:private data->event @#'co.poyo.clj-llm.backends.anthropic/data->event)
 (def ^:private build-body @#'co.poyo.clj-llm.backends.anthropic/build-body)
 
 ;; ════════════════════════════════════════════════════════════════════
