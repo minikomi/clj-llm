@@ -126,7 +126,6 @@
       (let [stream (sse/open-event-stream url headers body)
             xf     (keep #(data->event % schema tools))]
         (sse/->ReduceStream
-          #(.close ^java.io.Closeable stream)
           (fn [rf init] (.reduce ^clojure.lang.IReduceInit stream (xf rf) init)))))))
 
 (defn backend

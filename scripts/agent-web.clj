@@ -370,22 +370,21 @@ a { color:#8ab4f8; text-decoration:none }
                    (loop [history (vec (:llm-history chat))
                           step-displays []
                           n 0]
-                     (let [result (with-open [events (llm/request ai {:tools agent-tools} history)]
-                                     (reduce
-                                       (fn [acc event]
-                                         (case (:type event)
-                                           :content (update acc :chunks conj (:content event))
-                                           :tool-call (update acc :tool-calls conj
-                                                        (assoc event :arguments (or (:arguments event) "")))
-                                           :tool-call-delta
-                                           (let [idx (:index event)
-                                                 pos (get-in acc [:tc-pos idx])]
-                                             (if pos
-                                               (update-in acc [:tool-calls pos :arguments] str (:arguments event))
-                                               acc))
-                                           acc))
-                                       {:chunks [] :tool-calls [] :tc-pos {}}
-                                       events))
+                     (let [result (reduce
+                                    (fn [acc event]
+                                      (case (:type event)
+                                        :content (update acc :chunks conj (:content event))
+                                        :tool-call (update acc :tool-calls conj
+                                                     (assoc event :arguments (or (:arguments event) "")))
+                                        :tool-call-delta
+                                        (let [idx (:index event)
+                                              pos (get-in acc [:tc-pos idx])]
+                                          (if pos
+                                            (update-in acc [:tool-calls pos :arguments] str (:arguments event))
+                                            acc))
+                                        acc))
+                                    {:chunks [] :tool-calls [] :tc-pos {}}
+                                    (llm/request ai {:tools agent-tools} history))
                            text (apply str (:chunks result))
                            raw-tc (:tool-calls result)
                            tc (when (seq raw-tc)

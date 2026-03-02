@@ -171,15 +171,15 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (defn request
-  "Returns a Closeable + IReduceInit event stream from the provider.
-   Use with-open to ensure cleanup:
+  "Returns an IReduceInit event stream from the provider.
+   Reduce over it to consume events. Connection closes automatically
+   when reduce completes (normal, reduced, or exception).
 
-   (with-open [events (llm/request ai \"hello\")]
-     (reduce (fn [acc event]
-               (when (= :content (:type event))
-                 (print (:content event)) (flush))
-               (conj acc event))
-             [] events))
+   (reduce (fn [acc event]
+             (when (= :content (:type event))
+               (print (:content event)) (flush))
+             (conj acc event))
+           [] (llm/request ai \"hello\"))
 
    Events are maps with :type — :content, :tool-call, :tool-call-delta,
    :usage, :finish, :error, :done.
@@ -330,8 +330,8 @@
          api-opts (if tools
                     (assoc (dissoc opts :tools) :tools input-schemas)
                     opts)
-         result (with-open [events (request-events provider api-opts input)]
-                  (finalize-state (reduce next-state init-state events)))]
+         result (finalize-state (reduce next-state init-state
+                                       (request-events provider api-opts input)))]
      (cond
        tools
        (let [name->fn (build-name->fn tools input-schemas)
@@ -391,8 +391,8 @@
             steps []
             n 0]
        (let [{:keys [text usage] :as result}
-             (with-open [events (request-events provider request-opts history)]
-               (finalize-state (reduce next-state init-state events)))
+             (finalize-state (reduce next-state init-state
+                                    (request-events provider request-opts history)))
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
@@ -446,12 +446,12 @@
   ([provider input]
    (stream-print provider {} input))
   ([provider opts input]
-   (let [state (with-open [events (request-events provider opts input)]
-                  (reduce (fn [state event]
-                            (when (= :content (:type event))
-                              (print (:content event))
-                              (flush))
-                            (next-state state event))
-                          init-state events))]
+   (let [state (reduce (fn [state event]
+                         (when (= :content (:type event))
+                           (print (:content event))
+                           (flush))
+                         (next-state state event))
+                       init-state
+                       (request-events provider opts input))]
      (println)
      (finalize-state state))))
