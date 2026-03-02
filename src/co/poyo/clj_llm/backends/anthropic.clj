@@ -5,7 +5,7 @@
    [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.set]
-   [clojure.core.async :as a :refer [go-loop <! >! chan close!]]
+   [clojure.core.async :as a :refer [chan close!]]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.sse :as sse]))
@@ -126,16 +126,20 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [raw-ch (sse/create-event-stream url headers body "anthropic")
-            out-ch (chan 1024)]
-        (go-loop []
-          (if-let [data (<! raw-ch)]
-            (do (if (= :error (:type data))
-                  (>! out-ch data)
-                  (doseq [e (data->internal-events data schema tools)]
-                    (>! out-ch e)))
-                (recur))
-            (close! out-ch)))
+      (let [out-ch (chan 1024)]
+        (future
+          (try
+            (reduce (fn [_ data]
+                      (if (= :error (:type data))
+                        (a/>!! out-ch data)
+                        (doseq [e (data->internal-events data schema tools)]
+                          (a/>!! out-ch e))))
+                    nil
+                    (sse/event-stream url headers body "anthropic"))
+            (catch Exception e
+              (a/>!! out-ch {:type :error :error (str e)}))
+            (finally
+              (close! out-ch))))
         out-ch))))
 
 (defn backend
