@@ -117,8 +117,8 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (eduction (mapcat #(data->internal-events % schema tools))
-                (sse/event-stream url headers body "openai")))))
+      (sse/event-stream url headers body "openai"
+        (mapcat #(data->internal-events % schema tools))))))
 
 (defn backend
   "Create an OpenAI provider.
