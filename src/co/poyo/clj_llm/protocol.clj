@@ -15,6 +15,4 @@
        :tool-choice     - tool choice strategy (or nil)
        :provider-opts   - map of provider-specific options
 
-     Returns a blocking reducible (IReduceInit) of events.
-     Each event is a map with :type (:content, :tool-call, :tool-call-delta,
-     :usage, :finish, :error, :done) and type-specific keys."))
+     Returns a blocking reducible (IReduceInit) of events."))

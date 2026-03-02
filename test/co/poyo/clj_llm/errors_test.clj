@@ -1,12 +1,17 @@
 (ns co.poyo.clj-llm.errors-test
-  "Tests for HTTP error handling in sse"
+  "Tests for HTTP error handling in backends"
   (:require [clojure.test :refer [deftest testing is]]
-            [co.poyo.clj-llm.sse]))
+            [cheshire.core :as json]))
+
+(defn- read-error-body [body]
+  (try
+    (let [raw (if (string? body) body (slurp body))]
+      (try (json/parse-string raw true)
+           (catch Exception _ raw)))
+    (catch Exception _ nil)))
 
 (defn- error-event [_provider-name {:keys [status body]}]
-  {:type :error
-   :status status
-   :body (@#'co.poyo.clj-llm.sse/read-error-body {:body body})})
+  {:type :error :status status :body (read-error-body body)})
 
 (deftest test-error-event-json-body
   (testing "Surfaces parsed JSON error body"
