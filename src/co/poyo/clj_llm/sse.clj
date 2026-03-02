@@ -27,10 +27,10 @@
           (catch Exception _ nil))))))
 
 (defn ->ReduceStream
-  "Create a Closeable + IReduceInit from a close-fn and a reduce-fn."
-  [close-fn reduce-fn]
+  "Create an IReduceInit from a reduce-fn.
+   The reduce-fn must handle its own cleanup (e.g. finally)."
+  [reduce-fn]
   (reify
-    java.io.Closeable (close [_] (close-fn))
     clojure.lang.IReduceInit (reduce [_ rf init] (reduce-fn rf init))))
 
 (defn open-event-stream
@@ -49,7 +49,6 @@
                        :status status})))
     (let [^BufferedReader r (io/reader body)]
       (->ReduceStream
-       #(.close r)
        (fn [rf init]
          (try
            (loop [acc init]
