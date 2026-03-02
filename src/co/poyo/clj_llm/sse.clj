@@ -33,49 +33,48 @@
 ;; HTTP error handling (private)
 ;; ════════════════════════════════════════════════════════════════════
 
-(def ^:private status-errors
-  {401 {:type :llm/invalid-key    :msg "Invalid API key"}
-   403 {:type :llm/invalid-key    :msg "Invalid API key"}
-   404 {:type :llm/invalid-request :msg "Resource not found"}
-   429 {:type :llm/rate-limit     :msg "Rate limit exceeded"}
-   400 {:type :llm/invalid-request :msg "Invalid request"}
-   422 {:type :llm/invalid-request :msg "Invalid request"}
-   500 {:type :llm/server-error   :msg "Server error"}
-   502 {:type :llm/server-error   :msg "Server error"}
-   503 {:type :llm/server-error   :msg "Server error"}
-   504 {:type :llm/server-error   :msg "Server error"}})
+(defn- error-type
+  "Classify HTTP status into an error category for programmatic handling."
+  [status]
+  (cond
+    (#{401 403} status) :llm/invalid-key
+    (= 429 status)      :llm/rate-limit
+    (<= 400 status 499) :llm/invalid-request
+    (<= 500 status 599) :llm/server-error
+    :else               :llm/unknown))
 
-(defn- parse-http-error
-  "Convert HTTP response to exception with proper :error-type."
-  [provider status body]
-  (let [{:keys [type msg]} (get status-errors (int status)
-                                {:type :llm/unknown :msg (str "HTTP " status)})]
-    (ex-info (str provider ": " msg)
-             {:error-type  type
-              :status      status
-              :body        body
-              :retry-after (get-in body [:error :retry_after])})))
-
-(defn- parse-error-body [response]
-  (let [body-str (cond
-                   (string? (:body response)) (:body response)
-                   (instance? java.io.InputStream (:body response)) (slurp (:body response))
-                   :else (str (:body response)))]
-    (try (json/parse-string body-str true)
-         (catch Exception _ body-str))))
-
-(defn- error-event [provider-name response]
+(defn- read-body
+  "Read response body as string, attempt JSON parse."
+  [response]
   (try
-    (let [body (parse-error-body response)
-          ex (parse-http-error provider-name (:status response) body)]
-      {:type :error :error (.getMessage ex) :status (:status response)
-       :provider-error body :exception ex})
-    (catch Exception e
-      {:type :error
-       :error (str "HTTP " (:status response) ": " (:body response))
-       :status (:status response)
-       :exception (ex-info (str "Failed to parse error: " (.getMessage e))
-                           {:response response})})))
+    (let [raw (cond
+                (string? (:body response)) (:body response)
+                (instance? java.io.InputStream (:body response)) (slurp (:body response))
+                :else (str (:body response)))]
+      (try (json/parse-string raw true)
+           (catch Exception _ raw)))
+    (catch Exception _ nil)))
+
+(defn- error-message
+  "Extract a human-readable message from a provider error body."
+  [body]
+  (or (get-in body [:error :message])
+      (when (string? body) body)
+      ""))
+
+(defn- error-event
+  "Build an :error event from an HTTP error response."
+  [provider-name response]
+  (let [status (:status response)
+        body   (read-body response)
+        msg    (error-message body)]
+    {:type      :error
+     :error     (str provider-name ": " msg " (HTTP " status ")")
+     :status    status
+     :exception (ex-info (str provider-name ": " msg)
+                         {:error-type  (error-type status)
+                          :status      status
+                          :body        body})}))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Stream reading
