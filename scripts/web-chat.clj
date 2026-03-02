@@ -2,7 +2,6 @@
 
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai]
-         '[clojure.core.async :as a :refer [<!!]]
          '[org.httpkit.server :as hk]
          '[hiccup2.core :as h]
          '[hiccup.util :refer [raw-string]]
@@ -243,23 +242,23 @@ a { color:#8ab4f8; text-decoration:none }
                (future
                  (try
                    (let [{:keys [chat messages llm-history message]} state
-                         llm-ch (llm/stream ai llm-history)
-                         sb (StringBuilder.)
                          send-sse! (fn [evt data]
                                      (hk/send! ch
                                        (str "event: " evt "\ndata: "
                                             (str/replace data #"\n" "\ndata: ")
-                                            "\n\n") false))]
-                     ;; Stream chunks
-                     (loop []
-                       (when-let [chunk (<!! llm-ch)]
-                         (.append sb chunk)
-                         (send-sse! "message"
-                           (str (render-msgs messages)
-                                (hic [:div.m.assistant
-                                      [:div.r "assistant"]
-                                      [:div.b (raw-string (md->html (.toString sb))) [:span.dot]]])))
-                         (recur)))
+                                            "\n\n") false))
+                         sb (StringBuilder.)]
+                     ;; Stream chunks via reduce over events
+                     (reduce (fn [_ event]
+                               (when (= :content (:type event))
+                                 (.append sb (:content event))
+                                 (send-sse! "message"
+                                   (str (render-msgs messages)
+                                        (hic [:div.m.assistant
+                                              [:div.r "assistant"]
+                                              [:div.b (raw-string (md->html (.toString sb))) [:span.dot]]])))))
+                             nil
+                             (llm/request ai llm-history))
                      ;; Done
                      (let [assistant-msg {:role "assistant" :content (md->html (.toString sb))}
                            all-msgs (conj messages assistant-msg)
