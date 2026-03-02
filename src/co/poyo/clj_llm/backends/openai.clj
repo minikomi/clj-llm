@@ -7,6 +7,7 @@
    [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.set]
+   [clojure.core.async :as a :refer [go-loop <! >! chan close!]]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.sse :as sse]))
@@ -117,9 +118,17 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (sse/create-event-stream url headers body
-                                #(data->internal-events % schema tools)
-                                "openai"))))
+      (let [raw-ch (sse/create-event-stream url headers body "openai")
+            out-ch (chan 1024)]
+        (go-loop []
+          (if-let [data (<! raw-ch)]
+            (do (if (= :error (:type data))
+                  (>! out-ch data)
+                  (doseq [e (data->internal-events data schema tools)]
+                    (>! out-ch e)))
+                (recur))
+            (close! out-ch)))
+        out-ch))))
 
 (defn backend
   "Create an OpenAI provider.
