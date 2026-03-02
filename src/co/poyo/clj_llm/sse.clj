@@ -2,21 +2,20 @@
   "SSE parsing and streaming: parse lines, read streams, return channels of events."
   (:require
    [camel-snake-kebab.core :as csk]
+   [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.core.async :as a :refer [chan close!]]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [clojure.walk :as walk]
    [co.poyo.clj-llm.net :as net]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Line parsing
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn- kebab-keys [m]
-  (walk/postwalk
-   (fn [x] (if (map? x) (update-keys x (comp keyword csk/->kebab-case)) x))
-   m))
+;; SSE streams repeat the same small set of keys on every chunk — memoize
+;; to avoid repeated string manipulation.
+(def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
 (defn parse-line
   "Parse one SSE line. Returns {:data map}, {:done true}, or nil."
@@ -25,7 +24,7 @@
     (let [raw (str/trim (subs line 5))]
       (if (= raw "[DONE]")
         {:done true}
-        (try {:data (-> raw json/parse-string kebab-keys)}
+        (try {:data (cske/transform-keys ->kebab-key (json/parse-string raw))}
              (catch Exception _ nil))))))
 
 ;; ════════════════════════════════════════════════════════════════════
