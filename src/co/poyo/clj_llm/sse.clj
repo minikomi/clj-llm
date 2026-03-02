@@ -62,13 +62,6 @@
     (halt-when :done)
     (map :data)))
 
-(defn run-daemon!
-  "Run f on a daemon thread. Won't prevent JVM exit."
-  [f]
-  (doto (Thread. ^Runnable f)
-    (.setDaemon true)
-    (.start)))
-
 (defn event-stream
   "Returns a blocking reducible of parsed SSE data maps.
    Manages the HTTP connection lifecycle during reduce.

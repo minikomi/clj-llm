@@ -8,7 +8,7 @@
    [malli.transform :as mt]
    [malli.util :as mu]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.sse :as sse]))
+   [co.poyo.clj-llm.util :as util]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas (parse, don't validate)
@@ -269,7 +269,7 @@
      ;; Structured output: wait for text in a separate thread, parse + validate.
      ;; Decoupled from consume-events so the event loop stays generic.
      (if schema
-       (sse/run-daemon!
+       (util/run-daemon!
          (fn []
            (try
              (let [text @text-p]
