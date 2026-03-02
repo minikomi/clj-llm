@@ -3,7 +3,7 @@
   (:require
    [camel-snake-kebab.core :as csk]
    [cheshire.core :as json]
-   [clojure.core.async :as a :refer [chan go >! close! thread]]
+   [clojure.core.async :as a :refer [chan close! thread]]
    [clojure.set]
    [clojure.walk :as walk]
    [clojure.java.io :as io]
@@ -76,42 +76,39 @@
        :exception (ex-info (str "Failed to parse error: " (.getMessage e))
                            {:response response})})))
 
-(defn- stream-sse-events
-  "Read SSE lines from input-stream, parse through convert-fn, write to out."
+(defn- stream-sse
+  "Read SSE lines from input-stream, convert and write to out channel."
   [input-stream convert-fn out]
-  (thread
-    (try
-      (with-open [reader (io/reader input-stream)]
-        (loop []
-          (when-let [line (.readLine reader)]
-            (when-let [{:keys [data done]} (sse/parse-line line)]
-              (if done
-                (a/>!! out {:type :done})
-                (let [evts (seq (convert-fn data))]
-                  (doseq [e evts] (a/>!! out e))
-                  (when-not (some #(= :done (:type %)) evts)
-                    (recur))))))))
-      (catch Exception e
-        (a/>!! out {:type :error :error e}))
-      (finally
-        (close! out)))))
+  (with-open [reader (io/reader input-stream)]
+    (loop []
+      (when-let [line (.readLine reader)]
+        (when-let [{:keys [data done]} (sse/parse-line line)]
+          (if done
+            (a/>!! out {:type :done})
+            (let [evts (seq (convert-fn data))]
+              (doseq [e evts] (a/>!! out e))
+              (when-not (some #(= :done (:type %)) evts)
+                (recur)))))))))
 
 (defn create-event-stream
   "POST to a streaming API and return a channel of internal events.
    convert-fn: (data-map -> seq-of-event-maps | nil)"
   [url headers body convert-fn provider-name]
   (let [out (chan 1024)]
-    (net/post-stream url headers body
-      (fn [{:keys [error status body] :as response}]
-        (cond
-          error
-          (do (a/>!! out {:type :error :error (.getMessage error) :exception error})
-              (close! out))
+    (thread
+      (try
+        (let [{:keys [error status body] :as response} (net/post-stream url headers body)]
+          (cond
+            error
+            (a/>!! out {:type :error :error (.getMessage error) :exception error})
 
-          (= 200 status)
-          (stream-sse-events body convert-fn out)
+            (= 200 status)
+            (stream-sse body convert-fn out)
 
-          :else
-          (do (a/>!! out (error-event provider-name response))
-              (close! out)))))
+            :else
+            (a/>!! out (error-event provider-name response))))
+        (catch Exception e
+          (a/>!! out {:type :error :error e}))
+        (finally
+          (close! out))))
     out))
