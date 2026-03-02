@@ -30,12 +30,12 @@
 ;; OpenAI event converter — delegates to real implementation
 ;; ════════════════════════════════════════════════════════════════════
 
-(def ^:private data->internal-events @#'co.poyo.clj-llm.backends.openai/data->internal-events)
+(def ^:private data->events* @#'co.poyo.clj-llm.backends.openai/data->events)
 
 (defn openai-events
   "Convert parsed SSE data to internal events via real openai backend. Returns seq or nil."
-  ([data] (data->internal-events data nil nil))
-  ([data schema tools] (data->internal-events data schema tools)))
+  ([data] (data->events* data nil nil))
+  ([data schema tools] (data->events* data schema tools)))
 
 (defn openai-event
   "Convert parsed SSE data to a single internal event (first of seq). For single-event tests."

@@ -54,8 +54,8 @@
      api-opts
      tools-config)))
 
-(defn- data->internal-events
-  "Convert OpenAI chunk to a seq of internal events (or nil).
+(defn- data->events
+  "Convert one OpenAI chunk to a seq of internal events, or nil.
    In schema mode, tool calls are treated as content.
    In tools mode, tool calls are emitted as :tool-call events."
   [data schema tools]
@@ -71,36 +71,31 @@
       [{:type :content :content content}]
 
       tool-calls
-      (let [convert-one (fn [tool-call]
-                          (let [fn-name (get-in tool-call [:function :name])
-                                fn-args (not-empty (get-in tool-call [:function :arguments]))]
-                            (cond
-                              (and schema fn-args)
-                              {:type :content :content (get-in tool-call [:function :arguments])}
+      (keep (fn [tool-call]
+              (let [fn-name (get-in tool-call [:function :name])
+                    fn-args (not-empty (get-in tool-call [:function :arguments]))]
+                (cond
+                  (and schema fn-args)
+                  {:type :content :content fn-args}
 
-                              (and tools fn-name)
-                              {:type :tool-call
-                               :id (get tool-call :id)
-                               :index (get tool-call :index)
-                               :name (get-in tool-call [:function :name])
-                               :arguments ""}
+                  (and tools fn-name)
+                  {:type :tool-call
+                   :id (:id tool-call)
+                   :index (:index tool-call)
+                   :name fn-name
+                   :arguments ""}
 
-                              (and tools fn-args)
-                              {:type :tool-call-delta
-                               :index (get tool-call :index)
-                               :arguments (get-in tool-call [:function :arguments])}
-
-                              :else nil)))
-            events (keep convert-one tool-calls)]
-        (not-empty events))
+                  (and tools fn-args)
+                  {:type :tool-call-delta
+                   :index (:index tool-call)
+                   :arguments fn-args})))
+            tool-calls)
 
       finish-reason
       [{:type :finish :reason finish-reason}]
 
       usage
-      [(into {:type :usage} usage)]
-
-      :else nil)))
+      [(into {:type :usage} usage)])))
 
 ;; ==========================================
 ;; OpenAI Backend
@@ -117,7 +112,7 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (eduction (mapcat #(data->internal-events % schema tools))
+      (eduction (mapcat #(data->events % schema tools))
                 (sse/event-stream url headers body "openai")))))
 
 (defn backend
