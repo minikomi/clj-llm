@@ -56,17 +56,12 @@
 ;; Stream reading
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn- stream-sse
-  "Read SSE lines from input-stream, write parsed data to out channel."
-  [input-stream out]
-  (with-open [reader (io/reader input-stream)]
-    (reduce (fn [_ line]
-              (when-let [{:keys [data done]} (parse-line line)]
-                (if done
-                  (reduced nil)
-                  (a/>!! out data))))
-            nil
-            (line-seq reader))))
+(def xf-parse
+  "Transducer: raw SSE lines → parsed data maps. Stops at [DONE]."
+  (comp
+    (keep parse-line)
+    (halt-when :done)
+    (map :data)))
 
 (defn create-event-stream
   "POST to a streaming API and return a channel of raw SSE data maps.
@@ -81,7 +76,8 @@
             (a/>!! out {:type :error :error (.getMessage error)})
 
             (= 200 status)
-            (stream-sse body out)
+            (with-open [reader (io/reader body)]
+              (run! #(a/>!! out %) (sequence xf-parse (line-seq reader))))
 
             :else
             (a/>!! out (error-event provider-name response))))
