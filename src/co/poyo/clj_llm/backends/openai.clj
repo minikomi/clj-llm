@@ -109,34 +109,18 @@
                                   #(data->internal-events % schema tools)
                                   "openai"))))
 
-(def ^:private openai-config-keys #{:api-key :api-key-fn :api-base})
-
 (defn backend
-  "Create an OpenAI provider. Config keys:
-    :api-key-fn  - 0-arg fn that returns the API key (called per request)
-    :api-key     - API key string (convenience, wrapped in constantly)
-    :api-base    - API base URL (default: https://api.openai.com/v1)
-
-   The default api-key-fn reads from the OPENAI_API_KEY env var.
-   Override for custom env vars, vaults, or key rotation:
-     (backend {:api-key-fn (fn [] (System/getenv \"MY_KEY\"))})
-
-   Set :defaults on the provider to configure model, system-prompt, schema, etc."
+  "Create an OpenAI provider.
+   Config: :api-key, :api-key-fn, :api-base.
+   Default reads OPENAI_API_KEY env var."
   ([] (backend {}))
-  ([config]
-   (let [unknown (seq (remove openai-config-keys (keys config)))]
-     (when unknown
-       (throw (errors/error
-               (str "Unknown provider config keys: " (pr-str (vec unknown))
-                    ". Set :defaults on the provider for prompt options.")
-               {:unknown-keys (vec unknown)
-                :valid-keys openai-config-keys}))))
-   (let [api-key-fn (cond
-                      (:api-key-fn config) (:api-key-fn config)
-                      (:api-key config)    (constantly (:api-key config))
-                      :else                default-api-key-fn)
-         api-base   (or (:api-base config) (:api-base default-config))]
-     (->OpenAIBackend api-base api-key-fn {}))))
+  ([{:keys [api-key api-key-fn api-base]}]
+   (->OpenAIBackend
+    (or api-base (:api-base default-config))
+    (cond api-key-fn api-key-fn
+          api-key    (constantly api-key)
+          :else      default-api-key-fn)
+    {})))
 
 (defmethod print-method OpenAIBackend [b writer]
   (let [model (get-in b [:defaults :model])]

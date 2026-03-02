@@ -117,36 +117,19 @@
                                   #(data->internal-events % schema tools)
                                   "anthropic"))))
 
-(def ^:private anthropic-config-keys #{:api-key :api-key-fn :api-base :api-version})
-
 (defn backend
-  "Create an Anthropic provider. Config keys:
-    :api-key-fn  - 0-arg fn that returns the API key (called per request)
-    :api-key     - API key string (convenience, wrapped in constantly)
-    :api-base    - API base URL (default: https://api.anthropic.com)
-    :api-version - API version (default: 2023-06-01)
-
-   The default api-key-fn reads from the ANTHROPIC_API_KEY env var.
-   Override for custom env vars, vaults, or key rotation:
-     (backend {:api-key-fn (fn [] (System/getenv \"MY_KEY\"))})
-
-   Set :defaults on the provider to configure model, system-prompt, schema, etc."
+  "Create an Anthropic provider.
+   Config: :api-key, :api-key-fn, :api-base, :api-version.
+   Default reads ANTHROPIC_API_KEY env var."
   ([] (backend {}))
-  ([config]
-   (let [unknown (seq (remove anthropic-config-keys (keys config)))]
-     (when unknown
-       (throw (errors/error
-               (str "Unknown provider config keys: " (pr-str (vec unknown))
-                    ". Set :defaults on the provider for prompt options.")
-               {:unknown-keys (vec unknown)
-                :valid-keys anthropic-config-keys}))))
-   (let [api-key-fn (cond
-                      (:api-key-fn config) (:api-key-fn config)
-                      (:api-key config)    (constantly (:api-key config))
-                      :else                default-api-key-fn)
-         api-base    (or (:api-base config) (:api-base default-config))
-         api-version (or (:api-version config) (:api-version default-config))]
-     (->AnthropicBackend api-base api-key-fn api-version {}))))
+  ([{:keys [api-key api-key-fn api-base api-version]}]
+   (->AnthropicBackend
+    (or api-base (:api-base default-config))
+    (cond api-key-fn api-key-fn
+          api-key    (constantly api-key)
+          :else      default-api-key-fn)
+    (or api-version (:api-version default-config))
+    {})))
 
 (defmethod print-method AnthropicBackend [b writer]
   (let [model (get-in b [:defaults :model])]
