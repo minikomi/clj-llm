@@ -123,8 +123,11 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (sse/xform (keep #(data->event % schema tools))
-                 (sse/open-event-stream url headers body)))))
+      (let [stream (sse/open-event-stream url headers body)
+            xf     (keep #(data->event % schema tools))]
+        (sse/->ReduceStream
+          #(.close ^java.io.Closeable stream)
+          (fn [rf init] (.reduce ^clojure.lang.IReduceInit stream (xf rf) init)))))))
 
 (defn backend
   "Create an Anthropic provider.
