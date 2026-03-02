@@ -2,7 +2,6 @@
 
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai]
-         '[clojure.core.async :as a :refer [<!!]]
          '[org.httpkit.server :as hk]
          '[hiccup2.core :as h]
          '[hiccup.util :refer [raw-string]]
@@ -371,15 +370,29 @@ a { color:#8ab4f8; text-decoration:none }
                    (loop [history (vec (:llm-history chat))
                           step-displays []
                           n 0]
-                     (let [resp     (llm/request ai {:tools agent-tools} history)
-                           text     @(:text resp)
-                           raw-tc   @(:tool-calls resp)
-                           tc       (when raw-tc
-                                      (mapv (fn [t]
-                                              (let [args (try (json/parse-string (:arguments t) true)
-                                                             (catch Exception _ (:arguments t)))]
-                                                {:id (:id t) :name (:name t) :arguments args}))
-                                            raw-tc))]
+                     (let [result (reduce
+                                     (fn [acc event]
+                                       (case (:type event)
+                                         :content (update acc :chunks conj (:content event))
+                                         :tool-call (update acc :tool-calls conj
+                                                      (assoc event :arguments (or (:arguments event) "")))
+                                         :tool-call-delta
+                                         (let [idx (:index event)
+                                               pos (get-in acc [:tc-pos idx])]
+                                           (if pos
+                                             (update-in acc [:tool-calls pos :arguments] str (:arguments event))
+                                             acc))
+                                         acc))
+                                     {:chunks [] :tool-calls [] :tc-pos {}}
+                                     (llm/request ai {:tools agent-tools} history))
+                           text (apply str (:chunks result))
+                           raw-tc (:tool-calls result)
+                           tc (when (seq raw-tc)
+                                (mapv (fn [t]
+                                        (let [args (try (json/parse-string (:arguments t) true)
+                                                       (catch Exception _ (:arguments t)))]
+                                          {:id (:id t) :name (:name t) :arguments args}))
+                                      raw-tc))]
                        (if (seq tc)
                          ;; Tool calls — execute and loop
                          (if (>= (inc n) max-steps)

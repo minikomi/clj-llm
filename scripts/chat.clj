@@ -1,8 +1,7 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai]
-         '[clojure.core.async :refer [<!!]])
+         '[co.poyo.clj-llm.backends.openai :as openai])
 
 (def model (or (first *command-line-args*)
                (System/getenv "LLM_MODEL")
@@ -28,15 +27,7 @@
   (when-let [input (read-line)]
     (when-not (empty? input)
       (swap! history conj {:role :user :content input})
-      (let [ch (llm/stream ai @history)
-            sb (StringBuilder.)]
-        (loop []
-          (when-let [chunk (<!! ch)]
-            (.append sb chunk)
-            (print chunk)
-            (flush)
-            (recur)))
-        (println)
-        (swap! history conj {:role :assistant :content (.toString sb)}))
+      (let [{:keys [text]} (llm/stream-print ai @history)]
+        (swap! history conj {:role :assistant :content text}))
       (println))
     (recur)))
