@@ -1,50 +1,100 @@
 (ns co.poyo.clj-llm.sse
-  "SSE line parsing and event stream construction."
   (:require
    [camel-snake-kebab.core :as csk]
    [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [co.poyo.clj-llm.net :as net]))
+   [co.poyo.clj-llm.net :as net])
+  (:import (java.io Closeable)))
 
 (def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
 (defn- parse-sse-line
-  "Parse one SSE data line into a kebab-cased map, or nil."
   [line]
   (when (str/starts-with? line "data:")
-    (try
-      (let [raw (str/trim (subs line 5))]
-        (cske/transform-keys ->kebab-key (json/parse-string raw)))
-      (catch Exception _ nil))))
-
-(defn event-stream
-  "POST to an SSE endpoint, return a lazy seq of parsed event maps.
-   Reader closes automatically when the stream is exhausted.
-
-   On HTTP error or exception, returns a single-element seq
-   with {:type :error ...}.
-
-   Usage in backends:
-     (keep data->event (sse/event-stream url headers body))"
-  [url headers body]
-  (try
-    (let [{:keys [error status body]} (net/post-stream url headers body)]
+    (let [raw (str/trim (subs line 5))]
       (cond
-        error [{:type :error :error (.getMessage ^Exception error)}]
-        (= 200 status)
-        (let [reader (io/reader body)]
-          ((fn step []
-             (lazy-seq
-               (if-let [line (.readLine reader)]
-                 (if (str/ends-with? line "[DONE]")
-                   (do (.close reader) nil)
-                   (if-let [parsed (parse-sse-line line)]
-                     (cons parsed (step))
-                     (step)))
-                 (do (.close reader) nil))))
-           ))
-        :else [{:type :error :status status}]))
+        (= raw "[DONE]")
+        {:type :done}
+
+        :else
+        (try
+          {:type :event
+           :data (cske/transform-keys
+                  ->kebab-key
+                  (json/parse-string raw))}
+          (catch Exception _
+            nil))))))
+
+(deftype SseStream [^java.io.BufferedReader r closed?]
+  Closeable
+  (close [_]
+    (when (compare-and-set! closed? false true)
+      (.close r)))
+
+  clojure.lang.IReduceInit
+  (reduce [this rf init]
+    (try
+      (loop [acc init]
+        (if (reduced? acc)
+          @acc
+          (if-let [line (.readLine r)]
+            (let [parsed (parse-sse-line line)]
+              (cond
+                (= (:type parsed) :done)
+                acc
+
+                (= (:type parsed) :event)
+                (recur (rf acc (:data parsed)))
+
+                :else
+                (recur acc)))
+            acc)))
+      (finally
+        (.close ^Closeable this)))))
+
+(deftype ErrorStream [err]
+  Closeable
+  (close [_] nil)
+
+  clojure.lang.IReduceInit
+  (reduce [_ rf init]
+    (rf init err)))
+
+(deftype XformedStream [xf ^Closeable stream]
+  Closeable
+  (close [_] (.close stream))
+
+  clojure.lang.IReduceInit
+  (reduce [_ rf init]
+    (.reduce ^clojure.lang.IReduceInit stream (xf rf) init)))
+
+(defn xform
+  "Wrap a Closeable+IReduceInit stream with a transducer.
+   Returns a new Closeable+IReduceInit."
+  [xf stream]
+  (->XformedStream xf stream))
+
+(defn open-event-stream
+  "Returns a Closeable + Reducible stream of event maps.
+   Always closes when reduced."
+  [url headers req-body]
+  (try
+    (let [{:keys [error status body]} (net/post-stream url headers req-body)]
+      (cond
+        error
+        (->ErrorStream
+         {:type :error :error (.getMessage ^Exception error)})
+
+        (not= 200 status)
+        (->ErrorStream
+         {:type :error :status status})
+
+        :else
+        (->SseStream
+         (io/reader body)
+         (atom false))))
     (catch Exception e
-      [{:type :error :error (str e)}])))
+      (->ErrorStream
+       {:type :error :error (.getMessage e)}))))

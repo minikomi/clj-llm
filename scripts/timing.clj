@@ -14,19 +14,20 @@
 (println)
 
 (let [t0 (System/currentTimeMillis)]
-  (reduce (fn [n event]
-            (let [elapsed (- (System/currentTimeMillis) t0)]
-              (println (format "%6dms  #%-3d  %-20s  %s"
-                         elapsed n (:type event)
-                         (case (:type event)
-                           :content (pr-str (:content event))
-                           :tool-call (pr-str (select-keys event [:name :id]))
-                           :tool-call-delta (pr-str (select-keys event [:index :arguments]))
-                           :usage (pr-str (dissoc event :type))
-                           :finish (pr-str (:reason event))
-                           :error (pr-str event)
-                           :done ""
-                           (pr-str event))))
-              (inc n)))
-          0
-          (llm/request ai "Count from 1 to 10, one number per line.")))
+  (with-open [events (llm/request ai "Count from 1 to 10, one number per line.")]
+    (reduce (fn [n event]
+              (let [elapsed (- (System/currentTimeMillis) t0)]
+                (println (format "%6dms  #%-3d  %-20s  %s"
+                           elapsed n (:type event)
+                           (case (:type event)
+                             :content (pr-str (:content event))
+                             :tool-call (pr-str (select-keys event [:name :id]))
+                             :tool-call-delta (pr-str (select-keys event [:index :arguments]))
+                             :usage (pr-str (dissoc event :type))
+                             :finish (pr-str (:reason event))
+                             :error (pr-str event)
+                             :done ""
+                             (pr-str event))))
+                (inc n)))
+            0
+            events)))
