@@ -33,16 +33,6 @@
 ;; HTTP error handling (private)
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn- error-type
-  "Classify HTTP status into an error category for programmatic handling."
-  [status]
-  (cond
-    (#{401 403} status) :llm/invalid-key
-    (= 429 status)      :llm/rate-limit
-    (<= 400 status 499) :llm/invalid-request
-    (<= 500 status 599) :llm/server-error
-    :else               :llm/unknown))
-
 (defn- read-body
   "Read response body as string, attempt JSON parse."
   [response]
@@ -55,26 +45,14 @@
            (catch Exception _ raw)))
     (catch Exception _ nil)))
 
-(defn- error-message
-  "Extract a human-readable message from a provider error body."
-  [body]
-  (or (get-in body [:error :message])
-      (when (string? body) body)
-      ""))
-
 (defn- error-event
   "Build an :error event from an HTTP error response."
   [provider-name response]
   (let [status (:status response)
-        body   (read-body response)
-        msg    (error-message body)]
-    {:type      :error
-     :error     (str provider-name ": " msg " (HTTP " status ")")
-     :status    status
-     :exception (ex-info (str provider-name ": " msg)
-                         {:error-type  (error-type status)
-                          :status      status
-                          :body        body})}))
+        body   (read-body response)]
+    {:type   :error
+     :status status
+     :body   body}))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Stream reading
