@@ -4,9 +4,9 @@
    Supports OpenAI, OpenRouter, Together.ai, and any OpenAI-compatible endpoint."
   (:require
    [camel-snake-kebab.core :as csk]
+   [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.set]
-   [clojure.walk :as walk]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.sse :as sse]))
@@ -19,11 +19,11 @@
   []
   (System/getenv "OPENAI_API_KEY"))
 
+(def ^:private ->snake-key (memoize csk/->snake_case_keyword))
+
 (defn- convert-options-for-api [opts]
   (when opts
-    (walk/postwalk
-     (fn [x] (if (map? x) (update-keys x csk/->snake_case_keyword) x))
-     opts)))
+    (cske/transform-keys ->snake-key opts)))
 
 (defn- normalize-messages [messages]
   (mapv #(clojure.set/rename-keys % {:tool-calls :tool_calls
