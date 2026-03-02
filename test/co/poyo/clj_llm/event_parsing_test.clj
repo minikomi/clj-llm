@@ -12,19 +12,16 @@
 ;; Helpers
 ;; ════════════════════════════════════════════════════════════════════
 
+(def ^:private parse-sse-line @#'co.poyo.clj-llm.sse/parse-sse-line)
+
 (defn parse-fixture
-  "Parse an SSE fixture file through the SSE line parser.
-   Returns a vector of all parsed events."
+  "Parse an SSE fixture file into data maps (skipping blanks and [DONE])."
   [fixture-path]
   (with-open [reader (io/reader (io/resource fixture-path))]
     (->> (line-seq reader)
-         (keep sse/parse-line)
+         (remove #(str/ends-with? % "[DONE]"))
+         (keep parse-sse-line)
          vec)))
-
-(defn sse-data-events
-  "Extract just the parsed data maps from SSE events (skip done/error)."
-  [events]
-  (keep :data events))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; OpenAI event converter — delegates to real implementation
@@ -47,11 +44,9 @@
    Returns vector of non-nil internal events."
   ([fixture-path] (replay-openai-fixture fixture-path nil nil))
   ([fixture-path schema tools]
-   (let [sse-events (parse-fixture fixture-path)
-         data-events (sse-data-events sse-events)]
-     (->> data-events
-          (mapcat #(openai-events % schema tools))
-          vec))))
+   (->> (parse-fixture fixture-path)
+        (mapcat #(openai-events % schema tools))
+        vec)))
 
 (defn assemble-tool-calls
   "Replay the tool-call assembly logic from core/consume-events.
@@ -83,12 +78,12 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (deftest test-sse-parser-simple-text
-  (testing "SSE parser produces events from simple text fixture"
+  (testing "SSE parser produces data maps from simple text fixture"
     (let [events (parse-fixture "fixtures/openai-simple-text.sse")]
       (is (pos? (count events)) "Should produce events")
-      (is (some :done events) "Should end with done event")
-      (is (every? #(or (:data %) (:done %)) events)
-          "All events should be data or done"))))
+      (is (every? map? events) "All events should be data maps")
+      (is (some #(get-in % [:choices 0 :delta :content]) events)
+          "Should have content chunks"))))
 
 (deftest test-sse-parser-tool-calls
   (testing "SSE parser handles tool call fixtures"
@@ -96,8 +91,7 @@
                      "fixtures/minimax-tool-calls.sse"]]
       (testing fixture
         (let [events (parse-fixture fixture)]
-          (is (pos? (count events)))
-          (is (some :done events)))))))
+          (is (pos? (count events))))))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Tests: OpenAI Simple Text
