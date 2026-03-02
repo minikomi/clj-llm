@@ -57,39 +57,36 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (defn- stream-sse
-  "Read SSE lines from input-stream, convert and write to out channel."
-  [input-stream convert-fn out]
+  "Read SSE lines from input-stream, write parsed data to out channel."
+  [input-stream out]
   (with-open [reader (io/reader input-stream)]
     (reduce (fn [_ line]
               (when-let [{:keys [data done]} (parse-line line)]
                 (if done
-                  (do (a/>!! out {:type :done}) (reduced nil))
-                  (let [evts (seq (convert-fn data))]
-                    (run! #(a/>!! out %) evts)
-                    (when (some #(= :done (:type %)) evts)
-                      (reduced nil))))))
+                  (reduced nil)
+                  (a/>!! out data))))
             nil
             (line-seq reader))))
 
 (defn create-event-stream
-  "POST to a streaming API and return a channel of internal events.
-   convert-fn: (data-map -> seq-of-event-maps | nil)"
-  [url headers body convert-fn provider-name]
+  "POST to a streaming API and return a channel of raw SSE data maps.
+   Channel closes when the stream ends. Error events have :type :error."
+  [url headers body provider-name]
   (let [out (chan 1024)]
     (future
       (try
         (let [{:keys [error status body] :as response} (net/post-stream url headers body)]
           (cond
             error
-            (a/>!! out {:type :error :error (.getMessage error) :exception error})
+            (a/>!! out {:type :error :error (.getMessage error)})
 
             (= 200 status)
-            (stream-sse body convert-fn out)
+            (stream-sse body out)
 
             :else
             (a/>!! out (error-event provider-name response))))
         (catch Exception e
-          (a/>!! out {:type :error :error e}))
+          (a/>!! out {:type :error :error (str e)}))
         (finally
           (close! out))))
     out))
