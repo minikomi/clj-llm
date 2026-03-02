@@ -1,11 +1,11 @@
 (ns co.poyo.clj-llm.errors-test
-  "Tests for HTTP error parsing in sse-stream"
+  "Tests for HTTP error parsing in sse"
   (:require [clojure.test :refer [deftest testing is]]
-            [co.poyo.clj-llm.backends.sse-stream]))
+            [co.poyo.clj-llm.sse]))
 
 (def ^:private parse-http-error
   "Access the private parse-http-error fn for testing."
-  @#'co.poyo.clj-llm.backends.sse-stream/parse-http-error)
+  @#'co.poyo.clj-llm.sse/parse-http-error)
 
 (defn- error-type [e]
   (when (instance? clojure.lang.ExceptionInfo e)
