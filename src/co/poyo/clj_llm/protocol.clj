@@ -3,17 +3,16 @@
 
 (defprotocol LLMProvider
   "Protocol that all LLM providers must implement"
-  (request-stream [this model system-prompt messages schema tools tool-choice provider-opts]
+  (request-stream [this request]
     "Make a streaming request to the LLM provider.
 
-     Arguments:
-     - this: The provider instance
-     - model: Model name string (required)
-     - system-prompt: Optional system prompt string (or nil). Providers handle this differently:
-                      - Anthropic: Uses top-level 'system' parameter
-                      - OpenAI: Prepends as system role message
-     - messages: Vector of message maps with :role and :content (no system messages)
-     - schema: Optional malli schema for structured output (or nil)
-     - tools: Optional vector of malli schemas for multi-tool calling (or nil)
-     - tool-choice: Optional tool choice strategy: 'auto', 'required', 'none', or specific tool (or nil)
-     - provider-opts: Map of provider-specific options (passed through unchanged to underlying API)"))
+     request is a map with keys:
+       :model          - model name string (required)
+       :system-prompt   - system prompt string (or nil)
+       :messages        - vector of message maps with :role and :content
+       :schema          - malli schema for structured output (or nil)
+       :tools           - vector of malli tool schemas (or nil)
+       :tool-choice     - tool choice strategy (or nil)
+       :provider-opts   - map of provider-specific options
+
+     Returns a core.async channel of events."))

@@ -13,15 +13,9 @@
 
 (defrecord MockProvider [responses defaults calls]
   proto/LLMProvider
-  (request-stream [_ model system-prompt messages schema tools tool-choice provider-opts]
+  (request-stream [_ request]
     (when calls
-      (swap! calls conj {:model model
-                         :system-prompt system-prompt
-                         :messages messages
-                         :schema schema
-                         :tools tools
-                         :tool-choice tool-choice
-                         :provider-opts provider-opts}))
+      (swap! calls conj request))
     (let [ch (chan)]
       (go
         (doseq [event @responses]
