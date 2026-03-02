@@ -19,30 +19,32 @@
         (cske/transform-keys ->kebab-key (json/parse-string raw)))
       (catch Exception _ nil))))
 
-(def xf
-  "Transducer: raw SSE lines \u2192 parsed data maps. Skips [DONE] and blanks."
-  (comp
-    (remove #(str/ends-with? % "[DONE]"))
-    (keep parse-sse-line)))
+(defn event-stream
+  "POST to an SSE endpoint, return a lazy seq of parsed event maps.
+   Reader closes automatically when the stream is exhausted.
 
-(defn lines
-  "POST to an SSE endpoint, return an IReduceInit of raw lines.
-   Manages HTTP connection lifecycle — opens on reduce, closes when done.
+   On HTTP error or exception, returns a single-element seq
+   with {:type :error ...}.
 
-   Compose with sse/xf and your domain transducer:
-
-   (eduction (comp sse/xf (keep #(data->event % schema tools)))
-             (sse/lines url headers body))"
+   Usage in backends:
+     (keep data->event (sse/event-stream url headers body))"
   [url headers body]
-  (reify clojure.lang.IReduceInit
-    (reduce [_ f init]
-      (try
-        (let [{:keys [error status body]} (net/post-stream url headers body)]
-          (cond
-            error (f init {:type :error :error (.getMessage ^Exception error)})
-            (= 200 status)
-            (with-open [reader (io/reader body)]
-              (reduce f init (line-seq reader)))
-            :else (f init {:type :error :status status})))
-        (catch Exception e
-          (f init {:type :error :error (str e)}))))))
+  (try
+    (let [{:keys [error status body]} (net/post-stream url headers body)]
+      (cond
+        error [{:type :error :error (.getMessage ^Exception error)}]
+        (= 200 status)
+        (let [reader (io/reader body)]
+          ((fn step []
+             (lazy-seq
+               (if-let [line (.readLine reader)]
+                 (if (str/ends-with? line "[DONE]")
+                   (do (.close reader) nil)
+                   (if-let [parsed (parse-sse-line line)]
+                     (cons parsed (step))
+                     (step)))
+                 (do (.close reader) nil))))
+           ))
+        :else [{:type :error :status status}]))
+    (catch Exception e
+      [{:type :error :error (str e)}])))
