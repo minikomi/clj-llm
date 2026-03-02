@@ -125,8 +125,8 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (sse/event-stream url headers body "anthropic"
-        (mapcat #(data->internal-events % schema tools))))))
+      (eduction (mapcat #(data->internal-events % schema tools))
+                (sse/event-stream url headers body "anthropic")))))
 
 (defn backend
   "Create an Anthropic provider.
