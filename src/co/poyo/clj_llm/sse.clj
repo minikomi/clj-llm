@@ -25,12 +25,14 @@
     (remove #(str/ends-with? % "[DONE]"))
     (keep parse-sse-line)))
 
-(defn event-stream
-  "POST to an SSE endpoint, return an IReduceInit of parsed data maps.
-   Handles HTTP errors, stream lifecycle, and SSE line parsing.
-   Backends reduce over this and convert data maps to domain events.
+(defn lines
+  "POST to an SSE endpoint, return an IReduceInit of raw lines.
+   Manages HTTP connection lifecycle — opens on reduce, closes when done.
 
-   (reduce (fn [acc data] ...) init (sse/event-stream url headers body))"
+   Compose with sse/xf and your domain transducer:
+
+   (eduction (comp sse/xf (keep #(data->event % schema tools)))
+             (sse/lines url headers body))"
   [url headers body]
   (reify clojure.lang.IReduceInit
     (reduce [_ f init]
@@ -40,7 +42,7 @@
             error (f init {:type :error :error (.getMessage ^Exception error)})
             (= 200 status)
             (with-open [reader (io/reader body)]
-              (transduce xf f init (line-seq reader)))
+              (reduce f init (line-seq reader)))
             :else (f init {:type :error :status status})))
         (catch Exception e
           (f init {:type :error :error (str e)}))))))

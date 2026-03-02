@@ -203,37 +203,34 @@ One thread, zero intermediate channels, zero go-loops. Backends are pure
 
 72 tests, 216 assertions, 0 failures.
 
-## Phase 4: `sse/event-stream` — parsed SSE data stream
+## Phase 4: `sse/lines` — three-stage pipe
 
-Both backends had identical HTTP + SSE plumbing: POST, error handling,
-`with-open` reader, `transduce` with `sse/xf`. Extracted that into
-`sse/event-stream` which takes `(url headers body)` and returns an
-`IReduceInit` of parsed SSE data maps (kebab-cased).
+The streaming pipeline is now three clear stages composed with `eduction`:
 
-Backends get the stream and handle conversion themselves with `eduction`:
-
-```clojure
-;; OpenAI (1:N — one SSE chunk can carry multiple tool calls)
-(eduction (mapcat #(data->events % schema tools))
-          (sse/event-stream url headers body))
-
-;; Anthropic (1:1 or 1:0)
-(eduction (keep #(data->event % schema tools))
-          (sse/event-stream url headers body))
+```
+lines → SSE data maps → domain events
+sse/lines    sse/xf       backend-specific
 ```
 
-`sse/event-stream` owns HTTP lifecycle + SSE parsing. Backends own domain
-event conversion. No functions passed down — each layer returns data.
+`sse/lines` takes `(url headers body)`, manages the HTTP connection lifecycle,
+and returns raw SSE strings. `sse/xf` is a pure transducer from lines to parsed
+data maps. Backends compose both with their own domain converter:
+
+```clojure
+;; OpenAI
+(eduction (comp sse/xf (mapcat #(data->events % schema tools)))
+          (sse/lines url headers body))
+
+;; Anthropic
+(eduction (comp sse/xf (keep #(data->event % schema tools)))
+          (sse/lines url headers body))
+```
+
+Each layer does one thing. No functions passed down — just data flowing through.
 
 ### To write a new backend:
 1. `build-body` — construct the API request body
 2. `data->event(s)` — convert one parsed SSE data map to internal events
-3. `eduction` your converter over `sse/event-stream`
-
-| File | Before | After | Change |
-|------|--------|-------|--------|
-| sse.clj | 24 | 46 | +22 (gained event-stream) |
-| openai.clj | 149 | 137 | -12 (lost plumbing) |
-| anthropic.clj | 161 | 149 | -12 (lost plumbing) |
+3. `eduction` the pipe: `(comp sse/xf your-xf)` over `(sse/lines url headers body)`
 
 72 tests, 216 assertions, 0 failures.
