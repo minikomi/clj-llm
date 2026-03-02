@@ -3,7 +3,7 @@
   (:require [clojure.test :refer [deftest testing is]]
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
-            [clojure.core.async :as a :refer [chan go >! <!! close!]]
+            [clojure.core.async :refer [<!!]]
             [clojure.string :as str]
             [malli.core]))
 
@@ -16,13 +16,10 @@
   (request-stream [_ request]
     (when calls
       (swap! calls conj request))
-    (let [ch (chan)]
-      (go
-        (doseq [event @responses]
-          (>! ch event))
-        (>! ch {:type :done})
-        (close! ch))
-      ch)))
+    (let [events (conj (vec @responses) {:type :done})]
+      (reify clojure.lang.IReduceInit
+        (reduce [_ f init]
+          (reduce f init events))))))
 
 (defn mock-provider
   ([events] (mock-provider events {}))
