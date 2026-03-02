@@ -110,3 +110,95 @@ When work can fail, put the `let` inside the `try` so all fallible steps are cov
 2. Extract agent step logic from `run-agent` loop
 3. Consider if `Response` record is worth it vs plain map
 4. Trim tool schema resolution (do we need 3 lookup paths?)
+
+---
+
+## Phase 3: Streaming Architecture (channel elimination)
+
+The streaming pipeline had three async hops with channels threading through
+every layer. Collapsed it to: blocking reduce all the way down, one daemon
+thread at the top.
+
+### The problem
+
+```
+Before: future → chan(1024) → go-loop → chan(1024) → go-loop → chan/promises
+         sse.clj              backend             core.clj
+```
+
+Three channels, two go-loops, one `future`. The `future` used
+`Agent/soloExecutor` (non-daemon threads, 60s keep-alive), so
+`clj -M scripts/streaming.clj` would hang for 60s after completing.
+Babashka was fine because it exits on main thread completion regardless.
+
+### What changed
+
+**sse.clj: 78 → 24 lines.** Now exports a single transducer `sse/xf`
+(SSE lines → parsed data maps). No IO, no channels, no HTTP. Just:
+
+```clojure
+(def xf
+  (comp
+    (remove #(str/ends-with? % "[DONE]"))
+    (keep parse-sse-line)))
+```
+
+**Backends: pure transducer composition.** Each backend composes `sse/xf`
+with its own event transform, then wraps in a `reify IReduceInit` that
+owns the HTTP lifecycle (`with-open`, error handling). No channels, no
+threads, no core.async dependency.
+
+```clojure
+;; openai.clj — the entire request-stream impl
+(let [xf (comp sse/xf (mapcat #(data->events % schema tools)))]
+  (reify clojure.lang.IReduceInit
+    (reduce [_ f init]
+      (with-open [reader (io/reader body)]
+        (transduce xf f init (line-seq reader))))))
+```
+
+OpenAI uses `mapcat` (one SSE chunk can carry multiple tool-call entries).
+Anthropic uses `keep` (always 1:1).
+
+**core.clj: one daemon thread.** `request` spawns a single daemon thread
+that does a blocking `reduce` over the provider's reducible. The reducing
+function updates state, pushes to dropping-buffer channels, and delivers
+promises when done. No go-loop.
+
+```clojure
+(util/run-daemon!
+  (fn []
+    (let [state (reduce step-fn init-state event-source)]
+      (finalize! state))))
+```
+
+Daemon threads (vs `future`) so the JVM exits immediately when the main
+thread finishes.
+
+**util.clj: 8 lines.** Just `run-daemon!` — shared by core.clj and
+available for future use.
+
+### After
+
+```
+After: daemon thread → blocking reduce → backend reducible → sse/xf → HTTP IO
+       core.clj        core.clj          backend (pure)     sse (pure)
+```
+
+One thread, zero intermediate channels, zero go-loops. Backends are pure
+(no async, no IO management). SSE is a transducer definition.
+
+### Line counts
+
+| File | Before | After | Change |
+|------|--------|-------|--------|
+| sse.clj | 78 | 24 | -54 (transducer only) |
+| net.cljc | 42 | 42 | unchanged |
+| util.clj | — | 8 | new (run-daemon!) |
+| openai.clj | 129 | 149 | +20 (owns HTTP lifecycle) |
+| anthropic.clj | 138 | 161 | +23 (owns HTTP lifecycle) |
+| core.clj | 614 | 614 | ~0 (reduce instead of go-loop) |
+| protocol.clj | 18 | 18 | updated docstring |
+| **Total** | **1452** | **1296** | **-156** |
+
+72 tests, 216 assertions, 0 failures.
