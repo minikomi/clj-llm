@@ -1,6 +1,5 @@
 (ns co.poyo.clj-llm.net
-  #?(:bb (:require [babashka.http-client :as http])
-     :clj (:require [clojure.core.async :as a]))
+  #?(:bb (:require [babashka.http-client :as http]))
   #?(:clj (:import (java.net.http HttpClient HttpClient$Version HttpRequest$BodyPublishers HttpRequest HttpResponse$BodyHandlers)
                    (java.net URI)
                    (java.time Duration))))
@@ -10,40 +9,34 @@
      (delay
        (-> (HttpClient/newBuilder)
            (.version HttpClient$Version/HTTP_2)
-           (.connectTimeout (Duration/ofSeconds 10)) ;; TCP connect timeout only
+           (.connectTimeout (Duration/ofSeconds 10))
            (.build)))))
 
 (defn post-stream
-  "POST `url` with `headers` and string `body`.
-   Calls `on-response` with {:status int :body InputStream :error ex?}."
-  [url headers body on-response]
+  "Blocking POST. Returns {:status int :body InputStream :error ex-or-nil}."
+  [url headers body]
   #?(:bb
-     (future
-       (try
-         (let [{:keys [status body error]} (http/post url {:headers headers
-                                                           :body body
-                                                           :as :stream
-                                                           :throw false})]
-           ;; Errors handled via on-response, not exceptions
-           (on-response {:status status :body body :error error}))
-         (catch Exception e
-           (on-response {:status 0 :body nil :error e}))))
+     (try
+       (let [{:keys [status body error]} (http/post url {:headers headers
+                                                         :body body
+                                                         :as :stream
+                                                         :throw false})]
+         {:status status :body body :error error})
+       (catch Exception e
+         {:status 0 :body nil :error e}))
      :clj
-     (a/thread
-       (try
-         (let [req-builder (-> (HttpRequest/newBuilder)
-                               (.uri (URI/create url))
-                               ;; Time to first byte, not total stream duration.
-                               ;; java.net.http streams the body after headers arrive.
-                               (.timeout (Duration/ofSeconds 30))
-                               (.POST (HttpRequest$BodyPublishers/ofString body)))]
-           (doseq [[k v] headers]
-             (.header req-builder k v))
-           (let [response (.send @http-client
-                                (.build req-builder)
-                                (HttpResponse$BodyHandlers/ofInputStream))]
-             (on-response {:status (.statusCode response)
-                           :body (.body response)
-                           :error nil})))
-         (catch Exception e
-           (on-response {:status 0 :body nil :error e}))))))
+     (try
+       (let [req (-> (HttpRequest/newBuilder)
+                     (.uri (URI/create url))
+                     (.timeout (Duration/ofSeconds 30))
+                     (.POST (HttpRequest$BodyPublishers/ofString body)))]
+         (doseq [[k v] headers]
+           (.header req k v))
+         (let [response (.send @http-client
+                              (.build req)
+                              (HttpResponse$BodyHandlers/ofInputStream))]
+           {:status (.statusCode response)
+            :body (.body response)
+            :error nil}))
+       (catch Exception e
+         {:status 0 :body nil :error e}))))
