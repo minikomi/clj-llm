@@ -5,10 +5,8 @@
    [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.set]
-   [clojure.java.io :as io]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse]))
 
 (def ^:private default-config
@@ -125,19 +123,8 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [xf (comp sse/xf (keep #(data->event % schema tools)))]
-        (reify clojure.lang.IReduceInit
-          (reduce [_ f init]
-            (try
-              (let [{:keys [error status body]} (net/post-stream url headers body)]
-                (cond
-                  error (f init {:type :error :error (.getMessage ^Exception error)})
-                  (= 200 status)
-                  (with-open [reader (io/reader body)]
-                    (transduce xf f init (line-seq reader)))
-                  :else (f init {:type :error :status status})))
-              (catch Exception e
-                (f init {:type :error :error (str e)})))))))))
+      (eduction (keep #(data->event % schema tools))
+                (sse/event-stream url headers body)))))
 
 (defn backend
   "Create an Anthropic provider.
