@@ -8,7 +8,7 @@
    [malli.transform :as mt]
    [malli.util :as mu]
    [co.poyo.clj-llm.protocol :as proto]
-))
+   [co.poyo.clj-llm.sse :as sse]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas (parse, don't validate)
@@ -66,6 +66,7 @@
    Used to propagate errors delivered into promises."
   [v]
   (if (instance? Exception v) (throw v) v))
+
 
 ;; Response record
 ;; ════════════════════════════════════════════════════════════════════
@@ -268,18 +269,16 @@
      ;; Structured output: wait for text in a separate thread, parse + validate.
      ;; Decoupled from consume-events so the event loop stays generic.
      (if schema
-       (doto (Thread.
-               (fn []
-                 (try
-                   (let [text @text-p]
-                     (deliver structured-p
-                              (if (instance? Exception text)
-                                text
-                                (parse-structured-output text schema))))
-                   (catch Exception e
-                     (deliver structured-p e)))))
-         (.setDaemon true)
-         (.start))
+       (sse/run-daemon!
+         (fn []
+           (try
+             (let [text @text-p]
+               (deliver structured-p
+                        (if (instance? Exception text)
+                          text
+                          (parse-structured-output text schema))))
+             (catch Exception e
+               (deliver structured-p e)))))
        (deliver structured-p nil))
 
      (map->Response {:chunks     text-chunks
