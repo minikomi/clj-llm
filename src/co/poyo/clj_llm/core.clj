@@ -1,6 +1,6 @@
 (ns co.poyo.clj-llm.core
   (:require
-   [clojure.core.async :as a :refer [go-loop <! <!! >! chan]]
+   [clojure.core.async :as a :refer [<!! chan]]
    [clojure.set]
    [cheshire.core :as json]
    [malli.core :as m]
@@ -185,35 +185,34 @@
                  :clj-llm/duration (- now req-start))))))
 
 (defn- consume-events
-  "Consume events from source-chan, fan out to chunks/events channels,
-   and deliver promises when the stream completes.
+  "Blocking. Reduces over event-source, fans out to chunks/events channels,
+   delivers promises when done.
 
    State transitions are pure (next-state). This function knows nothing
    about structured output — that concern lives in `request`."
-  [source-chan {:keys [text-chunks-chan events-chan
-                       text-promise usage-promise tool-calls-promise
-                       provider-opts req-start]}]
+  [event-source {:keys [text-chunks-chan events-chan
+                        text-promise usage-promise tool-calls-promise
+                        provider-opts req-start]}]
   (let [finalize! (fn [state]
                     (deliver text-promise (state->text state))
                     (deliver tool-calls-promise (not-empty (:tool-calls state)))
                     (deliver usage-promise (state->usage state provider-opts req-start))
                     (a/close! text-chunks-chan)
-                    (a/close! events-chan))]
-
-    ;; Go-loop: read event, compute next state, side-effects, recur
-    (go-loop [state init-state]
-      (if-let [event (<! source-chan)]
-        (let [state' (next-state state event)]
-          ;; Side effects: fan out to subscriber channels
-          (>! events-chan event)
-          (when (= :content (:type event))
-            (>! text-chunks-chan (:content event)))
-          ;; Continue or finalize
-          (if (:done? state')
-            (finalize! state')
-            (recur state')))
-        ;; Source channel closed without :done
-        (finalize! state)))))
+                    (a/close! events-chan))
+        final-state
+        (try
+          (reduce (fn [state event]
+                    (let [state' (next-state state event)]
+                      (a/>!! events-chan event)
+                      (when (= :content (:type event))
+                        (a/>!! text-chunks-chan (:content event)))
+                      (if (:done? state')
+                        (reduced state')
+                        state')))
+                  init-state event-source)
+          (catch Exception e
+            (assoc init-state :error e)))]
+    (finalize! final-state)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Core API
@@ -244,12 +243,12 @@
                          (throw (ex-info "No model specified"
                                          {:error-type :llm/invalid-request :opts parsed})))
          messages      (build-messages input)
-         source-chan   (proto/request-stream provider
-                        {:model model :system-prompt system-prompt :messages messages
-                         :schema schema :tools tools :tool-choice tool-choice
-                         :provider-opts (or provider-opts {})})
+         event-source  (proto/request-stream provider
+                         {:model model :system-prompt system-prompt :messages messages
+                          :schema schema :tools tools :tool-choice tool-choice
+                          :provider-opts (or provider-opts {})})
          ;; Dropping buffers: slow consumers (or nobody reading :chunks/:events)
-         ;; must not block the go-loop that delivers text-promise.
+         ;; won't block the thread that delivers promises.
          text-chunks   (chan (a/dropping-buffer 1024))
          events        (chan (a/dropping-buffer 1024))
          text-p        (promise)
@@ -257,20 +256,19 @@
          structured-p  (promise)
          tool-calls-p  (promise)]
 
-     (consume-events source-chan
-                     {:text-chunks-chan   text-chunks
-                      :events-chan        events
-                      :text-promise       text-p
-                      :usage-promise      usage-p
-                      :tool-calls-promise tool-calls-p
-                      :provider-opts     provider-opts
-                      :req-start         (System/currentTimeMillis)})
-
-     ;; Structured output: wait for text in a separate thread, parse + validate.
-     ;; Decoupled from consume-events so the event loop stays generic.
-     (if schema
-       (util/run-daemon!
-         (fn []
+     ;; Single daemon thread: reduce over events, fan out, deliver promises.
+     (util/run-daemon!
+       (fn []
+         (consume-events event-source
+                         {:text-chunks-chan   text-chunks
+                          :events-chan        events
+                          :text-promise       text-p
+                          :usage-promise      usage-p
+                          :tool-calls-promise tool-calls-p
+                          :provider-opts      provider-opts
+                          :req-start          (System/currentTimeMillis)})
+         ;; Structured output: parse + validate now that text is ready.
+         (if schema
            (try
              (let [text @text-p]
                (deliver structured-p
@@ -278,8 +276,8 @@
                           text
                           (parse-structured-output text schema))))
              (catch Exception e
-               (deliver structured-p e)))))
-       (deliver structured-p nil))
+               (deliver structured-p e)))
+           (deliver structured-p nil))))
 
      (map->Response {:chunks     text-chunks
                      :events     events

@@ -7,11 +7,9 @@
    [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.set]
-   [clojure.core.async :as a :refer [chan close!]]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.sse :as sse]
-   [co.poyo.clj-llm.util :as util]))
+   [co.poyo.clj-llm.sse :as sse]))
 
 (def ^:private default-config
   {:api-base "https://api.openai.com/v1"})
@@ -119,22 +117,14 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [out-ch (chan 1024)]
-        (util/run-daemon!
-          (fn []
-            (try
-              (reduce (fn [_ data]
-                        (if (= :error (:type data))
-                          (a/>!! out-ch data)
-                          (doseq [e (data->internal-events data schema tools)]
-                            (a/>!! out-ch e))))
-                      nil
-                      (sse/event-stream url headers body "openai"))
-              (catch Exception e
-                (a/>!! out-ch {:type :error :error (str e)}))
-              (finally
-                (close! out-ch)))))
-        out-ch))))
+      (let [raw (sse/event-stream url headers body "openai")]
+        (reify clojure.lang.IReduceInit
+          (reduce [_ f init]
+            (reduce (fn [acc data]
+                      (if (= :error (:type data))
+                        (f acc data)
+                        (reduce f acc (data->internal-events data schema tools))))
+                    init raw)))))))
 
 (defn backend
   "Create an OpenAI provider.
