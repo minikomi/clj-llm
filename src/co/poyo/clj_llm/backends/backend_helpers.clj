@@ -3,7 +3,7 @@
   (:require
    [camel-snake-kebab.core :as csk]
    [cheshire.core :as json]
-   [clojure.core.async :as a :refer [chan close! thread]]
+   [clojure.core.async :as a :refer [chan close!]]
    [clojure.set]
    [clojure.walk :as walk]
    [clojure.java.io :as io]
@@ -95,7 +95,7 @@
    convert-fn: (data-map -> seq-of-event-maps | nil)"
   [url headers body convert-fn provider-name]
   (let [out (chan 1024)]
-    (thread
+    (future
       (try
         (let [{:keys [error status body] :as response} (net/post-stream url headers body)]
           (cond
