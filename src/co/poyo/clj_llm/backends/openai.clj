@@ -9,7 +9,7 @@
    [clojure.walk :as walk]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.backends.sse-stream :as sse-stream]))
+   [co.poyo.clj-llm.sse :as sse]))
 
 (def ^:private default-config
   {:api-base "https://api.openai.com/v1"})
@@ -117,9 +117,9 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (sse-stream/create-event-stream url headers body
-                                       #(data->internal-events % schema tools)
-                                       "openai"))))
+      (sse/create-event-stream url headers body
+                                #(data->internal-events % schema tools)
+                                "openai"))))
 
 (defn backend
   "Create an OpenAI provider.
