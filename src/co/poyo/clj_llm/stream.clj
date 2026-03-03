@@ -30,9 +30,10 @@
              (with-open [^BufferedReader rdr (io/reader ^InputStream body)]
                (loop []
                  (when-let [line (.readLine rdr)]
-                   (when-let [evt (sse/parse-data-line line)]
+                   (if-let [evt (sse/parse-data-line line)]
                      (when (a/>!! ch evt)
-                       (recur))))))
+                       (recur))
+                     (recur)))))
              (catch Exception e
                (a/>!! ch (ex-info "Stream error"
                                   {:error-type :llm/stream-error} e)))
