@@ -7,15 +7,10 @@
    - sse: parse SSE data lines (pure)
    - json: decode event payloads (pure)"
   (:require
-   [camel-snake-kebab.core :as csk]
-   [camel-snake-kebab.extras :as cske]
-   [cheshire.core :as json]
    [clojure.java.io :as io]
    [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse])
   (:import (java.io BufferedReader InputStream)))
-
-(def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
 (defn line-reducible
   "Wrap an InputStream as an IReduceInit of text lines.
@@ -27,13 +22,6 @@
       (with-open [^BufferedReader rdr (io/reader input-stream)]
         (reduce rf init (line-seq rdr))))))
 
-(defn parse-json-line
-  "Parse one JSON payload string and kebab-case keys.
-   Returns nil when payload is not valid JSON."
-  [data]
-  (try
-    (cske/transform-keys ->kebab-key (json/parse-string data))
-    (catch Exception _ nil)))
 
 (defn open-event-stream
   "POST to an SSE endpoint and return a reducible of decoded event maps.
@@ -52,6 +40,5 @@
                        :status status}))
 
       :else
-      (eduction (comp (keep sse/parse-data-line)
-                      (keep parse-json-line))
+      (eduction (keep sse/parse-data-line)
                 (line-reducible body)))))
