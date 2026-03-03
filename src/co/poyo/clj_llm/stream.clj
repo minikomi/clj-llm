@@ -27,18 +27,13 @@
       (with-open [^BufferedReader rdr (io/reader input-stream)]
         (reduce rf init (line-seq rdr))))))
 
-(defn sse-data-xf
-  "Lines -> meaningful SSE data payload strings."
-  []
-  (sse/parse-data-lines))
-
-(defn json->kebab-xf
-  "JSON string -> kebab-cased map; skip non-JSON lines."
-  []
-  (keep (fn [data]
-          (try
-            (cske/transform-keys ->kebab-key (json/parse-string data))
-            (catch Exception _ nil)))))
+(defn parse-json-line
+  "Parse one JSON payload string and kebab-case keys.
+   Returns nil when payload is not valid JSON."
+  [data]
+  (try
+    (cske/transform-keys ->kebab-key (json/parse-string data))
+    (catch Exception _ nil)))
 
 (defn open-event-stream
   "POST to an SSE endpoint and return a reducible of decoded event maps.
@@ -57,6 +52,6 @@
                        :status status}))
 
       :else
-      (eduction (comp (sse-data-xf)
-                      (json->kebab-xf))
+      (eduction (comp (keep sse/parse-data-line)
+                      (keep parse-json-line))
                 (line-reducible body)))))
