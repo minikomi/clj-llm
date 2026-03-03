@@ -21,12 +21,13 @@
   "Parse an SSE fixture file into data maps (skipping [DONE])."
   [fixture-path]
   (with-open [reader (io/reader (io/resource fixture-path))]
-    (->> (line-seq reader)
-         sse/parse-events
-         (remove #(= "[DONE]" (:data %)))
-         (mapv (fn [{:keys [data]}]
-                 (cske/transform-keys ->kebab-key
-                                      (json/parse-string data)))))))
+    (into []
+          (comp (sse/parse-events)
+                (remove #(= "[DONE]" (:data %)))
+                (map (fn [{:keys [data]}]
+                       (cske/transform-keys ->kebab-key
+                                            (json/parse-string data)))))
+          (line-seq reader))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; OpenAI event converter — delegates to real implementation
