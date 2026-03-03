@@ -2,6 +2,7 @@
   "Tests for the core API"
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.core.async :as a]
+            [cheshire.core :as json]
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
             [malli.core]))
@@ -319,11 +320,17 @@
       (is (vector? (:history result))))))
 
 (deftest test-tool-result
-  (testing "tool-result creates correct message map"
+  (testing "tool-result creates correct message map with string"
     (let [msg (llm/tool-result "call_abc" "Sunny, 22°C")]
       (is (= :tool (:role msg)))
       (is (= "call_abc" (:tool-call-id msg)))
-      (is (= "Sunny, 22°C" (:content msg))))))
+      (is (= "Sunny, 22°C" (:content msg)))))
+  (testing "tool-result auto-serializes non-strings to JSON"
+    (let [msg (llm/tool-result "call_xyz" {:name "Tokyo" :latitude 35.69})]
+      (is (= :tool (:role msg)))
+      (is (= "call_xyz" (:tool-call-id msg)))
+      (is (= (json/parse-string (:content msg) true)
+             {:name "Tokyo" :latitude 35.69})))))
 
 (deftest test-generate-return-map
   (testing "generate always returns a map with :text"
