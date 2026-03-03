@@ -8,14 +8,14 @@ This walks through the library piece by piece. Every example is real code.
 |---|---|
 | Provider | `(openai/backend)` — a map |
 | Config | `(assoc provider :defaults {...})` |
-| Text generation | `(generate ai "prompt")` → string |
+| Text generation | `(generate ai "prompt")` → `{:text "..." :usage {...}}` |
 | With options | `(generate ai {:system-prompt "..."} "prompt")` |
-| Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
+| Structured output | `(generate ai {:schema s} "prompt")` → `{:structured {...} ...}` |
 | Single tool call | `(generate ai {:tools [...]} "prompt")` → `{:text :tool-calls :tool-results}` |
 | Agent loop | `(run-agent ai [#'tool-fn] "prompt")` → `{:text :steps :history}` |
-| Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
+| Streaming | `(stream ai "prompt")` → core.async channel of text chunks |
+| Raw events | `(events ai "prompt")` → core.async channel of event maps |
 | Conversations | `(generate ai history-vector)` |
-| Full access | `(request ai "prompt")` → Response record |
 
 Everything is data. Providers are maps. Options are maps. History is a vector. Compose with the tools Clojure already gives you.
 
@@ -34,7 +34,7 @@ A provider is a map that knows how to talk to an LLM API.
 (def ollama (openai/backend {:api-base "http://localhost:11434/v1"
                              :api-key "not-needed"}))
 
-(def openrouter (openai/backend {:api-key-env "OPENROUTER_API_KEY"
+(def openrouter (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_API_KEY")
                                  :api-base "https://openrouter.ai/api/v1"}))
 ```
 
@@ -56,10 +56,17 @@ That's it. `ai` is still a map. You can layer more config later:
 
 ## 3. Generate text
 
-`generate` calls the LLM and returns the result. The input — a string or a message history vector — is always the **last** argument.
+`generate` calls the LLM and returns a result map. The input — a string or a message history vector — is always the **last** argument.
 
 ```clojure
 (llm/generate ai "What is the capital of France?")
+;; => {:text "The capital of France is Paris." :usage {:prompt-tokens 14 :completion-tokens 8}}
+```
+
+Pull out just the text when you need it:
+
+```clojure
+(:text (llm/generate ai "What is the capital of France?"))
 ;; => "The capital of France is Paris."
 ```
 
@@ -67,7 +74,7 @@ Pass options as a map before the input:
 
 ```clojure
 (llm/generate ai {:system-prompt "Answer in one word."} "What is the capital of France?")
-;; => "Paris."
+;; => {:text "Paris." :usage {...}}
 ```
 
 Per-call options merge on top of `:defaults`. Per-call wins.
@@ -93,12 +100,14 @@ For provider-specific parameters not listed above, use `:provider-opts`:
 
 ## 4. Threading
 
-Because input is last, `generate` threads naturally with `->>`. The output of one call (a string) becomes the input of the next.
+Because input is last and the result is a map, extract `:text` when threading between calls:
 
 ```clojure
 (->> "The mitochondria is the powerhouse of the cell. It make ATP."
      (llm/generate ai {:system-prompt "Fix grammar and spelling."})
-     (llm/generate ai {:system-prompt "Translate to French."}))
+     :text
+     (llm/generate ai {:system-prompt "Translate to French."})
+     :text)
 ;; => "La mitochondrie est la centrale énergétique de la cellule. Elle produit de l'ATP."
 ```
 
@@ -106,7 +115,7 @@ No special pipeline abstraction. Just Clojure.
 
 ## 5. Structured output
 
-Pass a `:schema` (a Malli schema) and `generate` returns parsed, validated data instead of a string.
+Pass a `:schema` (a Malli schema) and `generate` returns parsed, validated data in the `:structured` key:
 
 ```clojure
 (llm/generate ai
@@ -115,10 +124,17 @@ Pass a `:schema` (a Malli schema) and `generate` returns parsed, validated data 
             [:age :int]
             [:occupation :string]]}
   "Marie Curie was a 66 year old physicist")
-;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
+;; => {:text "{\"name\":\"Marie Curie\",...}"
+;;     :structured {:name "Marie Curie" :age 66 :occupation "physicist"}
+;;     :usage {...}}
 ```
 
-The return value is the data. Not `{:structured {:name ...}}`. Just the map.
+Pull out the data directly:
+
+```clojure
+(:structured (llm/generate ai {:schema [:map [:name :string] [:age :int]]} "Marie Curie, age 66"))
+;; => {:name "Marie Curie" :age 66}
+```
 
 Schemas can be as complex as Malli allows:
 
@@ -133,8 +149,9 @@ Schemas can be as complex as Malli allows:
                          [:salary :int]]]]
    [:locations [:vector :string]]])
 
-(llm/generate ai {:schema company-schema}
-  "TechCorp founded 2010. Alice is CEO at $200k, Bob is Engineer at $120k. Offices in NYC and SF.")
+(:structured
+  (llm/generate ai {:schema company-schema}
+    "TechCorp founded 2010. Alice is CEO at $200k, Bob is Engineer at $120k. Offices in NYC and SF."))
 ;; => {:name "TechCorp"
 ;;     :founded 2010
 ;;     :employees [{:name "Alice" :role "CEO" :salary 200000}
@@ -152,10 +169,10 @@ Since the provider is a map, you build reusable "tasks" with standard map operat
     {:system-prompt "Extract structured data from the input."
      :schema [:map [:name :string] [:age :int] [:occupation :string]]}))
 
-(llm/generate extractor "Marie Curie was a 66 year old physicist")
+(:structured (llm/generate extractor "Marie Curie was a 66 year old physicist"))
 ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
-(llm/generate extractor "Albert Einstein was a 76 year old theoretical physicist")
+(:structured (llm/generate extractor "Albert Einstein was a 76 year old theoretical physicist"))
 ;; => {:name "Albert Einstein" :age 76 :occupation "theoretical physicist"}
 
 ;; Override per-call when needed
@@ -166,32 +183,41 @@ No special `task` or `chain` function. It's `assoc` and `merge`.
 
 ## 7. Streaming
 
-`stream-print` prints chunks to stdout as they arrive and returns the full text:
-
-```clojure
-(llm/stream-print ai "Write a haiku about Clojure")
-;; prints: Data flows like water / Parentheses embrace all / REPL sparks joy
-;; => "Data flows like water\nParentheses embrace all\nREPL sparks joy"
-```
-
-`stream` returns a `core.async` channel of text chunks for custom processing:
+`stream` returns a `core.async` channel of text chunks:
 
 ```clojure
 (require '[clojure.core.async :refer [<!!]])
 
-(let [ch (llm/stream ai "Count from 1 to 5")]
+(let [ch (llm/stream ai "Write a haiku about Clojure")]
   (loop []
     (when-let [chunk (<!! ch)]
       (print chunk)
       (flush)
       (recur))))
+;; prints: Data flows like water / Parentheses embrace all / REPL sparks joy
 ```
 
-Both take opts in the same position:
+Collect into a string:
 
 ```clojure
-(llm/stream-print ai {:system-prompt "Respond in ALL CAPS"} "Say hello")
+(let [ch (llm/stream ai "Count from 1 to 5")]
+  (loop [sb (StringBuilder.)]
+    (if-let [chunk (<!! ch)]
+      (recur (.append sb chunk))
+      (str sb))))
 ```
+
+Options go in the same position:
+
+```clojure
+(let [ch (llm/stream ai {:system-prompt "Respond in ALL CAPS"} "Say hello")]
+  (loop []
+    (when-let [chunk (<!! ch)]
+      (print chunk) (flush)
+      (recur))))
+```
+
+Close the channel to cancel the stream and clean up HTTP resources.
 
 ## 8. Conversations
 
@@ -204,7 +230,7 @@ Message history is a vector. You pass it as the input (last arg). There's no con
    {:role :assistant :content "Use (reverse coll) or (into () coll)."}
    {:role :user :content "What about in Python?"}])
 
-(llm/generate ai history)
+(:text (llm/generate ai history))
 ;; => "In Python, use reversed(lst) or lst[::-1]."
 ```
 
@@ -215,9 +241,9 @@ A simple chat loop:
 
 (defn chat! [message]
   (swap! conversation conj {:role :user :content message})
-  (let [response (llm/generate ai @conversation)]
-    (swap! conversation conj {:role :assistant :content response})
-    response))
+  (let [{:keys [text]} (llm/generate ai @conversation)]
+    (swap! conversation conj {:role :assistant :content text})
+    text))
 
 (chat! "What's the tallest mountain?")
 ;; => "Mount Everest, at 8,849 meters."
@@ -309,10 +335,11 @@ Pass `:tools` to `generate` for a single LLM call with tool access. The model de
 (llm/generate ai {:tools [#'geocode #'get-weather]} "What's the weather in Tokyo?")
 ;; => {:text nil
 ;;     :tool-calls [{:id "call_abc" :name "geocode" :arguments {:city "Tokyo"}}]
-;;     :tool-results ["{\"name\":\"Tokyo\",...}"]}
+;;     :tool-results ["{\"name\":\"Tokyo\",...}"]
+;;     :usage {...}}
 ```
 
-When tools are configured, `generate` always returns a map with three keys:
+When tools are configured, `generate` always returns a map with these keys:
 
 - `:text` — any text the model produced alongside tool calls (often `nil`)
 - `:tool-calls` — vector of `{:id :name :arguments}` maps
@@ -322,7 +349,7 @@ If the model decides no tools are needed, you get empty vectors:
 
 ```clojure
 (llm/generate ai {:tools [#'geocode #'get-weather]} "What is 2 + 2?")
-;; => {:text "2 + 2 = 4" :tool-calls [] :tool-results []}
+;; => {:text "2 + 2 = 4" :tool-calls [] :tool-results [] :usage {...}}
 ```
 
 This is one LLM call. The model sees the tools, optionally calls them, and you get back data. No loops, no agents.
@@ -339,7 +366,8 @@ This is one LLM call. The model sees the tools, optionally calls them, and you g
 ;; => {:text    "It's currently 20.1°C in Tokyo with light wind."
 ;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]
 ;;     :steps   [{:tool-calls [...] :tool-results [...]}
-;;              {:tool-calls [...] :tool-results [...]}]}
+;;              {:tool-calls [...] :tool-results [...]}]
+;;     :usage   {:prompt-tokens ... :completion-tokens ...}}
 ```
 
 `:text` is the final answer. `:history` is the full conversation (reusable). `:steps` records each tool-calling iteration.
@@ -378,7 +406,7 @@ For structured output after tool use, compose with `generate`:
 
 ```clojure
 (let [{:keys [history]} (llm/run-agent ai [#'lookup] "Look up user 123")]
-  (llm/generate ai {:schema [:map [:name :string] [:status :string]]} history))
+  (:structured (llm/generate ai {:schema [:map [:name :string] [:status :string]]} history)))
 ;; => {:name "Alice" :status "active"}
 ```
 
@@ -391,61 +419,51 @@ This keeps `run-agent` focused on the tool loop and `generate` as the single pla
 | LLM calls | Exactly one | Loop until done |
 | Tools | Optional — pass `:tools` in opts | Required — pass as second arg |
 | Executes tools | Yes, once | Yes, each iteration |
-| Returns | String, structured data, or `{:text :tool-calls :tool-results}` | `{:text :history :steps}` |
+| Returns | `{:text :usage}`, `{:structured ...}`, or `{:text :tool-calls :tool-results}` | `{:text :history :steps}` |
 | Stop control | N/A (one call) | `:stop-when` predicate, `:max-steps` |
 | Use when | You know one call is enough | The model needs to iterate |
 
 `generate` is the workhorse. `run-agent` is for when the model needs to drive.
 
-## 13. Full response access
+## 13. Raw event stream
 
-When you need token usage, raw SSE events, or fine-grained streaming control, use `request` directly:
-
-```clojure
-(def resp (llm/request ai "Explain AI briefly"))
-
-@resp              ;; block for text (Response implements IDeref)
-@(:text resp)      ;; same thing, explicit
-@(:usage resp)     ;; {:prompt_tokens 12 :completion_tokens 45 ...}
-(:chunks resp)     ;; core.async channel of text chunks
-(:events resp)     ;; core.async channel of raw events
-```
-
-`request` returns a `Response` record. `generate` is built on top of it — it calls `request` and extracts the natural value.
-
-For raw events only (without the full Response record), use `events`:
+`events` returns a `core.async` channel of raw provider events. Use it when you need fine-grained control over the stream:
 
 ```clojure
+(require '[clojure.core.async :refer [<!!]])
+
 (let [ch (llm/events ai "Count to 5")]
   (loop []
     (when-let [event (<!! ch)]
-      (println (:type event) event)
-      (when-not (= :done (:type event))
-        (recur)))))
-;; :content {:type :content :content "1"}
-;; :content {:type :content :content ", 2"}
+      (println (:type event) (dissoc event :type))
+      (recur))))
+;; :content {:content "1"}
+;; :content {:content ", 2"}
 ;; ...
-;; :usage {:type :usage :prompt-tokens 10 :completion-tokens 20 ...}
-;; :done {:type :done}
+;; :usage {:prompt-tokens 10 :completion-tokens 20 ...}
+;; :done {}
 ```
+
+Event types: `:content`, `:tool-call`, `:tool-call-delta`, `:usage`, `:finish`, `:error`, `:done`.
+
+Close the channel to cancel and clean up HTTP resources.
 
 ## 14. Error handling
 
-Errors are `ex-info` exceptions with an `:error-type` keyword in `ex-data` for programmatic dispatch:
+Errors are `ex-info` exceptions with structured data:
 
 ```clojure
-(require '[co.poyo.clj-llm.errors :as errors])
-
 (try
   (llm/generate ai {:model "nonexistent-model"} "hello")
   (catch Exception e
-    (case (errors/error-type e)
-      :llm/rate-limit    (println "Rate limited, retry in" (errors/retry-after e) "ms")
-      :llm/network-error (println "Network issue")
-      :llm/invalid-key   (println "Bad API key")
-      :llm/server-error  (println "Server error, try again")
-      :llm/invalid-request (println "Bad request:" (ex-message e))
-      (throw e))))
+    (let [{:keys [error-type]} (ex-data e)]
+      (case error-type
+        :llm/rate-limit      (println "Rate limited, retry later")
+        :llm/invalid-key     (println "Bad API key")
+        :llm/invalid-request (println "Bad request:" (ex-message e))
+        :llm/server-error    (println "Server error, try again")
+        :llm/stream-error    (println "Stream interrupted")
+        (throw e)))))
 ```
 
 Error types:
@@ -456,7 +474,7 @@ Error types:
 | `:llm/invalid-key` | 401/403 — authentication failed |
 | `:llm/invalid-request` | 400/404/422 — bad input |
 | `:llm/server-error` | 500/502/503/504 — provider issue |
-| `:llm/unknown` | Other errors |
+| `:llm/stream-error` | SSE stream interrupted |
 
 The library does not do automatic retries. Use your own retry logic or a library like `again`.
 
@@ -474,7 +492,7 @@ The same code works with any provider. Only the connection changes.
                        :defaults {:model "llama3"}))
 
 ;; Same call, any provider
-(llm/generate openai-ai "Explain monads in one sentence.")
-(llm/generate claude-ai "Explain monads in one sentence.")
-(llm/generate local-ai  "Explain monads in one sentence.")
+(:text (llm/generate openai-ai "Explain monads in one sentence."))
+(:text (llm/generate claude-ai "Explain monads in one sentence."))
+(:text (llm/generate local-ai  "Explain monads in one sentence."))
 ```
