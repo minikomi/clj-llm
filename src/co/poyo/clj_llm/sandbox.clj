@@ -109,11 +109,9 @@
   ;; Raw event stream
   ;; ======================================
 
-  ;; request returns a reducible of events
-  (reduce (fn [acc event]
-            (println (:type event) (dissoc event :type))
-            (conj acc event))
-          [] (llm/request ai "Explain AI briefly"))
+  ;; events returns a lazy seq of event maps
+  (doseq [event (llm/events ai "Explain AI briefly")]
+    (println (:type event) (dissoc event :type)))
 
   ;; ======================================
   ;; Composition -- threading with :text
