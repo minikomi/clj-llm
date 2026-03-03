@@ -82,12 +82,4 @@
                     (= "[DONE]" data))
         data))))
 
-(defn parse-data-lines
-  "Keep only meaningful SSE data payload strings.
 
-   (parse-data-lines lines) -> lazy seq of payload strings
-   (parse-data-lines)       -> transducer"
-  ([lines]
-   (sequence (parse-data-lines) lines))
-  ([]
-   (keep parse-data-line)))
