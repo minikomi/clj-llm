@@ -1,6 +1,7 @@
 #!/usr/bin/env bb
 
-(require '[co.poyo.clj-llm.core :as llm]
+(require '[clojure.core.async :as a]
+         '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
 (def ai
@@ -14,18 +15,21 @@
 (println)
 
 (let [t0 (System/currentTimeMillis)
+      ch (llm/events ai "Count from 1 to 10, one number per line.")
       n  (atom 0)]
-  (doseq [event (llm/events ai "Count from 1 to 10, one number per line.")]
-    (let [elapsed (- (System/currentTimeMillis) t0)
-          i (swap! n inc)]
-      (println (format "%6dms  #%-3d  %-20s  %s"
-                 elapsed i (:type event)
-                 (case (:type event)
-                   :content (pr-str (:content event))
-                   :tool-call (pr-str (select-keys event [:name :id]))
-                   :tool-call-delta (pr-str (select-keys event [:index :arguments]))
-                   :usage (pr-str (dissoc event :type))
-                   :finish (pr-str (:reason event))
-                   :error (pr-str event)
-                   :done ""
-                   (pr-str event)))))))
+  (loop []
+    (when-let [event (a/<!! ch)]
+      (let [elapsed (- (System/currentTimeMillis) t0)
+            i (swap! n inc)]
+        (println (format "%6dms  #%-3d  %-20s  %s"
+                   elapsed i (:type event)
+                   (case (:type event)
+                     :content (pr-str (:content event))
+                     :tool-call (pr-str (select-keys event [:name :id]))
+                     :tool-call-delta (pr-str (select-keys event [:index :arguments]))
+                     :usage (pr-str (dissoc event :type))
+                     :finish (pr-str (:reason event))
+                     :error (pr-str event)
+                     :done ""
+                     (pr-str event)))))
+      (recur))))
