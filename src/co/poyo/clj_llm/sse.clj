@@ -1,11 +1,7 @@
 (ns co.poyo.clj-llm.sse
-  "SSE text parsing and simple data payload decoding.
-   Pure transforms only — no HTTP, no I/O."
-  (:require
-   [camel-snake-kebab.core :as csk]
-   [camel-snake-kebab.extras :as cske]
-   [cheshire.core :as json]
-   [clojure.string :as str]))
+  "Pure SSE text parsing per the EventSource spec.
+   Turns a stream of lines into SSE events — no HTTP, no JSON, no I/O." 
+  (:require [clojure.string :as str]))
 
 (defn parse-sse-line
   "Parse a single SSE line into a field/value pair, or a sentinel.
@@ -76,27 +72,22 @@
                 result)))))))))
 
 
-(def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
+(defn parse-data-line
+  "Parse one SSE line and return the normalized data payload string.
+   Returns nil for non-data lines and known non-payload markers."
+  [^String line]
+  (when (str/starts-with? line "data:")
+    (let [data (str/trim (subs line 5))]
+      (when-not (or (str/blank? data)
+                    (= "[DONE]" data))
+        data))))
 
 (defn parse-data-lines
-  "Simple SSE extraction for providers that emit one JSON object per data line.
+  "Keep only meaningful SSE data payload strings.
 
-   Keeps only `data:` lines, trims payload, drops blank/[DONE], parses JSON,
-   and kebab-cases map keys.
-
-   (parse-data-lines lines) -> lazy seq of decoded maps
+   (parse-data-lines lines) -> lazy seq of payload strings
    (parse-data-lines)       -> transducer"
   ([lines]
    (sequence (parse-data-lines) lines))
   ([]
-   (comp
-    (keep (fn [^String line]
-            (when (str/starts-with? line "data:")
-              (let [data (str/trim (subs line 5))]
-                (when-not (or (str/blank? data)
-                              (= "[DONE]" data))
-                  (try
-                    (cske/transform-keys ->kebab-key
-                                         (json/parse-string data))
-                    (catch Exception _
-                      nil))))))))))
+   (keep parse-data-line)))
