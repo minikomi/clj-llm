@@ -1,6 +1,7 @@
 (ns co.poyo.clj-llm.core-test
   "Tests for the core API"
   (:require [clojure.test :refer [deftest testing is]]
+            [clojure.core.async :as a]
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
             [malli.core]))
@@ -11,13 +12,16 @@
 
 (defrecord MockProvider [responses defaults calls]
   proto/LLMProvider
-  (request-stream [_ request]
+  (request-events [_ request]
     (when calls
       (swap! calls conj request))
-    (let [events (conj (vec @responses) {:type :done})]
-      (reify clojure.lang.IReduceInit
-        (reduce [_ f init]
-          (reduce f init events))))))
+    (let [events (conj (vec @responses) {:type :done})
+          ch (a/chan 256)]
+      (a/thread
+        (doseq [e events]
+          (a/>!! ch e))
+        (a/close! ch))
+      ch)))
 
 (defn mock-provider
   ([events] (mock-provider events {}))

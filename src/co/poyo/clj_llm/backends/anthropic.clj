@@ -113,7 +113,7 @@
 
 (defrecord AnthropicBackend [api-base api-key-fn api-version defaults]
   proto/LLMProvider
-  (request-stream [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
+  (request-events [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
     (let [api-key (api-key-fn)
           _ (when-not api-key
               (throw (ex-info "API key function returned nil"
@@ -123,8 +123,8 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (eduction (keep #(data->event % schema tools))
-                (stream/open-event-stream url headers body)))))
+      (stream/open-event-stream url headers body
+        {:xform (keep #(data->event % schema tools))}))))
 
 (defn backend
   "Create an Anthropic provider.

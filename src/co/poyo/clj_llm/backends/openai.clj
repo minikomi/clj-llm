@@ -103,7 +103,7 @@
 
 (defrecord OpenAIBackend [api-base api-key-fn defaults]
   proto/LLMProvider
-  (request-stream [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
+  (request-events [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
     (let [api-key (api-key-fn)
           _ (when-not api-key
               (throw (ex-info "API key function returned nil"
@@ -112,8 +112,8 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (eduction (mapcat #(data->events % schema tools))
-                (stream/open-event-stream url headers body)))))
+      (stream/open-event-stream url headers body
+        {:xform (mapcat #(data->events % schema tools))}))))
 
 (defn backend
   "Create an OpenAI provider.
