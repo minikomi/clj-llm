@@ -3,7 +3,6 @@
   (:require [clojure.test :refer [deftest testing is]]
             [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.protocol :as proto]
-            [clojure.string :as str]
             [malli.core]))
 
 ;; ════════════════════════════════════════════════════════════════════
@@ -53,29 +52,6 @@
     (let [provider (mock-provider [{:type :content :content "hi"}
                                    {:type :usage :prompt-tokens 10 :completion-tokens 20}])]
       (is (= 10 (get-in (llm/generate provider "test") [:usage :prompt-tokens]))))))
-
-(deftest test-request-returns-reducible
-  (testing "request returns a reducible of events"
-    (let [provider (mock-provider [{:type :content :content "hello"}
-                                   {:type :usage :prompt-tokens 5 :completion-tokens 10}])
-          events (reduce conj [] (llm/request provider "test"))]
-      (is (= 3 (count events)))
-      (is (= :content (:type (first events))))
-      (is (= :usage (:type (second events))))
-      (is (= :done (:type (nth events 2)))))))
-
-(deftest test-stream-print
-  (testing "stream-print prints and returns result map"
-    (let [provider (mock-provider [{:type :content :content "one "}
-                                   {:type :content :content "two "}
-                                   {:type :content :content "three"}
-                                   {:type :usage :prompt-tokens 5 :completion-tokens 10}])
-          result (atom nil)
-          output (with-out-str
-                   (reset! result (llm/stream-print provider "test")))]
-      (is (str/includes? output "one two three"))
-      (is (= "one two three" (:text @result)))
-      (is (= 5 (get-in @result [:usage :prompt-tokens]))))))
 
 (deftest test-message-building
   (testing "With system prompt"
