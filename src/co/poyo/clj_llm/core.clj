@@ -1,14 +1,13 @@
 (ns co.poyo.clj-llm.core
   (:require
+   [clojure.core.async :as a]
    [clojure.set]
    [cheshire.core :as json]
    [malli.core :as m]
    [malli.error :as me]
    [malli.transform :as mt]
    [malli.util :as mu]
-   [co.poyo.clj-llm.protocol :as proto])
-  (:import
-   [java.util.concurrent LinkedBlockingQueue]))
+   [co.poyo.clj-llm.protocol :as proto]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
@@ -155,8 +154,9 @@
                   {:error-type :llm/invalid-request
                    :input input}))))
 
-(defn- request-events
-  "Build and return the event reducible for the given provider + opts + input."
+(defn- request-event-ch
+  "Build and return a core.async channel of events for the given provider + opts + input.
+   The channel is bounded; closing it cancels the request."
   [provider opts input]
   (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
         (parse-opts (merge (:defaults provider) opts))
@@ -164,7 +164,7 @@
                    (throw (ex-info "No model specified"
                                    {:error-type :llm/invalid-request :opts parsed})))
         messages (build-messages input)]
-    (proto/request-stream provider
+    (proto/request-events provider
       {:model model :system-prompt system-prompt :messages messages
        :schema schema :tools tools :tool-choice tool-choice
        :provider-opts (or provider-opts {})})))
@@ -173,32 +173,32 @@
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn- reducible->blocking-seq
-  "Bridge a blocking reducible onto a lazy seq via a queue."
-  [reducible]
-  (let [q   (LinkedBlockingQueue.)
-        end ::done]
-    (future
-      (try
-        (reduce (fn [_ x] (.put q x)) nil reducible)
-        (catch Exception e
-          (.put q e))
-        (finally
-          (.put q end))))
-    (->> (repeatedly #(.take q))
-         (take-while #(not= end %))
-         (map (fn [v]
-                (if (instance? Exception v)
-                  (throw v)
-                  v))))))
+(defn- chan-reduce
+  "Blocking reduce over a core.async channel.
+   Reads all values from ch, reduces with rf/init.
+   Returns the final accumulated value."
+  [rf init ch]
+  (loop [acc init]
+    (let [v (a/<!! ch)]
+      (if (nil? v)
+        acc
+        (let [acc' (rf acc v)]
+          (if (reduced? acc')
+            (do (a/close! ch)
+                @acc')
+            (recur acc')))))))
 
 (defn events
-  "Returns a lazy seq of event maps, streamed from the provider.
-   Blocks on each element until available. Terminates when stream ends.
+  "Returns a core.async channel of event maps, streamed from the provider.
+   Channel is bounded (default 256) — provides backpressure.
+   Close the channel to cancel the stream and clean up resources.
 
-   (doseq [event (llm/events ai \"hello\")]
-     (when (= :content (:type event))
-       (print (:content event)) (flush)))
+   (let [ch (llm/events ai \"hello\")]
+     (loop []
+       (when-let [event (a/<!! ch)]
+         (when (= :content (:type event))
+           (print (:content event)) (flush))
+         (recur))))
 
    Events are maps with :type — :content, :tool-call, :tool-call-delta,
    :usage, :finish, :error, :done.
@@ -206,7 +206,7 @@
    Input is last — string or message-history vector."
   ([provider input] (events provider {} input))
   ([provider opts input]
-   (reducible->blocking-seq (request-events provider opts input))))
+   (request-event-ch provider opts input)))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."
@@ -348,8 +348,8 @@
          api-opts (if tools
                     (assoc (dissoc opts :tools) :tools input-schemas)
                     opts)
-         result (finalize-state (reduce next-state init-state
-                                       (request-events provider api-opts input)))]
+         result (finalize-state (chan-reduce next-state init-state
+                                              (request-event-ch provider api-opts input)))]
      (cond
        tools
        (let [name->fn (build-name->fn tools input-schemas)
@@ -413,12 +413,12 @@
             n 0]
        (let [{:keys [text usage] :as result}
              (finalize-state
-               (reduce (fn [state event]
-                         (when (and on-text (= :content (:type event)))
-                           (on-text (:content event)))
-                         (next-state state event))
-                       init-state
-                       (request-events provider request-opts history)))
+               (chan-reduce (fn [state event]
+                              (when (and on-text (= :content (:type event)))
+                                (on-text (:content event)))
+                              (next-state state event))
+                            init-state
+                            (request-event-ch provider request-opts history)))
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
@@ -463,18 +463,29 @@
 
 
 (defn stream
-  "Returns a lazy seq of text chunks, streamed from the provider.
-   Blocks on each element until available. Terminates when stream ends.
+  "Returns a core.async channel of text chunks, streamed from the provider.
+   Channel is bounded (default 256) — provides backpressure.
+   Close the channel to cancel the stream and clean up resources.
 
-   (doseq [chunk (llm/stream ai \"Tell me a story\")]
-     (print chunk) (flush))
-
-   (str/join (llm/stream ai \"hello\"))"
+   (let [ch (llm/stream ai \"Tell me a story\")]
+     (loop []
+       (when-let [chunk (a/<!! ch)]
+         (print chunk) (flush)
+         (recur))))"
   ([provider input] (stream provider {} input))
   ([provider opts input]
-   (eduction (keep (fn [event]
-                     (when (= :content (:type event))
-                       (:content event))))
-             (events provider opts input))))
+   (let [xf (keep (fn [event]
+                    (when (= :content (:type event))
+                      (:content event))))
+         event-ch (request-event-ch provider opts input)
+         text-ch  (a/chan 256 xf)]
+     ;; Pipe events through xf; closing text-ch propagates to event-ch
+     (a/pipe event-ch text-ch)
+     text-ch)))
+
+(defn chan?
+  "True if x is a core.async channel."
+  [x]
+  (satisfies? clojure.core.async.impl.protocols/Channel x))
 
 

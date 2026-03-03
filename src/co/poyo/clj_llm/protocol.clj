@@ -3,7 +3,7 @@
 
 (defprotocol LLMProvider
   "Protocol that all LLM providers must implement"
-  (request-stream [this request]
+  (request-events [this request]
     "Make a streaming request to the LLM provider.
 
      request is a map with keys:
@@ -15,4 +15,6 @@
        :tool-choice     - tool choice strategy (or nil)
        :provider-opts   - map of provider-specific options
 
-     Returns a blocking reducible (IReduceInit) of events."))
+     Returns a core.async channel of event maps.
+     The channel is bounded (backpressure).
+     Closing the channel cancels the request and cleans up HTTP resources."))
