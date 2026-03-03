@@ -27,7 +27,7 @@
   (when-let [input (read-line)]
     (when-not (empty? input)
       (swap! history conj {:role :user :content input})
-      (let [{:keys [text]} (llm/stream-print ai @history)]
+      (let [text (llm/stream-print ai @history)]
         (swap! history conj {:role :assistant :content text}))
       (println))
     (recur)))
