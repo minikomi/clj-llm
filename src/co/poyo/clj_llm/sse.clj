@@ -79,6 +79,8 @@
    (with optional single leading space removed, per SSE spec).
 
    Everything else is skipped.
+   Note: blank payloads are preserved here and can be filtered explicitly
+   by callers.
 
    (parse-data-lines lines) -> lazy seq of data payload strings
    (parse-data-lines)       -> transducer"
