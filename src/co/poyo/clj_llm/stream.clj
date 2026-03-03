@@ -32,18 +32,23 @@
 
 (defn sse-data-xf
   "Simple transducer: lines -> SSE data payload strings.
-   Keeps only `data:` lines and filters protocol sentinel [DONE]."
+   Uses keep to include only meaningful payloads."
   []
   (comp
    (sse/parse-data-lines)
-   (remove #{"[DONE]"})))
+   (keep (fn [data]
+           (when-not (= "[DONE]" data)
+             data)))))
 
 (defn json->kebab-xf
-  "Pure transducer: JSON string -> kebab-cased map."
+  "JSON string -> kebab-cased map, skipping non-JSON payloads."
   []
-  (map (fn [data]
-         (cske/transform-keys ->kebab-key
-                              (json/parse-string data)))))
+  (keep (fn [data]
+          (try
+            (cske/transform-keys ->kebab-key
+                                 (json/parse-string data))
+            (catch Exception _
+              nil)))))
 
 (defn open-event-stream
   "POST to an SSE endpoint and return a reducible of decoded event maps.
