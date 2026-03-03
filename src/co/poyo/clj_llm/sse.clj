@@ -30,40 +30,33 @@
           [(keyword field) value])))))
 
 (defn parse-events
-  "Transducer: lines → SSE event maps.
-   Each emitted event is {:event \"...\" :data \"...\"}.
+  "Parse a seq of SSE lines into a lazy seq of event maps.
+   Each event is {:event \"...\" :data \"...\"}.
    :event defaults to \"message\" per spec.
    Multi-line data fields are joined with newlines."
-  []
-  (fn [rf]
-    (let [event (volatile! "message")
-          data  (volatile! (transient []))]
-      (fn
-        ([] (rf))
-        ([result]
-         (let [d (persistent! @data)]
-           (rf (if (seq d)
-                 (rf result {:event @event :data (str/join "\n" d)})
-                 result))))
-        ([result line]
-         (let [parsed (parse-sse-line line)]
-           (cond
-             (nil? parsed) result
+  [lines]
+  (lazy-seq
+   (loop [lines lines
+          event "message"
+          data  []]
+     (if-let [line (first lines)]
+       (let [parsed (parse-sse-line line)]
+         (cond
+           (nil? parsed)
+           (recur (rest lines) event data)
 
-             (= :dispatch parsed)
-             (let [d (persistent! @data)
-                   e @event]
-               (vreset! event "message")
-               (vreset! data (transient []))
-               (if (seq d)
-                 (rf result {:event e :data (str/join "\n" d)})
-                 result))
+           (= :dispatch parsed)
+           (if (seq data)
+             (cons {:event event :data (str/join "\n" data)}
+                   (parse-events (rest lines)))
+             (recur (rest lines) "message" []))
 
-             :else
-             (let [[field value] parsed]
-               (case field
-                 :data  (vswap! data conj! value)
-                 :event (vreset! event value)
-                 nil)
-               result))))))))
+           :else
+           (let [[field value] parsed]
+             (case field
+               :data  (recur (rest lines) event (conj data value))
+               :event (recur (rest lines) value data)
+               (recur (rest lines) event data)))))
+       (when (seq data)
+         (list {:event event :data (str/join "\n" data)}))))))
 
