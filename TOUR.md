@@ -451,32 +451,25 @@ Close the channel to cancel and clean up HTTP resources.
 
 ## 14. Error handling
 
-Errors are `ex-info` exceptions with structured data:
+Connection errors throw the underlying Java exception directly (`ConnectException`, `HttpTimeoutException`, etc.). No wrapping.
+
+HTTP errors (non-200) throw `ex-info` with the status and the API's response body — the actual error message from OpenAI/Anthropic:
 
 ```clojure
 (try
   (llm/generate ai {:model "nonexistent-model"} "hello")
+  (catch clojure.lang.ExceptionInfo e
+    (let [{:keys [status body]} (ex-data e)]
+      (println "HTTP" status)
+      (println body)))
   (catch Exception e
-    (let [{:keys [error-type]} (ex-data e)]
-      (case error-type
-        :llm/rate-limit      (println "Rate limited, retry later")
-        :llm/invalid-key     (println "Bad API key")
-        :llm/invalid-request (println "Bad request:" (ex-message e))
-        :llm/server-error    (println "Server error, try again")
-        :llm/stream-error    (println "Stream interrupted")
-        (throw e)))))
+    ;; Connection/timeout errors — plain Java exceptions
+    (println "Connection error:" (.getMessage e))))
+;; HTTP 404
+;; {"error":{"message":"The model 'nonexistent-model' does not exist",...}}
 ```
 
-Error types:
-
-| Keyword | Meaning |
-|---|---|
-| `:llm/rate-limit` | 429 — too many requests |
-| `:llm/invalid-key` | 401/403 — authentication failed |
-| `:llm/invalid-request` | 400/404/422 — bad input |
-| `:llm/server-error` | 500/502/503/504 — provider issue |
-| `:llm/network-error` | Connection failed |
-| `:llm/stream-error` | SSE stream interrupted mid-response |
+Option validation errors (bad keys, missing model) are also `ex-info` with `:error-type :llm/invalid-request`.
 
 The library does not do automatic retries. Use your own retry logic or a library like `again`.
 

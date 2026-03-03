@@ -698,54 +698,27 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb30-1"><a
 <code>:finish</code>, <code>:error</code>, <code>:done</code>.</p>
 <p>Close the channel to cancel and clean up HTTP resources.</p>
 <h2 id="error-handling">14. Error handling</h2>
-<p>Errors are <code>ex-info</code> exceptions with structured data:</p>
+<p>Connection errors throw the underlying Java exception directly
+(<code>ConnectException</code>, <code>HttpTimeoutException</code>,
+etc.). No wrapping.</p>
+<p>HTTP errors (non-200) throw <code>ex-info</code> with the status and
+the API’s response body — the actual error message from
+OpenAI/Anthropic:</p>
 <div class="sourceCode" id="cb31"><pre
 class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
 <span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [{<span class="at">:keys</span> [error-type]} (ex-data <span class="kw">e</span>)]</span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">case</span> error-type</span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>        <span class="at">:llm/rate-limit</span>      (<span class="kw">println</span> <span class="st">&quot;Rate limited, retry later&quot;</span>)</span>
-<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>        <span class="at">:llm/invalid-key</span>     (<span class="kw">println</span> <span class="st">&quot;Bad API key&quot;</span>)</span>
-<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>        <span class="at">:llm/invalid-request</span> (<span class="kw">println</span> <span class="st">&quot;Bad request:&quot;</span> (ex-message <span class="kw">e</span>))</span>
-<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>        <span class="at">:llm/server-error</span>    (<span class="kw">println</span> <span class="st">&quot;Server error, try again&quot;</span>)</span>
-<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>        <span class="at">:llm/stream-error</span>    (<span class="kw">println</span> <span class="st">&quot;Stream interrupted&quot;</span>)</span>
-<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">throw</span> <span class="kw">e</span>)))))</span></code></pre></div>
-<p>Error types:</p>
-<table>
-<thead>
-<tr class="header">
-<th>Keyword</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>:llm/rate-limit</code></td>
-<td>429 — too many requests</td>
-</tr>
-<tr class="even">
-<td><code>:llm/invalid-key</code></td>
-<td>401/403 — authentication failed</td>
-</tr>
-<tr class="odd">
-<td><code>:llm/invalid-request</code></td>
-<td>400/404/422 — bad input</td>
-</tr>
-<tr class="even">
-<td><code>:llm/server-error</code></td>
-<td>500/502/503/504 — provider issue</td>
-</tr>
-<tr class="odd">
-<td><code>:llm/network-error</code></td>
-<td>Connection failed</td>
-</tr>
-<tr class="even">
-<td><code>:llm/stream-error</code></td>
-<td>SSE stream interrupted mid-response</td>
-</tr>
-</tbody>
-</table>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> clojure.lang.ExceptionInfo <span class="kw">e</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [{<span class="at">:keys</span> [status body]} (ex-data <span class="kw">e</span>)]</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> <span class="st">&quot;HTTP&quot;</span> status)</span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> body)))</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">;; Connection/timeout errors — plain Java exceptions</span></span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">println</span> <span class="st">&quot;Connection error:&quot;</span> (.getMessage <span class="kw">e</span>))))</span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; HTTP 404</span></span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; {&quot;error&quot;:{&quot;message&quot;:&quot;The model &#39;nonexistent-model&#39; does not exist&quot;,...}}</span></span></code></pre></div>
+<p>Option validation errors (bad keys, missing model) are also
+<code>ex-info</code> with
+<code>:error-type :llm/invalid-request</code>.</p>
 <p>The library does not do automatic retries. Use your own retry logic
 or a library like <code>again</code>.</p>
 <h2 id="multiple-providers">15. Multiple providers</h2>
