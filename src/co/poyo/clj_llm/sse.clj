@@ -71,3 +71,24 @@
                   nil)
                 result)))))))))
 
+
+(defn parse-data-lines
+  "Simple SSE extraction for providers that emit one JSON object per data line.
+
+   Keeps only lines with `data:` prefix and returns the payload string
+   (with optional single leading space removed, per SSE spec).
+
+   Everything else is skipped.
+
+   (parse-data-lines lines) -> lazy seq of data payload strings
+   (parse-data-lines)       -> transducer"
+  ([lines]
+   (sequence (parse-data-lines) lines))
+  ([]
+   (comp
+    (keep (fn [^String line]
+            (when (str/starts-with? line "data:")
+              (let [value (subs line 5)]
+                (if (str/starts-with? value " ")
+                  (subs value 1)
+                  value))))))))

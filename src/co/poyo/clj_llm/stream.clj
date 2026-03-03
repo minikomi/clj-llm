@@ -31,12 +31,11 @@
         (reduce rf init (line-seq rdr))))))
 
 (defn sse-data-xf
-  "Pure transducer: lines -> SSE :data payload strings.
-   Filters protocol sentinel [DONE]."
+  "Simple transducer: lines -> SSE data payload strings.
+   Keeps only `data:` lines and filters protocol sentinel [DONE]."
   []
   (comp
-   (sse/parse-events)
-   (map :data)
+   (sse/parse-data-lines)
    (remove #{"[DONE]"})))
 
 (defn json->kebab-xf
