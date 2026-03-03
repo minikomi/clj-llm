@@ -6,7 +6,9 @@
    [malli.error :as me]
    [malli.transform :as mt]
    [malli.util :as mu]
-   [co.poyo.clj-llm.protocol :as proto]))
+   [co.poyo.clj-llm.protocol :as proto])
+  (:import
+   [java.util.concurrent LinkedBlockingQueue]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas (parse, don't validate)
@@ -436,22 +438,48 @@
                (recur next-history next-steps (inc n))))))))))
 
 
+(defn stream
+  "Returns a lazy seq of text chunks, streamed from the provider.
+   Blocks on each element until available. Terminates when stream ends.
+
+   (doseq [chunk (llm/stream ai \"Tell me a story\")]
+     (print chunk) (flush))
+
+   (str/join (llm/stream ai \"hello\"))"
+  ([provider input] (stream provider {} input))
+  ([provider opts input]
+   (let [q   (LinkedBlockingQueue.)
+         end ::done]
+     (future
+       (try
+         (reduce (fn [_ event]
+                   (when (= :content (:type event))
+                     (.put q (:content event))))
+                 nil
+                 (request-events provider opts input))
+         (catch Exception e
+           (.put q e))
+         (finally
+           (.put q end))))
+     (take-while #(not= end %)
+                 (map (fn [v]
+                        (if (instance? Exception v)
+                          (throw v)
+                          v))
+                      (repeatedly #(.take q)))))))
+
 (defn stream-print
   "Stream text to *out*, printing chunks as they arrive.
-   Returns the full result map with :text and :usage.
-   Great for REPL use.
+   Returns the full text as a string.
 
-   (stream-print ai \"Tell me a story\")
-   ;; prints chunks as they arrive, returns {:text \"...\" :usage {...}}"
+   (stream-print ai \"Tell me a story\")"
   ([provider input]
    (stream-print provider {} input))
   ([provider opts input]
-   (let [state (reduce (fn [state event]
-                         (when (= :content (:type event))
-                           (print (:content event))
-                           (flush))
-                         (next-state state event))
-                       init-state
-                       (request-events provider opts input))]
+   (let [sb (StringBuilder.)]
+     (doseq [chunk (stream provider opts input)]
+       (.append sb chunk)
+       (print chunk)
+       (flush))
      (println)
-     (finalize-state state))))
+     (.toString sb))))
