@@ -44,28 +44,25 @@
   [:map {:name "calculate" :description "Evaluate a Clojure math expression. Use prefix notation, e.g. (+ 2 2), (Math/sqrt 144), (Math/pow 2 10)"}
    [:expression {:description "Clojure expression, e.g. (+ (Math/pow 2 10) (Math/sqrt 256))"} :string]])
 
-(def tavily-key (System/getenv "TAVILY_API_KEY"))
-
-(defn tavily-search [query]
+(defn web-search [query]
   (try
-    (let [resp (http/post "https://api.tavily.com/search"
-                 {:headers {"Content-Type" "application/json"}
-                  :body (json/generate-string
-                          {:query query
-                           :api_key tavily-key
-                           :max_results 5
-                           :include_answer true})})
-          data (json/parse-string (:body resp) true)]
-      (str (when-let [answer (:answer data)]
-             (str "Summary: " answer "\n\n"))
-           "Sources:\n"
-           (str/join "\n"
-             (map-indexed
-               (fn [i r]
-                 (str (inc i) ". " (:title r) "\n"
-                      "   " (:content r) "\n"
-                      "   URL: " (:url r)))
-               (:results data)))))
+    (let [resp (http/post "https://html.duckduckgo.com/html/"
+                 {:headers {"User-Agent" "Mozilla/5.0"
+                            "Content-Type" "application/x-www-form-urlencoded"}
+                  :body (str "q=" (java.net.URLEncoder/encode query "UTF-8"))})
+          body (:body resp)
+          links (re-seq #"class=\"result__a\" href=\"([^\"]*)\"[^>]*>([^<]*)</a>" body)
+          snippets (re-seq #"class=\"result__snippet\" href=\"[^\"]*\">(.+?)</a>" body)
+          results (map-indexed
+                    (fn [i [_ url title]]
+                      (let [snippet (some-> (nth snippets i nil) second (str/replace #"<[^>]+>" "") str/trim)]
+                        (str (inc i) ". " (str/trim title)
+                             (when snippet (str "\n   " snippet))
+                             "\n   URL: " url)))
+                    (take 5 links))]
+      (if (empty? results)
+        (str "No results found for: " query)
+        (str/join "\n\n" results)))
     (catch Exception e
       (str "Search error: " (.getMessage e)))))
 
@@ -109,7 +106,7 @@
   (case name
     "geocode"      (fetch-geocode (:city arguments))
     "get_weather"  (fetch-weather (:latitude arguments) (:longitude arguments))
-    "search_web"   (tavily-search (:query arguments))
+    "search_web"   (web-search (:query arguments))
     "calculate"    (str "Result: "
                         (try (load-string (:expression arguments))
                              (catch Exception e (str "Error: " (.getMessage e)))))
@@ -374,8 +371,13 @@ a { color:#8ab4f8; text-decoration:none }
                                     (fn [acc event]
                                       (case (:type event)
                                         :content (update acc :chunks conj (:content event))
-                                        :tool-call (update acc :tool-calls conj
-                                                     (assoc event :arguments (or (:arguments event) "")))
+                                        :tool-call
+                                        (let [idx (or (:index event) (count (:tool-calls acc)))
+                                              pos (count (:tool-calls acc))]
+                                          (-> acc
+                                              (update :tool-calls conj
+                                                (assoc event :arguments (or (:arguments event) "")))
+                                              (assoc-in [:tc-pos idx] pos)))
                                         :tool-call-delta
                                         (let [idx (:index event)
                                               pos (get-in acc [:tc-pos idx])]
@@ -384,7 +386,8 @@ a { color:#8ab4f8; text-decoration:none }
                                             acc))
                                         acc))
                                     {:chunks [] :tool-calls [] :tc-pos {}}
-                                    (llm/events ai {:tools agent-tools} history))
+                                    (llm/events ai {:tools agent-tools
+                                                            :system-prompt "You are a helpful assistant with tools. Always use the provided tools to answer questions — do not guess or say you cannot access data. Use geocode before get_weather. Use search_web for factual queries."} history))
                            text (apply str (:chunks result))
                            raw-tc (:tool-calls result)
                            tc (when (seq raw-tc)
