@@ -30,19 +30,10 @@
       (with-open [^BufferedReader rdr (io/reader input-stream)]
         (reduce rf init (line-seq rdr))))))
 
-(def ^:private ignored-sse-data-lines
-  "Known SSE data payloads we intentionally drop before JSON parsing."
-  #{"" "[DONE]"})
-
 (defn sse-data-xf
-  "Simple transducer: lines -> SSE data payload strings.
-   Explicitly filters known non-payload lines (blank and [DONE])."
+  "Simple transducer: lines -> SSE data payload strings."
   []
-  (comp
-   (sse/parse-data-lines)
-   (keep (fn [data]
-           (when-not (contains? ignored-sse-data-lines data)
-             data)))))
+  (sse/parse-data-lines))
 
 (defn json->kebab-xf
   "JSON string -> kebab-cased map, skipping non-JSON payloads."
@@ -56,19 +47,21 @@
 
 (defn open-event-stream
   "POST to an SSE endpoint and return a reducible of decoded event maps.
-   Throws on request/setup errors.
-
-   Returned value is reducible and transducer-friendly via eduction."
+   Throws on request/setup errors."
   [url headers req-body]
   (let [{:keys [error status body]} (net/post-stream url headers req-body)]
-    (when error
+    (cond
+      error
       (throw (ex-info "SSE request failed"
                       {:type :sse/request-failed}
-                      ^Throwable error)))
-    (when (not= 200 status)
+                      ^Throwable error))
+
+      (not= 200 status)
       (throw (ex-info "SSE HTTP error"
                       {:type :sse/http-error
-                       :status status})))
-    (eduction (comp (sse-data-xf)
-                    (json->kebab-xf))
-              (line-reducible body))))
+                       :status status}))
+
+      :else
+      (eduction (comp (sse-data-xf)
+                      (json->kebab-xf))
+                (line-reducible body)))))

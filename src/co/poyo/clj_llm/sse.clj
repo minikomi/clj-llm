@@ -75,12 +75,7 @@
 (defn parse-data-lines
   "Simple SSE extraction for providers that emit one JSON object per data line.
 
-   Keeps only lines with `data:` prefix and returns the payload string
-   (with optional single leading space removed, per SSE spec).
-
-   Everything else is skipped.
-   Note: blank payloads are preserved here and can be filtered explicitly
-   by callers.
+   Keeps only `data:` lines, trims payload, and drops blank/[DONE].
 
    (parse-data-lines lines) -> lazy seq of data payload strings
    (parse-data-lines)       -> transducer"
@@ -90,7 +85,7 @@
    (comp
     (keep (fn [^String line]
             (when (str/starts-with? line "data:")
-              (let [value (subs line 5)]
-                (if (str/starts-with? value " ")
-                  (subs value 1)
-                  value))))))))
+              (let [data (str/trim (subs line 5))]
+                (when-not (or (str/blank? data)
+                              (= "[DONE]" data))
+                  data))))))))
