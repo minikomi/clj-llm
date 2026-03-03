@@ -41,7 +41,7 @@
            (reduce rf init
                    (->> (line-seq rdr)
                         sse/parse-events
-                        (remove #(sse/done? (:data %)))
+                        (remove #(= "[DONE]" (:data %)))
                         (map (fn [{:keys [data]}]
                                (cske/transform-keys ->kebab-key
                                                     (json/parse-string data))))))

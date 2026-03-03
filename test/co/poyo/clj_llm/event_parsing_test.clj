@@ -23,7 +23,7 @@
   (with-open [reader (io/reader (io/resource fixture-path))]
     (->> (line-seq reader)
          sse/parse-events
-         (remove #(sse/done? (:data %)))
+         (remove #(= "[DONE]" (:data %)))
          (mapv (fn [{:keys [data]}]
                  (cske/transform-keys ->kebab-key
                                       (json/parse-string data)))))))
