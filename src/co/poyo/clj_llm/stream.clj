@@ -10,15 +10,10 @@
    Keeps I/O at the edge and returns reducibles so callers can compose
    transducers without callback APIs."
   (:require
-   [camel-snake-kebab.core :as csk]
-   [camel-snake-kebab.extras :as cske]
-   [cheshire.core :as json]
    [clojure.java.io :as io]
    [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse])
   (:import (java.io BufferedReader InputStream)))
-
-(def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
 (defn line-reducible
   "Wrap an InputStream as an IReduceInit of text lines.
@@ -31,19 +26,9 @@
         (reduce rf init (line-seq rdr))))))
 
 (defn sse-data-xf
-  "Simple transducer: lines -> SSE data payload strings."
+  "Simple transducer: lines -> decoded SSE data maps."
   []
   (sse/parse-data-lines))
-
-(defn json->kebab-xf
-  "JSON string -> kebab-cased map, skipping non-JSON payloads."
-  []
-  (keep (fn [data]
-          (try
-            (cske/transform-keys ->kebab-key
-                                 (json/parse-string data))
-            (catch Exception _
-              nil)))))
 
 (defn open-event-stream
   "POST to an SSE endpoint and return a reducible of decoded event maps.
@@ -62,6 +47,5 @@
                        :status status}))
 
       :else
-      (eduction (comp (sse-data-xf)
-                      (json->kebab-xf))
+      (eduction (sse-data-xf)
                 (line-reducible body)))))
