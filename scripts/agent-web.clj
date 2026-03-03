@@ -126,8 +126,8 @@
               loc  (first (:results geo))]
           (if-not loc
             (str "Could not find city: " city)
-            (json/generate-string {:name (:name loc) :country (:country loc)
-                                   :latitude (:latitude loc) :longitude (:longitude loc)})))
+            {:name (:name loc) :country (:country loc)
+             :latitude (:latitude loc) :longitude (:longitude loc)}))
         (catch Exception e
           (str "Geocoding error: " (.getMessage e)))))))
 

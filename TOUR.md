@@ -264,13 +264,14 @@ Tools are plain functions with standard [Malli function schemas](https://github.
   {:malli/schema [:=> [:cat [:map {:name "geocode"
                                    :description "Look up latitude and longitude for a city"}
                              [:city {:description "City name"} :string]]]
-                      :string]}
+                      [:map [:name :string] [:country :string]
+                            [:latitude :double] [:longitude :double]]]}
   [{:keys [city]}]
   (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
                             (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
                 (json/parse-string true))
         loc (first (:results geo))]
-    (json/generate-string (select-keys loc [:name :country :latitude :longitude]))))
+    (select-keys loc [:name :country :latitude :longitude]))))
 
 ;; Weather: coordinates → current conditions
 (defn get-weather
@@ -293,7 +294,7 @@ Tools are regular Clojure functions. Call them directly, test them, compose them
 
 ```clojure
 (geocode {:city "Tokyo"})
-;; => "{\"name\":\"Tokyo\",\"country\":\"Japan\",\"latitude\":35.6895,\"longitude\":139.69171}"
+;; => {:name "Tokyo" :country "Japan" :latitude 35.6895 :longitude 139.69171}
 
 (get-weather {:latitude 35.6895 :longitude 139.6917})
 ;; => "20.1°C, wind 7.6 km/h"
@@ -335,7 +336,7 @@ Pass `:tools` to `generate` for a single LLM call with tool access. The model de
 (llm/generate ai {:tools [#'geocode #'get-weather]} "What's the weather in Tokyo?")
 ;; => {:text nil
 ;;     :tool-calls [{:id "call_abc" :name "geocode" :arguments {:city "Tokyo"}}]
-;;     :tool-results ["{\"name\":\"Tokyo\",...}"]
+;;     :tool-results ["{\"name\":\"Tokyo\",...}"]  ;; auto-serialized to JSON
 ;;     :usage {...}}
 ```
 

@@ -492,34 +492,35 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb19-1"><a
 <span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;geocode&quot;</span></span>
 <span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Look up latitude and longitude for a city&quot;</span>}</span>
 <span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:city</span> {<span class="at">:description</span> <span class="st">&quot;City name&quot;</span>} <span class="at">:string</span>]]]</span>
-<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>                      <span class="at">:string</span>]}</span>
-<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [city]}]</span>
-<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [geo (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://geocoding-api.open-meteo.com/v1/search?name=&quot;</span></span>
-<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>                            (java.net.URLEncoder/encode city <span class="st">&quot;UTF-8&quot;</span>) <span class="st">&quot;&amp;count=1&quot;</span>))</span>
-<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>                (json/parse-string <span class="va">true</span>))</span>
-<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>        loc (<span class="kw">first</span> (<span class="at">:results</span> geo))]</span>
-<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>    (json/generate-string (<span class="kw">select-keys</span> loc [<span class="at">:name</span> <span class="at">:country</span> <span class="at">:latitude</span> <span class="at">:longitude</span>]))))</span>
-<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a><span class="co">;; Weather: coordinates → current conditions</span></span>
-<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather</span></span>
-<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
-<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Get current weather at a location. Call geocode first to get coordinates.&quot;</span>}</span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:latitude</span> {<span class="at">:description</span> <span class="st">&quot;Latitude&quot;</span>} <span class="at">:double</span>]</span>
-<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:longitude</span> {<span class="at">:description</span> <span class="st">&quot;Longitude&quot;</span>} <span class="at">:double</span>]]]</span>
-<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>                      <span class="at">:string</span>]}</span>
-<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [latitude longitude]}]</span>
-<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [wx (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://api.open-meteo.com/v1/jma?latitude=&quot;</span> latitude</span>
-<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;longitude=&quot;</span> longitude</span>
-<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;current=temperature_2m,weather_code,wind_speed_10m&quot;</span></span>
-<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;timezone=auto&quot;</span>))</span>
-<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>               (json/parse-string <span class="va">true</span>))]</span>
-<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [c (<span class="at">:current</span> wx)]</span>
-<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">str</span> (<span class="at">:temperature</span>_2m c) <span class="st">&quot;°C, wind &quot;</span> (<span class="at">:wind</span>_speed_10m c) <span class="st">&quot; km/h&quot;</span>))))</span></code></pre></div>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>                      [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:country</span> <span class="at">:string</span>]</span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>                            [<span class="at">:latitude</span> <span class="at">:double</span>] [<span class="at">:longitude</span> <span class="at">:double</span>]]]}</span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [city]}]</span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [geo (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://geocoding-api.open-meteo.com/v1/search?name=&quot;</span></span>
+<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>                            (java.net.URLEncoder/encode city <span class="st">&quot;UTF-8&quot;</span>) <span class="st">&quot;&amp;count=1&quot;</span>))</span>
+<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>                (json/parse-string <span class="va">true</span>))</span>
+<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>        loc (<span class="kw">first</span> (<span class="at">:results</span> geo))]</span>
+<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">select-keys</span> loc [<span class="at">:name</span> <span class="at">:country</span> <span class="at">:latitude</span> <span class="at">:longitude</span>]))))</span>
+<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a><span class="co">;; Weather: coordinates → current conditions</span></span>
+<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather</span></span>
+<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
+<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Get current weather at a location. Call geocode first to get coordinates.&quot;</span>}</span>
+<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:latitude</span> {<span class="at">:description</span> <span class="st">&quot;Latitude&quot;</span>} <span class="at">:double</span>]</span>
+<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:longitude</span> {<span class="at">:description</span> <span class="st">&quot;Longitude&quot;</span>} <span class="at">:double</span>]]]</span>
+<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>                      <span class="at">:string</span>]}</span>
+<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [latitude longitude]}]</span>
+<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [wx (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://api.open-meteo.com/v1/jma?latitude=&quot;</span> latitude</span>
+<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;longitude=&quot;</span> longitude</span>
+<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;current=temperature_2m,weather_code,wind_speed_10m&quot;</span></span>
+<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;timezone=auto&quot;</span>))</span>
+<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a>               (json/parse-string <span class="va">true</span>))]</span>
+<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [c (<span class="at">:current</span> wx)]</span>
+<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">str</span> (<span class="at">:temperature</span>_2m c) <span class="st">&quot;°C, wind &quot;</span> (<span class="at">:wind</span>_speed_10m c) <span class="st">&quot; km/h&quot;</span>))))</span></code></pre></div>
 <p>Tools are regular Clojure functions. Call them directly, test them,
 compose them:</p>
 <div class="sourceCode" id="cb20"><pre
 class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>(geocode {<span class="at">:city</span> <span class="st">&quot;Tokyo&quot;</span>})</span>
-<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;{\&quot;name\&quot;:\&quot;Tokyo\&quot;,\&quot;country\&quot;:\&quot;Japan\&quot;,\&quot;latitude\&quot;:35.6895,\&quot;longitude\&quot;:139.69171}&quot;</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Tokyo&quot; :country &quot;Japan&quot; :latitude 35.6895 :longitude 139.69171}</span></span>
 <span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>(get-weather {<span class="at">:latitude</span> <span class="fl">35.6895</span> <span class="at">:longitude</span> <span class="fl">139.6917</span>})</span>
 <span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;20.1°C, wind 7.6 km/h&quot;</span></span></code></pre></div>
@@ -552,7 +553,7 @@ does, <code>generate</code> executes them and returns everything:</p>
 class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]} <span class="st">&quot;What&#39;s the weather in Tokyo?&quot;</span>)</span>
 <span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text nil</span></span>
 <span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-calls [{:id &quot;call_abc&quot; :name &quot;geocode&quot; :arguments {:city &quot;Tokyo&quot;}}]</span></span>
-<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-results [&quot;{\&quot;name\&quot;:\&quot;Tokyo\&quot;,...}&quot;]</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-results [&quot;{\&quot;name\&quot;:\&quot;Tokyo\&quot;,...}&quot;]  ;; auto-serialized to JSON</span></span>
 <span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :usage {...}}</span></span></code></pre></div>
 <p>When tools are configured, <code>generate</code> always returns a map
 with these keys:</p>

@@ -26,7 +26,8 @@
   {:malli/schema [:=> [:cat [:map {:name "geocode"
                                    :description "Look up latitude and longitude for a city"}
                              [:city {:description "City name"} :string]]]
-                      :string]}
+                      [:map [:name :string] [:country :string]
+                            [:latitude :double] [:longitude :double]]]}
   [{:keys [city]}]
   (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
                             (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
@@ -34,8 +35,8 @@
         loc (first (:results geo))]
     (if-not loc
       (str "Could not find city: " city)
-      (json/generate-string {:name (:name loc) :country (:country loc)
-                             :latitude (:latitude loc) :longitude (:longitude loc)}))))
+      {:name (:name loc) :country (:country loc)
+       :latitude (:latitude loc) :longitude (:longitude loc)}))))
 
 (def wmo-codes
   {0 "Clear sky" 1 "Mainly clear" 2 "Partly cloudy" 3 "Overcast"

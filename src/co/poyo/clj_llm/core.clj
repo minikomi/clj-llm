@@ -282,13 +282,26 @@
                        :available  (keys name->fn)})))]
     (f (:arguments tool-call))))
 
+(defn- serialize-tool-result
+  "Serialize a tool result to a string for the LLM.
+   Strings pass through; anything else becomes JSON."
+  [v]
+  (if (string? v)
+    v
+    (json/generate-string v)))
+
 (defn tool-result
   "Create a tool result message for feeding back into message history.
 
    (tool-result \"call_abc\" \"Sunny, 22°C\")
-   ;; => {:role :tool :tool-call-id \"call_abc\" :content \"Sunny, 22°C\"}"
+   ;; => {:role :tool :tool-call-id \"call_abc\" :content \"Sunny, 22°C\"}
+
+   Non-string values are automatically JSON-encoded:
+
+   (tool-result \"call_abc\" {:name \"Tokyo\" :latitude 35.69})
+   ;; => {:role :tool :tool-call-id \"call_abc\" :content \"{\\\"name\\\":\\\"Tokyo\\\",...}\"}"
   [tool-call-id content]
-  {:role :tool :tool-call-id tool-call-id :content (str content)})
+  {:role :tool :tool-call-id tool-call-id :content (serialize-tool-result content)})
 
 
 (defn generate
@@ -430,7 +443,7 @@
                             {:role :assistant :content (or text "")})
                  msgs     (if results
                             (into [msg] (mapv (fn [{:keys [call result]}]
-                                               (tool-result (:id call) (str result)))
+                                               (tool-result (:id call) result))
                                              results))
                             [msg])
                  next-history (into history msgs)
