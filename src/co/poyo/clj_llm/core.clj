@@ -34,7 +34,8 @@
              [:max-steps {:optional true} :int]
              [:stop-when {:optional true} fn?]
              [:on-tool-calls {:optional true} fn?]
-             [:on-tool-result {:optional true} fn?]]))
+             [:on-tool-result {:optional true} fn?]
+             [:on-text {:optional true} fn?]]))
 
 ;; Keys that get forwarded to the provider API (not consumed by clj-llm itself)
 (def ^:private api-forward-keys
@@ -381,6 +382,8 @@
                         model returns tool calls, before they are executed.
      :on-tool-result  - (fn [{:keys [step tool-call result error]}] ...) called
                         after each individual tool finishes.
+     :on-text         - (fn [text-chunk] ...) called for each text chunk as it
+                        streams in. Use for live typing display.
      :model, :system-prompt, :temperature, :max-tokens, :top-p, :provider-opts
 
    Returns {:text ... :history ... :steps [...] :tool-calls ... :usage ...}"
@@ -399,14 +402,20 @@
                         (fn [{:keys [tool-calls]}] (empty? tool-calls)))
          on-tool-calls  (:on-tool-calls parsed)
          on-tool-result (:on-tool-result parsed)
-         request-opts (-> (dissoc parsed :max-steps :stop-when :on-tool-calls :on-tool-result)
+         on-text        (:on-text parsed)
+         request-opts (-> (dissoc parsed :max-steps :stop-when :on-tool-calls :on-tool-result :on-text)
                           (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
             n 0]
        (let [{:keys [text usage] :as result}
-             (finalize-state (reduce next-state init-state
-                                    (request-events provider request-opts history)))
+             (finalize-state
+               (reduce (fn [state event]
+                         (when (and on-text (= :content (:type event)))
+                           (on-text (:content event)))
+                         (next-state state event))
+                       init-state
+                       (request-events provider request-opts history)))
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?

@@ -14,7 +14,7 @@
          '[clojure.edn :as edn]
          '[babashka.http-client :as http])
 
-(def port 8001)
+(def port (or (System/getenv "PORT") 8001))
 (def data-dir ".chat-data/agent")
 (.mkdirs (io/file data-dir))
 
@@ -22,60 +22,23 @@
 
 (def ai
   (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
-    (-> (if openrouter-key
-          (openai/backend {:api-key openrouter-key
-                            :api-base "https://openrouter.ai/api/v1"})
-          (openai/backend))
-        (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "openai/gpt-4.1-mini")}))))
+    (if openrouter-key
+      (-> (openai/backend {:api-key openrouter-key
+                           :api-base "https://openrouter.ai/api/v1"})
+          (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "google/gemini-3-flash-preview")})
+          )
+      (-> (openai/backend)
+          (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4.1-mini")})
+          ))
+    ))
 
-;; ══════ Tools ══════
+;; ══════ Tool helper ══════
 
-(def geocode
-  [:map {:name "geocode" :description "Look up latitude and longitude for a city"}
-   [:city {:description "City name"} :string]])
-
-(def get-weather
-  [:map {:name "get_weather" :description "Get current weather at a location. Call geocode first to get coordinates."}
-   [:latitude {:description "Latitude"} :double]
-   [:longitude {:description "Longitude"} :double]])
-
-(def search-web
-  [:map {:name "search_web" :description "Search the web for information"}
-   [:query {:description "Search query"} :string]])
-
-(def wikipedia-tool
-  [:map {:name "wikipedia" :description "Look up a Wikipedia article summary. Use for factual info about people, places, concepts, events."}
-   [:topic {:description "Article title or topic to look up"} :string]])
-
-(def fetch-url-tool
-  [:map {:name "fetch_url" :description "Fetch a webpage and extract its text content. Use to read articles, docs, or follow links from search results."}
-   [:url {:description "URL to fetch"} :string]])
-
-(def exchange-rate-tool
-  [:map {:name "exchange_rate" :description "Convert between currencies using live exchange rates."}
-   [:from {:description "Source currency code, e.g. USD"} :string]
-   [:to {:description "Target currency code, e.g. EUR, JPY. Comma-separated for multiple."} :string]
-   [:amount {:description "Amount to convert" :optional true} :double]])
-
-(def define-word-tool
-  [:map {:name "define_word" :description "Look up the definition of an English word."}
-   [:word {:description "Word to define"} :string]])
-
-(def hacker-news-tool
-  [:map {:name "hacker_news" :description "Get current top stories from Hacker News."}
-   [:count {:description "Number of stories (1-15, default 5)" :optional true} :int]])
-
-(def render-canvas-tool
-  [:map {:name "render_canvas"
-         :description "Draw a visualization using HTML5 Canvas. Write JavaScript that uses `ctx` (a 2D context) and `w`/`h` (width/height). Good for charts, graphs, diagrams, pixel art, illustrations. Set background with ctx.fillRect(0,0,w,h) first. Use colors, shapes, text, arcs, etc."}
-   [:code {:description "JavaScript code using ctx (CanvasRenderingContext2D), w (width), h (height). Example: ctx.fillStyle='#1a1a2e'; ctx.fillRect(0,0,w,h); ctx.fillStyle='#e74c3c'; ctx.beginPath(); ctx.arc(w/2,h/2,50,0,Math.PI*2); ctx.fill();"} :string]
-   [:title {:description "Short title for the image" :optional true} :string]
-   [:width {:description "Canvas width in pixels (default 600)" :optional true} :int]
-   [:height {:description "Canvas height in pixels (default 400)" :optional true} :int]])
-
-(def calculate
-  [:map {:name "calculate" :description "Evaluate a Clojure math expression. Use prefix notation, e.g. (+ 2 2), (Math/sqrt 144), (Math/pow 2 10)"}
-   [:expression {:description "Clojure expression, e.g. (+ (Math/pow 2 10) (Math/sqrt 256))"} :string]])
+(defn deftool
+  "Create a tool fn from a schema and implementation. Returns a fn with
+   :malli/schema metadata so clj-llm can discover it automatically."
+  [input-schema f]
+  (with-meta f {:malli/schema [:=> [:cat input-schema] :any]}))
 
 ;; ══════ Search cascade: Kagi → Tavily → DuckDuckGo ══════
 
@@ -136,153 +99,211 @@
     tavily-key (conj {:name "Tavily" :fn search-tavily})
     true       (conj {:name "DuckDuckGo" :fn search-ddg})))
 
-(defn web-search [query]
-  (loop [[provider & more] search-providers]
-    (if-not provider
-      (str "No results found for: " query)
-      (let [result (try ((:fn provider) query) (catch Exception _ nil))]
-        (if (and result (not (str/blank? result)))
-          result
-          (recur more))))))
+;; ══════ Tool implementations + schemas ══════
 
-;; ══════ Tool implementations ══════
-
-(defn fetch-wikipedia [topic]
-  (try
-    (let [encoded (java.net.URLEncoder/encode (str/replace topic " " "_") "UTF-8")
-          resp (http/get (str "https://en.wikipedia.org/api/rest_v1/page/summary/" encoded)
-                 {:headers {"User-Agent" "clj-llm-agent/1.0"}})
-          data (json/parse-string (:body resp) true)]
-      (if (:extract data)
-        (str (:title data) "\n\n" (:extract data)
-             (when-let [url (get-in data [:content_urls :desktop :page])]
-               (str "\n\nURL: " url)))
-        (str "No Wikipedia article found for: " topic)))
-    (catch Exception e
-      (str "Wikipedia error: " (.getMessage e)))))
-
-(defn fetch-url [url]
-  (try
-    (let [resp (http/get url {:headers {"User-Agent" "Mozilla/5.0"}
-                              :throw false
-                              :follow-redirects true})
-          body (or (:body resp) "")
-          ;; Strip HTML tags, collapse whitespace
-          text (-> body
-                   (str/replace #"<script[^>]*>.*?</script>" " ")
-                   (str/replace #"<style[^>]*>.*?</style>" " ")
-                   (str/replace #"<[^>]+>" " ")
-                   (str/replace #"&nbsp;" " ")
-                   (str/replace #"&amp;" "&")
-                   (str/replace #"&lt;" "<")
-                   (str/replace #"&gt;" ">")
-                   (str/replace #"&#x27;" "'")
-                   (str/replace #"&#x2F;" "/")
-                   (str/replace #"\s+" " ")
-                   str/trim)]
-      (if (str/blank? text)
-        (str "No readable content at: " url)
-        (let [truncated (subs text 0 (min 3000 (count text)))]
-          (str truncated
-               (when (> (count text) 3000) "\n\n[truncated]")))))
-    (catch Exception e
-      (str "Fetch error: " (.getMessage e)))))
-
-(defn fetch-exchange-rate [from to amount]
-  (try
-    (let [amt (or amount 1.0)
-          resp (http/get (str "https://api.frankfurter.dev/v1/latest")
-                 {:query-params {"base" (str/upper-case from)
-                                 "symbols" (str/upper-case to)}})
-          data (json/parse-string (:body resp) true)
-          rates (:rates data)]
-      (if (empty? rates)
-        (str "No rates found for " from " → " to)
-        (str/join "\n"
-          (map (fn [[currency rate]]
-                 (str amt " " (str/upper-case from) " = "
-                      (format "%.2f" (* amt (double rate))) " " (name currency)))
-               rates))))
-    (catch Exception e
-      (str "Exchange rate error: " (.getMessage e)))))
-
-(defn fetch-definition [word]
-  (try
-    (let [resp (http/get (str "https://api.dictionaryapi.dev/api/v2/entries/en/"
-                              (java.net.URLEncoder/encode word "UTF-8")))
-          data (first (json/parse-string (:body resp) true))
-          phonetic (or (:text (:phonetics (first (:phonetics data)))) (:phonetic data) "")]
-      (if-not data
-        (str "No definition found for: " word)
-        (str (:word data) (when (seq phonetic) (str "  " phonetic)) "\n\n"
-             (str/join "\n\n"
-               (for [meaning (:meanings data)]
-                 (str "[" (:partOfSpeech meaning) "]\n"
-                      (str/join "\n"
-                        (map-indexed
-                          (fn [i d]
-                            (str (inc i) ". " (:definition d)
-                                 (when-let [ex (:example d)] (str "\n   Example: \"" ex "\""))))
-                          (take 3 (:definitions meaning))))))))))
-    (catch Exception e
-      (str "Definition error: " (.getMessage e)))))
-
-(defn fetch-hacker-news [n]
-  (try
-    (let [count (min 15 (max 1 (or n 5)))
-          ids (take count (json/parse-string
-                            (:body (http/get "https://hacker-news.firebaseio.com/v0/topstories.json")) true))
-          stories (pmap (fn [id]
-                          (json/parse-string
-                            (:body (http/get (str "https://hacker-news.firebaseio.com/v0/item/" id ".json"))) true))
-                        ids)]
-      (str/join "\n\n"
-        (map-indexed
-          (fn [i s]
-            (str (inc i) ". " (:title s)
-                 (when-let [u (:url s)] (str "\n   URL: " u))
-                 "\n   " (:score s) " points, " (:descendants s 0) " comments"))
-          stories)))
-    (catch Exception e
-      (str "Hacker News error: " (.getMessage e)))))
-
-(def agent-tools [geocode get-weather search-web wikipedia-tool fetch-url-tool
-                  exchange-rate-tool define-word-tool hacker-news-tool
-                  render-canvas-tool calculate])
-
-(def wmo-codes
+(def ^:private wmo-codes
   {0 "Clear sky" 1 "Mainly clear" 2 "Partly cloudy" 3 "Overcast"
    45 "Fog" 48 "Rime fog" 51 "Light drizzle" 53 "Drizzle" 55 "Dense drizzle"
    61 "Slight rain" 63 "Rain" 65 "Heavy rain" 71 "Slight snow" 73 "Snow"
    75 "Heavy snow" 80 "Slight showers" 81 "Showers" 82 "Violent showers"
    95 "Thunderstorm" 96 "Thunderstorm w/ hail" 99 "Thunderstorm w/ heavy hail"})
 
-(defn fetch-geocode [city]
-  (try
-    (let [geo  (-> (http/get (str "https://geocoding-api.open-meteo.com/v1/search?name="
-                                  (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
-                   :body (json/parse-string true))
-          loc  (first (:results geo))]
-      (if-not loc
-        (str "Could not find city: " city)
-        (json/generate-string {:name (:name loc) :country (:country loc)
-                               :latitude (:latitude loc) :longitude (:longitude loc)})))
-    (catch Exception e
-      (str "Geocoding error: " (.getMessage e)))))
+(def geocode
+  (deftool
+    [:map {:name "geocode" :description "Look up latitude and longitude for a city"}
+     [:city {:description "City name"} :string]]
+    (fn [{:keys [city]}]
+      (try
+        (let [geo  (-> (http/get (str "https://geocoding-api.open-meteo.com/v1/search?name="
+                                      (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
+                       :body (json/parse-string true))
+              loc  (first (:results geo))]
+          (if-not loc
+            (str "Could not find city: " city)
+            (json/generate-string {:name (:name loc) :country (:country loc)
+                                   :latitude (:latitude loc) :longitude (:longitude loc)})))
+        (catch Exception e
+          (str "Geocoding error: " (.getMessage e)))))))
 
-(defn fetch-weather [latitude longitude]
-  (try
-    (let [wx (-> (http/get (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
-                                "&longitude=" longitude
-                                "&current=temperature_2m,weather_code,wind_speed_10m"
-                                "&timezone=auto"))
-                 :body (json/parse-string true))
-          c  (:current wx)]
-      (str (get wmo-codes (:weather_code c) "Unknown") ", "
-           (:temperature_2m c) "°C, "
-           "wind " (:wind_speed_10m c) " km/h"))
-    (catch Exception e
-      (str "Weather lookup error: " (.getMessage e)))))
+(def get-weather
+  (deftool
+    [:map {:name "get_weather" :description "Get current weather at a location. Call geocode first to get coordinates."}
+     [:latitude {:description "Latitude"} :double]
+     [:longitude {:description "Longitude"} :double]]
+    (fn [{:keys [latitude longitude]}]
+      (try
+        (let [wx (-> (http/get (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
+                                    "&longitude=" longitude
+                                    "&current=temperature_2m,weather_code,wind_speed_10m"
+                                    "&timezone=auto"))
+                     :body (json/parse-string true))
+              c  (:current wx)]
+          (str (get wmo-codes (:weather_code c) "Unknown") ", "
+               (:temperature_2m c) "°C, "
+               "wind " (:wind_speed_10m c) " km/h"))
+        (catch Exception e
+          (str "Weather error: " (.getMessage e)))))))
+
+(def search-web
+  (deftool
+    [:map {:name "search_web" :description "Search the web for information"}
+     [:query {:description "Search query"} :string]]
+    (fn [{:keys [query]}]
+      (loop [[provider & more] search-providers]
+        (if-not provider
+          (str "No results found for: " query)
+          (let [result (try ((:fn provider) query) (catch Exception _ nil))]
+            (if (and result (not (str/blank? result)))
+              result
+              (recur more))))))))
+
+(def wikipedia
+  (deftool
+    [:map {:name "wikipedia" :description "Look up a Wikipedia article summary. Use for factual info about people, places, concepts, events."}
+     [:topic {:description "Article title or topic to look up"} :string]]
+    (fn [{:keys [topic]}]
+      (try
+        (let [encoded (java.net.URLEncoder/encode (str/replace topic " " "_") "UTF-8")
+              resp (http/get (str "https://en.wikipedia.org/api/rest_v1/page/summary/" encoded)
+                     {:headers {"User-Agent" "clj-llm-agent/1.0"}})
+              data (json/parse-string (:body resp) true)]
+          (if (:extract data)
+            (str (:title data) "\n\n" (:extract data)
+                 (when-let [url (get-in data [:content_urls :desktop :page])]
+                   (str "\n\nURL: " url)))
+            (str "No Wikipedia article found for: " topic)))
+        (catch Exception e
+          (str "Wikipedia error: " (.getMessage e)))))))
+
+(def fetch-url
+  (deftool
+    [:map {:name "fetch_url" :description "Fetch a webpage and extract its text content. Use to read articles, docs, or follow links from search results."}
+     [:url {:description "URL to fetch"} :string]]
+    (fn [{:keys [url]}]
+      (try
+        (let [resp (http/get url {:headers {"User-Agent" "Mozilla/5.0"}
+                                  :throw false
+                                  :follow-redirects true})
+              body (or (:body resp) "")
+              text (-> body
+                       (str/replace #"<script[^>]*>.*?</script>" " ")
+                       (str/replace #"<style[^>]*>.*?</style>" " ")
+                       (str/replace #"<[^>]+>" " ")
+                       (str/replace #"&nbsp;" " ")
+                       (str/replace #"&amp;" "&")
+                       (str/replace #"&lt;" "<")
+                       (str/replace #"&gt;" ">")
+                       (str/replace #"&#x27;" "'")
+                       (str/replace #"&#x2F;" "/")
+                       (str/replace #"\s+" " ")
+                       str/trim)]
+          (if (str/blank? text)
+            (str "No readable content at: " url)
+            (let [truncated (subs text 0 (min 3000 (count text)))]
+              (str truncated
+                   (when (> (count text) 3000) "\n\n[truncated]")))))
+        (catch Exception e
+          (str "Fetch error: " (.getMessage e)))))))
+
+(def exchange-rate
+  (deftool
+    [:map {:name "exchange_rate" :description "Convert between currencies using live exchange rates."}
+     [:from {:description "Source currency code, e.g. USD"} :string]
+     [:to {:description "Target currency code, e.g. EUR, JPY. Comma-separated for multiple."} :string]
+     [:amount {:description "Amount to convert" :optional true} :double]]
+    (fn [{:keys [from to amount]}]
+      (try
+        (let [amt (or amount 1.0)
+              resp (http/get "https://api.frankfurter.dev/v1/latest"
+                     {:query-params {"base" (str/upper-case from)
+                                     "symbols" (str/upper-case to)}})
+              data (json/parse-string (:body resp) true)
+              rates (:rates data)]
+          (if (empty? rates)
+            (str "No rates found for " from " → " to)
+            (str/join "\n"
+              (map (fn [[currency rate]]
+                     (str amt " " (str/upper-case from) " = "
+                          (format "%.2f" (* amt (double rate))) " " (name currency)))
+                   rates))))
+        (catch Exception e
+          (str "Exchange rate error: " (.getMessage e)))))))
+
+(def define-word
+  (deftool
+    [:map {:name "define_word" :description "Look up the definition of an English word."}
+     [:word {:description "Word to define"} :string]]
+    (fn [{:keys [word]}]
+      (try
+        (let [resp (http/get (str "https://api.dictionaryapi.dev/api/v2/entries/en/"
+                                  (java.net.URLEncoder/encode word "UTF-8")))
+              data (first (json/parse-string (:body resp) true))
+              phonetic (or (:text (:phonetics (first (:phonetics data)))) (:phonetic data) "")]
+          (if-not data
+            (str "No definition found for: " word)
+            (str (:word data) (when (seq phonetic) (str "  " phonetic)) "\n\n"
+                 (str/join "\n\n"
+                   (for [meaning (:meanings data)]
+                     (str "[" (:partOfSpeech meaning) "]\n"
+                          (str/join "\n"
+                            (map-indexed
+                              (fn [i d]
+                                (str (inc i) ". " (:definition d)
+                                     (when-let [ex (:example d)] (str "\n   Example: \"" ex "\""))))
+                              (take 3 (:definitions meaning))))))))))
+        (catch Exception e
+          (str "Definition error: " (.getMessage e)))))))
+
+(def hacker-news
+  (deftool
+    [:map {:name "hacker_news" :description "Get current top stories from Hacker News."}
+     [:count {:description "Number of stories (1-15, default 5)" :optional true} :int]]
+    (fn [{:keys [count]}]
+      (try
+        (let [n (min 15 (max 1 (or count 5)))
+              ids (take n (json/parse-string
+                            (:body (http/get "https://hacker-news.firebaseio.com/v0/topstories.json")) true))
+              stories (pmap (fn [id]
+                              (json/parse-string
+                                (:body (http/get (str "https://hacker-news.firebaseio.com/v0/item/" id ".json"))) true))
+                            ids)]
+          (str/join "\n\n"
+            (map-indexed
+              (fn [i s]
+                (str (inc i) ". " (:title s)
+                     (when-let [u (:url s)] (str "\n   URL: " u))
+                     "\n   " (:score s) " points, " (:descendants s 0) " comments"))
+              stories)))
+        (catch Exception e
+          (str "Hacker News error: " (.getMessage e)))))))
+
+(def render-canvas
+  (deftool
+    [:map {:name "render_canvas"
+           :description "Draw a visualization using HTML5 Canvas. Write JavaScript that uses `ctx` (a 2D context) and `w`/`h` (width/height). Good for charts, graphs, diagrams, pixel art, illustrations. Set background with ctx.fillRect(0,0,w,h) first. Use colors, shapes, text, arcs, etc."}
+     [:code {:description "JavaScript code using ctx (CanvasRenderingContext2D), w (width), h (height). Example: ctx.fillStyle='#1a1a2e'; ctx.fillRect(0,0,w,h); ctx.fillStyle='#e74c3c'; ctx.beginPath(); ctx.arc(w/2,h/2,50,0,Math.PI*2); ctx.fill();"} :string]
+     [:title {:description "Short title for the image" :optional true} :string]
+     [:width {:description "Canvas width in pixels (default 600)" :optional true} :int]
+     [:height {:description "Canvas height in pixels (default 400)" :optional true} :int]]
+    (fn [{:keys [code title width height]}]
+      ;; Return string for LLM history; the on-tool-result callback
+      ;; detects render_canvas by tool name and renders the canvas HTML.
+      (str "Canvas image rendered and displayed to user."
+           "::canvas::" (json/generate-string {:code code :title title
+                                                :width (or width 600)
+                                                :height (or height 400)})))))
+
+(def calculate
+  (deftool
+    [:map {:name "calculate" :description "Evaluate a Clojure math expression. Use prefix notation, e.g. (+ 2 2), (Math/sqrt 144), (Math/pow 2 10)"}
+     [:expression {:description "Clojure expression, e.g. (+ (Math/pow 2 10) (Math/sqrt 256))"} :string]]
+    (fn [{:keys [expression]}]
+      (str "Result: "
+           (try (load-string expression)
+                (catch Exception e (str "Error: " (.getMessage e))))))))
+
+(def agent-tools [geocode get-weather search-web wikipedia fetch-url
+                  exchange-rate define-word hacker-news render-canvas calculate])
 
 (def canvas-counter (atom 0))
 
@@ -301,26 +322,6 @@
          "try{" code "}catch(e){ctx.fillStyle='#ff4444';ctx.font='14px monospace';"
          "ctx.fillText('Error: '+e.message,10,30);}})();</script>"
          "</div>")))
-
-(defn execute-tool [{:keys [name arguments]}]
-  (case name
-    "geocode"       (fetch-geocode (:city arguments))
-    "get_weather"   (fetch-weather (:latitude arguments) (:longitude arguments))
-    "search_web"    (web-search (:query arguments))
-    "wikipedia"     (fetch-wikipedia (:topic arguments))
-    "fetch_url"     (fetch-url (:url arguments))
-    "exchange_rate" (fetch-exchange-rate (:from arguments) (:to arguments) (:amount arguments))
-    "define_word"   (fetch-definition (:word arguments))
-    "hacker_news"   (fetch-hacker-news (:count arguments))
-    "render_canvas" {:type :canvas
-                     :code (:code arguments)
-                     :title (:title arguments)
-                     :width (or (:width arguments) 600)
-                     :height (or (:height arguments) 400)}
-    "calculate"     (str "Result: "
-                         (try (load-string (:expression arguments))
-                              (catch Exception e (str "Error: " (.getMessage e)))))
-    (str "Unknown tool: " name)))
 
 ;; ══════ Chat persistence ══════
 
@@ -591,95 +592,49 @@ a { color:#8ab4f8; text-decoration:none }
                                      "X-Accel-Buffering" "no"}} false)
              (future
                (try
-                 (let [max-steps 5]
-                   (loop [history (vec (:llm-history chat))
-                          step-displays []
-                          n 0]
-                     (let [result (reduce
-                                    (fn [acc event]
-                                      (case (:type event)
-                                        :content (update acc :chunks conj (:content event))
-                                        :tool-call
-                                        (let [idx (or (:index event) (count (:tool-calls acc)))
-                                              pos (count (:tool-calls acc))]
-                                          (-> acc
-                                              (update :tool-calls conj
-                                                (assoc event :arguments (or (:arguments event) "")))
-                                              (assoc-in [:tc-pos idx] pos)))
-                                        :tool-call-delta
-                                        (let [idx (:index event)
-                                              pos (get-in acc [:tc-pos idx])]
-                                          (if pos
-                                            (update-in acc [:tool-calls pos :arguments] str (:arguments event))
-                                            acc))
-                                        acc))
-                                    {:chunks [] :tool-calls [] :tc-pos {}}
-                                    (llm/events ai {:tools agent-tools
-                                                            :system-prompt "You are a helpful assistant with tools. Always use tools to answer questions — never guess or say you cannot access data. Use geocode before get_weather. Use search_web for general queries. Use wikipedia for factual info about people, places, concepts. Use fetch_url to read full articles. Use exchange_rate for currency questions. Use define_word for vocabulary. Use hacker_news for tech news. Use render_canvas to draw charts, graphs, diagrams, or any visual. When rendering canvas, always set a dark background first (e.g. ctx.fillStyle='#1a1a2e'; ctx.fillRect(0,0,w,h)). Use vibrant colors. Chain tools when needed."} history))
-                           text (apply str (:chunks result))
-                           raw-tc (:tool-calls result)
-                           tc (when (seq raw-tc)
-                                (mapv (fn [t]
-                                        (let [args (try (json/parse-string (:arguments t) true)
-                                                       (catch Exception _ (:arguments t)))]
-                                          {:id (:id t) :name (:name t) :arguments args}))
-                                      raw-tc))]
-                       (if (seq tc)
-                         ;; Tool calls — execute and loop
-                         (if (>= (inc n) max-steps)
-                           (do (hk/send! ch (sse-event "chunk" "(max tool steps reached)") false)
-                               (hk/close ch))
-                           (let [tool-calls tc
-                                 tool-results (mapv (fn [tc] {:call tc :result (execute-tool tc)}) tool-calls)
-                                 step-html (str "<div class='tool-step'>"
-                                               (apply str
-                                                 (map (fn [{:keys [call result]}]
-                                                        (if (and (map? result) (= :canvas (:type result)))
-                                                          (str "<div class='tool-use'>"
-                                                               "<div class='tool-call'>🛠️ <strong>" (:name call) "</strong> "
-                                                               (or (:title result) "canvas") "</div>"
-                                                               (canvas-html result) "</div>")
-                                                          (str "<div class='tool-use'>"
-                                                               "<div class='tool-call'>🛠️ <strong>" (:name call) "</strong> " (pr-str (:arguments call)) "</div>"
-                                                               "<div class='tool-result'>→ " result "</div></div>")))
-                                                      tool-results))
-                                               "</div>")
-                                 result-msgs (mapv (fn [{:keys [call result]}]
-                                                     (let [llm-text (if (and (map? result) (= :canvas (:type result)))
-                                                                      "Canvas image rendered and displayed to user."
-                                                                      (str result))]
-                                                       (llm/tool-result (:id call) llm-text)))
-                                                   tool-results)
-                                 new-history (let [msg {:role :assistant
-                                                     :tool-calls (mapv (fn [{:keys [id name arguments]}]
-                                                                        {:id id :type "function"
-                                                                         :function {:name name
-                                                                                    :arguments (if (string? arguments)
-                                                                                                 arguments
-                                                                                                 (json/generate-string arguments))}})
-                                                                      tool-calls)}]
-                                   (into (conj history msg) result-msgs))]
-                             (hk/send! ch (sse-event "step" step-html) false)
-                             (recur new-history
-                                    (conj step-displays {:calls (vec tool-calls)
-                                                         :results (mapv :result tool-results)})
-                                    (inc n))))
-                         ;; Text response — stream char by char for effect
-                         (let [text (or text "")]
-                           (doseq [chunk (partition-all 4 text)]
-                             (hk/send! ch (sse-event "chunk" (apply str chunk)) false)
-                             (Thread/sleep 12))
-                           (let [assistant-msg {:role :assistant :content text :tool-steps step-displays}
-                                 final-history (conj history {:role "assistant" :content text})
-                                 final-chat (-> chat
-                                                (update :messages conj assistant-msg)
-                                                (assoc :llm-history final-history)
-                                                (assoc :updated-at (System/currentTimeMillis)))
-                                 _ (save-chat final-chat)
-                                 all-html (apply str (map render-message (:messages final-chat)))]
-                             (hk/send! ch (sse-event "done"
-                                            (json/generate-string {:chatId chat-id :messagesHtml all-html})) false)
-                             (hk/close ch)))))))
+                 (let [step-displays (atom [])
+                       result (llm/run-agent ai agent-tools
+                                {:max-steps 5
+                                 :system-prompt "You are a helpful assistant with tools. Always use tools to answer questions — never guess or say you cannot access data. Use geocode before get_weather. Use search_web for general queries. Use wikipedia for factual info about people, places, concepts. Use fetch_url to read full articles. Use exchange_rate for currency questions. Use define_word for vocabulary. Use hacker_news for tech news. Use render_canvas to draw charts, graphs, diagrams, or any visual. When rendering canvas, always set a dark background first (e.g. ctx.fillStyle='#1a1a2e'; ctx.fillRect(0,0,w,h)). Use vibrant colors. Chain tools when needed."
+                                 :on-tool-calls
+                                 (fn [{:keys [tool-calls]}]
+                                   (swap! step-displays conj {:calls tool-calls :results []}))
+                                 :on-tool-result
+                                 (fn [{:keys [tool-call result]}]
+                                   (let [r (str (or result ""))
+                                         canvas? (str/includes? r "::canvas::")
+                                         canvas-data (when canvas?
+                                                       (assoc (json/parse-string (subs r (+ (str/index-of r "::canvas::") 10)) true)
+                                                              :type :canvas))
+                                         display-r (if canvas? canvas-data r)]
+                                     (swap! step-displays update (dec (count @step-displays))
+                                            update :results conj display-r)
+                                     (let [step-html
+                                           (str "<div class='tool-use'>"
+                                                (if canvas?
+                                                  (str "<div class='tool-call'>🛠️ <strong>" (:name tool-call) "</strong> "
+                                                       (or (:title canvas-data) "canvas") "</div>"
+                                                       (canvas-html canvas-data))
+                                                  (str "<div class='tool-call'>🛠️ <strong>" (:name tool-call) "</strong> "
+                                                       (pr-str (:arguments tool-call)) "</div>"
+                                                       "<div class='tool-result'>→ " r "</div>"))
+                                                "</div>")]
+                                       (hk/send! ch (sse-event "step" step-html) false))))
+                                 :on-text
+                                 (fn [chunk]
+                                   (hk/send! ch (sse-event "chunk" chunk) false))}
+                                (vec (:llm-history chat)))
+                       text (or (:text result) "")
+                       assistant-msg {:role :assistant :content text :tool-steps @step-displays}
+                       final-chat (-> chat
+                                      (update :messages conj assistant-msg)
+                                      (assoc :llm-history (:history result))
+                                      (assoc :updated-at (System/currentTimeMillis)))
+                       _ (save-chat final-chat)
+                       all-html (apply str (map render-message (:messages final-chat)))]
+                   (hk/send! ch (sse-event "done"
+                                  (json/generate-string {:chatId chat-id :messagesHtml all-html})) false)
+                   (hk/close ch))
                  (catch Exception e
                    (println "Agent error:" (.getMessage e))
                    (try
