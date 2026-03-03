@@ -1,6 +1,7 @@
 (ns co.poyo.clj-llm.sandbox
   "REPL-friendly examples for clj-llm"
-  (:require [co.poyo.clj-llm.core :as llm]
+  (:require [clojure.core.async :as a]
+            [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.backends.openai :as openai]
             [cheshire.core :as json]
             [clojure.string :as str]))
@@ -47,12 +48,19 @@
   ;; Streaming
   ;; ======================================
 
-  ;; stream returns a lazy seq of text chunks
-  (doseq [chunk (llm/stream ai "Tell me a story about a robot.")]
-    (print chunk) (flush))
+  ;; stream returns a core.async channel of text chunks
+  (let [ch (llm/stream ai "Tell me a story about a robot.")]
+    (loop []
+      (when-let [chunk (a/<!! ch)]
+        (print chunk) (flush)
+        (recur))))
 
   ;; collect into a string
-  (str/join (llm/stream ai "Count to 5"))
+  (let [ch (llm/stream ai "Count to 5")]
+    (loop [sb (StringBuilder.)]
+      (if-let [chunk (a/<!! ch)]
+        (recur (.append sb chunk))
+        (str sb))))
 
   ;; ======================================
   ;; Tool calling -- defns with Malli schemas
@@ -109,9 +117,12 @@
   ;; Raw event stream
   ;; ======================================
 
-  ;; events returns a lazy seq of event maps
-  (doseq [event (llm/events ai "Explain AI briefly")]
-    (println (:type event) (dissoc event :type)))
+  ;; events returns a core.async channel of event maps
+  (let [ch (llm/events ai "Explain AI briefly")]
+    (loop []
+      (when-let [event (a/<!! ch)]
+        (println (:type event) (dissoc event :type))
+        (recur))))
 
   ;; ======================================
   ;; Composition -- threading with :text
