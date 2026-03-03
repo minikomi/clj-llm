@@ -11,7 +11,7 @@
    [java.util.concurrent LinkedBlockingQueue]))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Option schemas (parse, don't validate)
+;; Option schemas
 ;; ════════════════════════════════════════════════════════════════════
 
 (def ^:private opts-schema
@@ -173,6 +173,25 @@
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
 
+(defn- reducible->blocking-seq
+  "Bridge a blocking reducible onto a lazy seq via a queue."
+  [reducible]
+  (let [q   (LinkedBlockingQueue.)
+        end ::done]
+    (future
+      (try
+        (reduce (fn [_ x] (.put q x)) nil reducible)
+        (catch Exception e
+          (.put q e))
+        (finally
+          (.put q end))))
+    (->> (repeatedly #(.take q))
+         (take-while #(not= end %))
+         (map (fn [v]
+                (if (instance? Exception v)
+                  (throw v)
+                  v))))))
+
 (defn events
   "Returns a lazy seq of event maps, streamed from the provider.
    Blocks on each element until available. Terminates when stream ends.
@@ -187,23 +206,7 @@
    Input is last — string or message-history vector."
   ([provider input] (events provider {} input))
   ([provider opts input]
-   (let [q   (LinkedBlockingQueue.)
-         end ::done]
-     (future
-       (try
-         (reduce (fn [_ event] (.put q event))
-                 nil
-                 (request-events provider opts input))
-         (catch Exception e
-           (.put q e))
-         (finally
-           (.put q end))))
-     (take-while #(not= end %)
-                 (map (fn [v]
-                        (if (instance? Exception v)
-                          (throw v)
-                          v))
-                      (repeatedly #(.take q)))))))
+   (reducible->blocking-seq (request-events provider opts input))))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."
@@ -469,24 +472,9 @@
    (str/join (llm/stream ai \"hello\"))"
   ([provider input] (stream provider {} input))
   ([provider opts input]
-   (let [q   (LinkedBlockingQueue.)
-         end ::done]
-     (future
-       (try
-         (reduce (fn [_ event]
-                   (when (= :content (:type event))
-                     (.put q (:content event))))
-                 nil
-                 (request-events provider opts input))
-         (catch Exception e
-           (.put q e))
-         (finally
-           (.put q end))))
-     (take-while #(not= end %)
-                 (map (fn [v]
-                        (if (instance? Exception v)
-                          (throw v)
-                          v))
-                      (repeatedly #(.take q)))))))
+   (eduction (keep (fn [event]
+                     (when (= :content (:type event))
+                       (:content event))))
+             (events provider opts input))))
 
 
