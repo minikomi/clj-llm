@@ -18,11 +18,22 @@
   ([url headers body {:keys [capacity xform]}]
    (let [{:keys [error status body]} (net/post-stream url headers body)]
      (cond
-       error  (throw (ex-info "SSE request failed"
-                              {:type :sse/request-failed} ^Throwable error))
+       error
+       (throw (ex-info (str "SSE request failed: " (.getMessage ^Throwable error))
+                       {:error-type :llm/network-error} ^Throwable error))
+
        (not= 200 status)
-              (throw (ex-info "SSE HTTP error"
-                              {:type :sse/http-error :status status}))
+       (let [response-body (try (slurp ^InputStream body) (catch Exception _ nil))]
+         (throw (ex-info (str "HTTP " status (when response-body (str ": " response-body)))
+                         (cond-> {:error-type (case (int status)
+                                                401 :llm/invalid-key
+                                                403 :llm/invalid-key
+                                                429 :llm/rate-limit
+                                                (400 404 422) :llm/invalid-request
+                                                :llm/server-error)
+                                  :status status}
+                           response-body (assoc :body response-body)))))
+
        :else
        (let [ch (a/chan (or capacity 256) xform)]
          (a/thread
@@ -35,8 +46,9 @@
                        (recur))
                      (recur)))))
              (catch Exception e
-               (a/>!! ch (ex-info "Stream error"
-                                  {:error-type :llm/stream-error} e)))
+               (when-not (.isInterrupted (Thread/currentThread))
+                 (a/>!! ch (ex-info (str "Stream interrupted: " (.getMessage e))
+                                    {:error-type :llm/stream-error} e))))
              (finally
                (a/close! ch))))
          ch)))))

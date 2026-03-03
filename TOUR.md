@@ -475,7 +475,8 @@ Error types:
 | `:llm/invalid-key` | 401/403 — authentication failed |
 | `:llm/invalid-request` | 400/404/422 — bad input |
 | `:llm/server-error` | 500/502/503/504 — provider issue |
-| `:llm/stream-error` | SSE stream interrupted |
+| `:llm/network-error` | Connection failed |
+| `:llm/stream-error` | SSE stream interrupted mid-response |
 
 The library does not do automatic retries. Use your own retry logic or a library like `again`.
 
