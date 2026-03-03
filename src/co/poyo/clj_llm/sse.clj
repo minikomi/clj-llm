@@ -61,8 +61,3 @@
        (when (seq data)
          (list {:event event :data (str/join "\n" data)}))))))
 
-(defn done?
-  "Returns true if the SSE data field signals end-of-stream.
-   Handles the common \"[DONE]\" convention used by OpenAI/Anthropic."
-  [^String data]
-  (= data "[DONE]"))
