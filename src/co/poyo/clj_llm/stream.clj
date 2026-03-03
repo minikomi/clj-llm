@@ -1,7 +1,14 @@
 (ns co.poyo.clj-llm.stream
-  "HTTP SSE stream: opens a connection and returns a reducible of
-   parsed JSON data maps. Wires together net (HTTP), sse (line parsing),
-   and JSON decoding."
+  "HTTP/SSE wiring.
+
+   Responsibilities:
+   - net: issue HTTP request
+   - stream: expose body as an auto-closing reducible of lines
+   - sse: parse SSE frames (pure)
+   - json: decode event payloads (pure)
+
+   Keeps I/O at the edge and returns reducibles so callers can compose
+   transducers without callback APIs."
   (:require
    [camel-snake-kebab.core :as csk]
    [camel-snake-kebab.extras :as cske]
@@ -9,21 +16,41 @@
    [clojure.java.io :as io]
    [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse])
-  (:import (java.io BufferedReader)))
+  (:import (java.io BufferedReader InputStream)))
 
 (def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
-(defn ->ReduceStream
-  "Create an IReduceInit from a reduce-fn.
-   The reduce-fn must handle its own cleanup (e.g. finally)."
-  [reduce-fn]
+(defn line-reducible
+  "Wrap an InputStream as an IReduceInit of text lines.
+   Always closes the reader when reduction finishes or fails."
+  [^InputStream input-stream]
   (reify
-    clojure.lang.IReduceInit (reduce [_ rf init] (reduce-fn rf init))))
+    clojure.lang.IReduceInit
+    (reduce [_ rf init]
+      (with-open [^BufferedReader rdr (io/reader input-stream)]
+        (reduce rf init (line-seq rdr))))))
+
+(defn sse-data-xf
+  "Pure transducer: lines -> SSE :data payload strings.
+   Filters protocol sentinel [DONE]."
+  []
+  (comp
+   (sse/parse-events)
+   (map :data)
+   (remove #{"[DONE]"})))
+
+(defn json->kebab-xf
+  "Pure transducer: JSON string -> kebab-cased map."
+  []
+  (map (fn [data]
+         (cske/transform-keys ->kebab-key
+                              (json/parse-string data)))))
 
 (defn open-event-stream
-  "POST to an SSE endpoint.
-   Returns an IReduceInit of parsed, kebab-cased JSON data maps.
-   Throws on setup/HTTP errors. Closes the connection when done."
+  "POST to an SSE endpoint and return a reducible of decoded event maps.
+   Throws on request/setup errors.
+
+   Returned value is reducible and transducer-friendly via eduction."
   [url headers req-body]
   (let [{:keys [error status body]} (net/post-stream url headers req-body)]
     (when error
@@ -34,15 +61,6 @@
       (throw (ex-info "SSE HTTP error"
                       {:type :sse/http-error
                        :status status})))
-    (let [^BufferedReader rdr (io/reader body)]
-      (->ReduceStream
-       (fn [rf init]
-         (try
-           (transduce (comp (sse/parse-events)
-                           (remove #(= "[DONE]" (:data %)))
-                           (map (fn [{:keys [data]}]
-                                  (cske/transform-keys ->kebab-key
-                                                       (json/parse-string data)))))
-                     (completing rf) init (line-seq rdr))
-           (finally
-             (.close rdr))))))))
+    (eduction (comp (sse-data-xf)
+                    (json->kebab-xf))
+              (line-reducible body))))

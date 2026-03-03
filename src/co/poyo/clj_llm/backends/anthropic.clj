@@ -123,10 +123,8 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [raw-stream (stream/open-event-stream url headers body)
-            xf     (keep #(data->event % schema tools))]
-        (stream/->ReduceStream
-          (fn [rf init] (reduce (xf rf) init raw-stream)))))))
+      (eduction (keep #(data->event % schema tools))
+                (stream/open-event-stream url headers body)))))
 
 (defn backend
   "Create an Anthropic provider.

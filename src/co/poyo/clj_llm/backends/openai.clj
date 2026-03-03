@@ -112,10 +112,8 @@
           headers {"Authorization" (str "Bearer " api-key)
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [raw-stream (stream/open-event-stream url headers body)
-            xf     (mapcat #(data->events % schema tools))]
-        (stream/->ReduceStream
-          (fn [rf init] (reduce (xf rf) init raw-stream)))))))
+      (eduction (mapcat #(data->events % schema tools))
+                (stream/open-event-stream url headers body)))))
 
 (defn backend
   "Create an OpenAI provider.
