@@ -172,25 +172,37 @@
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
 
-(defn request
-  "Returns an IReduceInit event stream from the provider.
-   Reduce over it to consume events. Connection closes automatically
-   when reduce completes (normal, reduced, or exception).
+(defn events
+  "Returns a lazy seq of event maps, streamed from the provider.
+   Blocks on each element until available. Terminates when stream ends.
 
-   (reduce (fn [acc event]
-             (when (= :content (:type event))
-               (print (:content event)) (flush))
-             (conj acc event))
-           [] (llm/request ai \"hello\"))
+   (doseq [event (llm/events ai \"hello\")]
+     (when (= :content (:type event))
+       (print (:content event)) (flush)))
 
    Events are maps with :type — :content, :tool-call, :tool-call-delta,
    :usage, :finish, :error, :done.
 
    Input is last — string or message-history vector."
-  ([provider input]
-   (request provider {} input))
+  ([provider input] (events provider {} input))
   ([provider opts input]
-   (request-events provider opts input)))
+   (let [q   (LinkedBlockingQueue.)
+         end ::done]
+     (future
+       (try
+         (reduce (fn [_ event] (.put q event))
+                 nil
+                 (request-events provider opts input))
+         (catch Exception e
+           (.put q e))
+         (finally
+           (.put q end))))
+     (take-while #(not= end %)
+                 (map (fn [v]
+                        (if (instance? Exception v)
+                          (throw v)
+                          v))
+                      (repeatedly #(.take q)))))))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."

@@ -384,7 +384,7 @@ a { color:#8ab4f8; text-decoration:none }
                                             acc))
                                         acc))
                                     {:chunks [] :tool-calls [] :tc-pos {}}
-                                    (llm/request ai {:tools agent-tools} history))
+                                    (llm/events ai {:tools agent-tools} history))
                            text (apply str (:chunks result))
                            raw-tc (:tool-calls result)
                            tc (when (seq raw-tc)
