@@ -20,9 +20,10 @@
   (print chunk) (flush))
 (println)
 
-;; stream-print: prints + returns full text
-(println "\n--- stream-print ---")
-(let [text (llm/stream-print ai "Count from 1 to 5, one per line")]
+;; collect into string
+(println "\n--- stream into string ---")
+(let [text (str/join (llm/stream ai "Count from 1 to 5, one per line"))]
+  (println text)
   (println "Got back:" (count text) "chars"))
 
 ;; stream with opts

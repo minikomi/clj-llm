@@ -2,7 +2,8 @@
   "REPL-friendly examples for clj-llm"
   (:require [co.poyo.clj-llm.core :as llm]
             [co.poyo.clj-llm.backends.openai :as openai]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [clojure.string :as str]))
 
 (comment
 
@@ -46,17 +47,12 @@
   ;; Streaming
   ;; ======================================
 
-  ;; Print as it streams, returns result map
-  (llm/stream-print ai "Tell me a story about a robot.")
-  ;; prints chunks as they arrive
-  ;; => {:text "Once upon a time..." :usage {...}}
+  ;; stream returns a lazy seq of text chunks
+  (doseq [chunk (llm/stream ai "Tell me a story about a robot.")]
+    (print chunk) (flush))
 
-  ;; Custom streaming via reduce over request
-  (reduce (fn [acc event]
-            (when (= :content (:type event))
-              (print (:content event)) (flush))
-            (conj acc event))
-          [] (llm/request ai "Count to 5"))
+  ;; collect into a string
+  (str/join (llm/stream ai "Count to 5"))
 
   ;; ======================================
   ;; Tool calling -- defns with Malli schemas

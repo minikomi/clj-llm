@@ -468,18 +468,4 @@
                           v))
                       (repeatedly #(.take q)))))))
 
-(defn stream-print
-  "Stream text to *out*, printing chunks as they arrive.
-   Returns the full text as a string.
 
-   (stream-print ai \"Tell me a story\")"
-  ([provider input]
-   (stream-print provider {} input))
-  ([provider opts input]
-   (let [sb (StringBuilder.)]
-     (doseq [chunk (stream provider opts input)]
-       (.append sb chunk)
-       (print chunk)
-       (flush))
-     (println)
-     (.toString sb))))
