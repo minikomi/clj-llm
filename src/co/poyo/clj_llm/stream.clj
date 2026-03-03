@@ -7,11 +7,48 @@
    [camel-snake-kebab.extras :as cske]
    [cheshire.core :as json]
    [clojure.java.io :as io]
+   [clojure.string :as str]
    [co.poyo.clj-llm.net :as net]
    [co.poyo.clj-llm.sse :as sse])
   (:import (java.io BufferedReader)))
 
 (def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
+
+(defn- sse-xf
+  "Transducer: lines → parsed SSE event maps.
+   Uses parse-sse-line for zero intermediate-seq allocation."
+  []
+  (fn [rf]
+    (let [event (volatile! "message")
+          data  (volatile! (transient []))]
+      (fn
+        ([] (rf))
+        ([result]
+         (let [d (persistent! @data)]
+           (rf (if (seq d)
+                 (rf result {:event @event :data (str/join "\n" d)})
+                 result))))
+        ([result line]
+         (let [parsed (sse/parse-sse-line line)]
+           (cond
+             (nil? parsed) result
+
+             (= :dispatch parsed)
+             (let [d (persistent! @data)
+                   e @event]
+               (vreset! event "message")
+               (vreset! data (transient []))
+               (if (seq d)
+                 (rf result {:event e :data (str/join "\n" d)})
+                 result))
+
+             :else
+             (let [[field value] parsed]
+               (case field
+                 :data  (vswap! data conj! value)
+                 :event (vreset! event value)
+                 nil)
+               result))))))))
 
 (defn ->ReduceStream
   "Create an IReduceInit from a reduce-fn.
@@ -38,7 +75,7 @@
       (->ReduceStream
        (fn [rf init]
          (try
-           (transduce (comp (sse/parse-events)
+           (transduce (comp (sse-xf)
                            (remove #(= "[DONE]" (:data %)))
                            (map (fn [{:keys [data]}]
                                   (cske/transform-keys ->kebab-key
