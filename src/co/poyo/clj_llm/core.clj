@@ -96,8 +96,10 @@
     (assoc state :finish-reason (:reason event))
 
     :error
-    (assoc state :error (ex-info "LLM request failed"
-                                 {:error-type :llm/server-error :event event}))
+    (let [err (:error event)
+          msg (or (:message err) (pr-str err))]
+      (assoc state :error (ex-info (str "LLM error: " msg)
+                                   {:error-type :llm/server-error :error err})))
 
     :done state
 
