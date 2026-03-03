@@ -29,37 +29,37 @@
                         rest))]
           [(keyword field) value])))))
 
-(defn event-xf
-  "Stateful transducer: lines → SSE event maps.
-   Each emitted event is {:event \"...\" :data \"...\"}.
+(defn parse-events
+  "Parse a seq of SSE lines into a lazy seq of event maps.
+   Each event is {:event \"...\" :data \"...\"}.
    :event defaults to \"message\" per spec.
    Multi-line data fields are joined with newlines."
-  []
-  (fn [rf]
-    (let [buf (volatile! {:event "message" :data []})]
-      (fn
-        ([] (rf))
-        ([result] (rf result))
-        ([result line]
-         (let [parsed (parse-sse-line line)]
-           (cond
-             (nil? parsed) result                      ;; comment — skip
+  [lines]
+  (lazy-seq
+   (loop [lines  lines
+          event  "message"
+          data   []]
+     (if-let [line (first lines)]
+       (let [parsed (parse-sse-line line)]
+         (cond
+           (nil? parsed)
+           (recur (rest lines) event data)
 
-             (= :dispatch parsed)                       ;; blank line — dispatch
-             (let [{:keys [event data]} @buf]
-               (vreset! buf {:event "message" :data []})
-               (if (seq data)
-                 (rf result {:event event :data (str/join "\n" data)})
-                 result))
+           (= :dispatch parsed)
+           (if (seq data)
+             (cons {:event event :data (str/join "\n" data)}
+                   (parse-events (rest lines)))
+             (recur (rest lines) "message" []))
 
-             :else                                     ;; field/value pair
-             (let [[field value] parsed]
-               (case field
-                 :data  (vswap! buf update :data conj value)
-                 :event (vswap! buf assoc :event value)
-                 ;; :id, :retry — capture if needed in the future
-                 nil)
-               result))))))))
+           :else
+           (let [[field value] parsed]
+             (case field
+               :data  (recur (rest lines) event (conj data value))
+               :event (recur (rest lines) value data)
+               (recur (rest lines) event data)))))
+       ;; End of input — flush if there's buffered data
+       (when (seq data)
+         (list {:event event :data (str/join "\n" data)}))))))
 
 (defn done?
   "Returns true if the SSE data field signals end-of-stream.

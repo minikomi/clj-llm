@@ -38,11 +38,12 @@
       (->ReduceStream
        (fn [rf init]
          (try
-           (let [xf (comp (sse/event-xf)
-                          (remove #(sse/done? (:data %)))
-                          (map (fn [{:keys [data]}]
-                                 (cske/transform-keys ->kebab-key
-                                                      (json/parse-string data)))))]
-             (transduce xf (completing rf) init (line-seq rdr)))
+           (reduce rf init
+                   (->> (line-seq rdr)
+                        sse/parse-events
+                        (remove #(sse/done? (:data %)))
+                        (map (fn [{:keys [data]}]
+                               (cske/transform-keys ->kebab-key
+                                                    (json/parse-string data))))))
            (finally
              (.close rdr))))))))
