@@ -30,14 +30,18 @@
       (with-open [^BufferedReader rdr (io/reader input-stream)]
         (reduce rf init (line-seq rdr))))))
 
+(def ^:private ignored-sse-data-lines
+  "Known SSE data payloads we intentionally drop before JSON parsing."
+  #{"" "[DONE]"})
+
 (defn sse-data-xf
   "Simple transducer: lines -> SSE data payload strings.
-   Uses keep to include only meaningful payloads."
+   Explicitly filters known non-payload lines (blank and [DONE])."
   []
   (comp
    (sse/parse-data-lines)
    (keep (fn [data]
-           (when-not (= "[DONE]" data)
+           (when-not (contains? ignored-sse-data-lines data)
              data)))))
 
 (defn json->kebab-xf
