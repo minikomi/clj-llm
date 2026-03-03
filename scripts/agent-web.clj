@@ -15,22 +15,28 @@
          '[babashka.http-client :as http])
 
 (def port (or (System/getenv "PORT") 8001))
+
+(def openrouter-key (System/getenv "OPENROUTER_KEY"))
+(def openai-key (System/getenv "OPENAI_API_KEY"))
+
+(def env-model (System/getenv "LLM_MODEL"))
+(def default-openai-model "gpt-4.1-mini")
+(def default-openrouter-model "google/gemini-3-flash-preview")
+
 (def data-dir ".chat-data/agent")
 (.mkdirs (io/file data-dir))
 
 ;; ══════ Provider ══════
 
 (def ai
-  (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
-    (if openrouter-key
-      (-> (openai/backend {:api-key openrouter-key
-                           :api-base "https://openrouter.ai/api/v1"})
-          (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "google/gemini-3-flash-preview")})
-          )
-      (-> (openai/backend)
-          (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4.1-mini")})
-          ))
-    ))
+  (let [settings (if openrouter-key
+                   ;; openrouter
+                   {:api-key openrouter-key
+                    :api-base "https://openrouter.ai/api/v1"
+                    :defaults {:model (or env-model default-openrouter-model)}}
+                   ;; openai fallback
+                   {:defaults {:model (or env-model default-openai-model)}})]
+    (openai/backend settings)))
 
 ;; ══════ Tool helper ══════
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bb
 
-(require '[co.poyo.clj-llm.core :as llm]
+(require '[clojure.core.async :as a]
+         '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai]
          '[org.httpkit.server :as hk]
          '[hiccup2.core :as h]
@@ -247,15 +248,18 @@ a { color:#8ab4f8; text-decoration:none }
                                        (str "event: " evt "\ndata: "
                                             (str/replace data #"\n" "\ndata: ")
                                             "\n\n") false))
-                         sb (StringBuilder.)]
+                         sb (StringBuilder.)
+                         stream-ch (llm/stream ai llm-history)]
                      ;; Stream chunks
-                     (doseq [chunk (llm/stream ai llm-history)]
-                       (.append sb chunk)
-                       (send-sse! "message"
-                         (str (render-msgs messages)
-                              (hic [:div.m.assistant
-                                    [:div.r "assistant"]
-                                    [:div.b (raw-string (md->html (.toString sb))) [:span.dot]]]))))
+                     (loop []
+                       (when-let [chunk (a/<!! stream-ch)]
+                         (.append sb chunk)
+                         (send-sse! "message"
+                           (str (render-msgs messages)
+                                (hic [:div.m.assistant
+                                      [:div.r "assistant"]
+                                      [:div.b (raw-string (md->html (.toString sb))) [:span.dot]]])))
+                         (recur)))
                      ;; Done
                      (let [assistant-msg {:role "assistant" :content (md->html (.toString sb))}
                            all-msgs (conj messages assistant-msg)
