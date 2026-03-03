@@ -3,6 +3,9 @@
    Fixtures are raw SSE streams captured from providers.
    Tests replay them through the SSE parser and backend event converters."
   (:require [clojure.test :refer [deftest testing is]]
+            [camel-snake-kebab.core :as csk]
+            [camel-snake-kebab.extras :as cske]
+            [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [co.poyo.clj-llm.sse :as sse]
@@ -12,16 +15,19 @@
 ;; Helpers
 ;; ════════════════════════════════════════════════════════════════════
 
-(def ^:private parse-sse-line @#'co.poyo.clj-llm.sse/parse-sse-line)
+(def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
 (defn parse-fixture
-  "Parse an SSE fixture file into data maps (skipping blanks and [DONE])."
+  "Parse an SSE fixture file into data maps (skipping [DONE])."
   [fixture-path]
   (with-open [reader (io/reader (io/resource fixture-path))]
-    (->> (line-seq reader)
-         (remove #(str/ends-with? % "[DONE]"))
-         (keep parse-sse-line)
-         vec)))
+    (into []
+          (comp (sse/event-xf)
+                (remove #(sse/done? (:data %)))
+                (map (fn [{:keys [data]}]
+                       (cske/transform-keys ->kebab-key
+                                            (json/parse-string data)))))
+          (line-seq reader))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; OpenAI event converter — delegates to real implementation

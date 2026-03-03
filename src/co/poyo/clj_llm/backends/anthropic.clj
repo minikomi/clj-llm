@@ -7,7 +7,7 @@
    [clojure.set]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.sse :as sse]))
+   [co.poyo.clj-llm.stream :as stream]))
 
 (def ^:private default-config
   {:api-base "https://api.anthropic.com"
@@ -123,10 +123,10 @@
                    "anthropic-version" api-version
                    "Content-Type" "application/json"}
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [stream (sse/open-event-stream url headers body)
+      (let [raw-stream (stream/open-event-stream url headers body)
             xf     (keep #(data->event % schema tools))]
-        (sse/->ReduceStream
-          (fn [rf init] (reduce (xf rf) init stream)))))))
+        (stream/->ReduceStream
+          (fn [rf init] (reduce (xf rf) init raw-stream)))))))
 
 (defn backend
   "Create an Anthropic provider.
