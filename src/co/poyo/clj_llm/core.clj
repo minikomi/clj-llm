@@ -154,29 +154,13 @@
                   {:error-type :llm/invalid-request
                    :input input}))))
 
-(defn- request-event-ch
-  "Build and return a core.async channel of events for the given provider + opts + input.
-   The channel is bounded; closing it cancels the request."
-  [provider opts input]
-  (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
-        (parse-opts (merge (:defaults provider) opts))
-        _        (when-not model
-                   (throw (ex-info "No model specified"
-                                   {:error-type :llm/invalid-request :opts parsed})))
-        messages (build-messages input)]
-    (proto/request-events provider
-      {:model model :system-prompt system-prompt :messages messages
-       :schema schema :tools tools :tool-choice tool-choice
-       :provider-opts (or provider-opts {})})))
-
 ;; ════════════════════════════════════════════════════════════════════
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
 
 (defn- chan-reduce
   "Blocking reduce over a core.async channel.
-   Reads all values from ch, reduces with rf/init.
-   Returns the final accumulated value."
+   Returns the final accumulated value.  Closes ch on early termination."
   [rf init ch]
   (loop [acc init]
     (let [v (a/<!! ch)]
@@ -184,29 +168,27 @@
         acc
         (let [acc' (rf acc v)]
           (if (reduced? acc')
-            (do (a/close! ch)
-                @acc')
+            (do (a/close! ch) @acc')
             (recur acc')))))))
 
 (defn events
-  "Returns a core.async channel of event maps, streamed from the provider.
-   Channel is bounded (default 256) — provides backpressure.
-   Close the channel to cancel the stream and clean up resources.
-
-   (let [ch (llm/events ai \"hello\")]
-     (loop []
-       (when-let [event (a/<!! ch)]
-         (when (= :content (:type event))
-           (print (:content event)) (flush))
-         (recur))))
+  "Return a bounded core.async channel of provider events.
+   Close the channel to cancel and clean up HTTP resources.
 
    Events are maps with :type — :content, :tool-call, :tool-call-delta,
-   :usage, :finish, :error, :done.
-
-   Input is last — string or message-history vector."
+   :usage, :finish, :error, :done."
   ([provider input] (events provider {} input))
   ([provider opts input]
-   (request-event-ch provider opts input)))
+   (let [{:keys [model system-prompt schema tools tool-choice provider-opts] :as parsed}
+         (parse-opts (merge (:defaults provider) opts))
+         _ (when-not model
+             (throw (ex-info "No model specified"
+                             {:error-type :llm/invalid-request :opts parsed})))]
+     (proto/request-events provider
+       {:model model :system-prompt system-prompt
+        :messages (build-messages input)
+        :schema schema :tools tools :tool-choice tool-choice
+        :provider-opts (or provider-opts {})}))))
 
 (defn- parse-tool-calls
   "Parse JSON argument strings in tool calls."
@@ -349,7 +331,7 @@
                     (assoc (dissoc opts :tools) :tools input-schemas)
                     opts)
          result (finalize-state (chan-reduce next-state init-state
-                                              (request-event-ch provider api-opts input)))]
+                                              (events provider api-opts input)))]
      (cond
        tools
        (let [name->fn (build-name->fn tools input-schemas)
@@ -418,7 +400,7 @@
                                 (on-text (:content event)))
                               (next-state state event))
                             init-state
-                            (request-event-ch provider request-opts history)))
+                            (events provider request-opts history)))
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
@@ -474,18 +456,10 @@
          (recur))))"
   ([provider input] (stream provider {} input))
   ([provider opts input]
-   (let [xf (keep (fn [event]
-                    (when (= :content (:type event))
-                      (:content event))))
-         event-ch (request-event-ch provider opts input)
-         text-ch  (a/chan 256 xf)]
-     ;; Pipe events through xf; closing text-ch propagates to event-ch
+   (let [event-ch (events provider opts input)
+         text-ch  (a/chan 256 (keep #(when (= :content (:type %)) (:content %))))]
      (a/pipe event-ch text-ch)
      text-ch)))
 
-(defn chan?
-  "True if x is a core.async channel."
-  [x]
-  (satisfies? clojure.core.async.impl.protocols/Channel x))
 
 
