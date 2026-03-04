@@ -413,7 +413,102 @@ For structured output after tool use, compose with `generate`:
 
 This keeps `run-agent` focused on the tool loop and `generate` as the single place structured extraction happens.
 
-## 12. `generate` vs `run-agent`
+## 12. Observing the agent
+
+`run-agent` accepts callback hooks for real-time visibility into what the agent is doing. All are optional.
+
+### `:on-text` — streaming text as it arrives
+
+Called for each text chunk as the LLM streams its response. Use for live typing display:
+
+```clojure
+(llm/run-agent ai [#'geocode #'get-weather]
+  {:on-text (fn [chunk] (print chunk) (flush))}
+  "Weather in Tokyo?")
+;; prints text as it streams, character by character
+```
+
+### `:on-tool-calls` — before tool execution
+
+Called when the model returns tool calls, before they are executed. Good for logging or UI updates:
+
+```clojure
+(llm/run-agent ai [#'geocode #'get-weather]
+  {:on-tool-calls (fn [{:keys [step tool-calls text]}]
+                    (println "Step" step "- calling:" (mapv :name tool-calls)))}
+  "Weather in Tokyo?")
+;; Step 0 - calling: ["geocode"]
+;; Step 1 - calling: ["get_weather"]
+```
+
+### `:on-tool-result` — after each tool finishes
+
+Called once per tool call, after execution. Includes the result (or error):
+
+```clojure
+(llm/run-agent ai [#'geocode #'get-weather]
+  {:on-tool-result (fn [{:keys [step tool-call result error]}]
+                     (if error
+                       (println "  ✗" (:name tool-call) "failed:" (.getMessage error))
+                       (println "  ✓" (:name tool-call) "→" result)))}
+  "Weather in Tokyo?")
+;;   ✓ geocode → {:name "Tokyo", :country "Japan", ...}
+;;   ✓ get_weather → 20.1°C, wind 7.6 km/h
+```
+
+### Combining callbacks
+
+Use all three together for a full trace:
+
+```clojure
+(llm/run-agent ai [#'geocode #'get-weather]
+  {:on-text        (fn [chunk] (print chunk) (flush))
+   :on-tool-calls  (fn [{:keys [step tool-calls]}]
+                     (println "\n🔧 Step" step (mapv :name tool-calls)))
+   :on-tool-result (fn [{:keys [tool-call result]}]
+                     (println "  →" (:name tool-call) result))}
+  "Weather in Tokyo?")
+```
+
+Callback order is guaranteed: `on-text` during streaming → `on-tool-calls` once → `on-tool-result` per tool.
+
+## 13. Manual tool result messages
+
+The `tool-result` helper creates tool result messages for feeding back into history manually. This is useful when you want to execute tools yourself instead of letting `generate` or `run-agent` do it:
+
+```clojure
+(llm/tool-result "call_abc" "Sunny, 22°C")
+;; => {:role :tool :tool-call-id "call_abc" :content "Sunny, 22°C"}
+```
+
+Non-string values are automatically JSON-encoded:
+
+```clojure
+(llm/tool-result "call_abc" {:name "Tokyo" :latitude 35.69})
+;; => {:role :tool :tool-call-id "call_abc" :content "{\"name\":\"Tokyo\",...}"}
+```
+
+Use it to build manual tool-calling workflows when `run-agent` doesn't fit:
+
+```clojure
+;; 1. Get tool calls from the model
+(def result (llm/generate ai {:tools [#'geocode]} "Where is Tokyo?"))
+
+;; 2. Execute yourself, build result messages
+(def tool-msgs
+  (mapv (fn [tc]
+          (let [output (geocode (:arguments tc))]
+            (llm/tool-result (:id tc) output)))
+        (:tool-calls result)))
+
+;; 3. Continue the conversation with tool results
+(def history (into [{:role :user :content "Where is Tokyo?"}
+                    {:role :assistant :tool-calls (:tool-calls result)}]
+                   tool-msgs))
+(:text (llm/generate ai history))
+```
+
+## 14. `generate` vs `run-agent`
 
 | | `generate` | `run-agent` |
 |---|---|---|
@@ -426,7 +521,7 @@ This keeps `run-agent` focused on the tool loop and `generate` as the single pla
 
 `generate` is the workhorse. `run-agent` is for when the model needs to drive.
 
-## 13. Raw event stream
+## 15. Raw event stream
 
 `events` returns a `core.async` channel of raw provider events. Use it when you need fine-grained control over the stream:
 
@@ -463,7 +558,22 @@ If the stream breaks mid-response, the exception appears on the channel. Check f
 
 Close the channel to cancel and clean up HTTP resources.
 
-## 14. Error handling
+## 16. Babashka
+
+clj-llm works with [Babashka](https://babashka.org/) out of the box. The HTTP layer automatically switches between `java.net.http` (JVM Clojure) and `babashka.http-client` (bb). Everything else — providers, generate, run-agent, streaming — works identically.
+
+```bash
+#!/usr/bin/env bb
+(require '[co.poyo.clj-llm.core :as llm]
+         '[co.poyo.clj-llm.backends.openai :as openai])
+
+(def ai (assoc (openai/backend) :defaults {:model "gpt-4o-mini"}))
+(println (:text (llm/generate ai "Hello from Babashka!")))
+```
+
+Run your scripts, CLIs, and automation with the same library. No separate dependency or configuration.
+
+## 17. Error handling
 
 Connection errors throw the underlying Java exception directly (`ConnectException`, `HttpTimeoutException`, etc.). No wrapping.
 
@@ -487,7 +597,7 @@ Option validation errors (bad keys, missing model) are also `ex-info` with `:err
 
 The library does not do automatic retries. Use your own retry logic or a library like `again`.
 
-## 15. Multiple providers
+## 18. Multiple providers
 
 The same code works with any provider. Only the connection changes.
 
