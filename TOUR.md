@@ -447,6 +447,20 @@ This keeps `run-agent` focused on the tool loop and `generate` as the single pla
 
 Event types: `:content`, `:tool-call`, `:tool-call-delta`, `:usage`, `:finish`, `:error`, `:done`.
 
+If the stream breaks mid-response, the exception appears on the channel. Check for it:
+
+```clojure
+(let [ch (llm/events ai "Count to 100")]
+  (loop []
+    (when-let [v (<!! ch)]
+      (if (instance? Throwable v)
+        (println "Stream error:" (.getMessage v))
+        (do (println (:type v))
+            (recur))))))
+```
+
+`generate` and `run-agent` throw mid-stream errors automatically. You only need to check when reading `events` or `stream` channels directly.
+
 Close the channel to cancel and clean up HTTP resources.
 
 ## 14. Error handling

@@ -35,7 +35,9 @@
                    (when (a/>!! ch evt)
                      (recur))
                    (recur)))))
-           (catch Exception _)
+           (catch Exception e
+             (when-not (.isInterrupted (Thread/currentThread))
+               (a/>!! ch e)))
            (finally
              (a/close! ch))))
        ch))))

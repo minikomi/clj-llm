@@ -166,12 +166,13 @@
   [rf init ch]
   (loop [acc init]
     (let [v (a/<!! ch)]
-      (if (nil? v)
-        acc
-        (let [acc' (rf acc v)]
-          (if (reduced? acc')
-            (do (a/close! ch) @acc')
-            (recur acc')))))))
+      (cond
+        (nil? v)            acc
+        (instance? Throwable v) (throw v)
+        :else (let [acc' (rf acc v)]
+                (if (reduced? acc')
+                  (do (a/close! ch) @acc')
+                  (recur acc')))))))
 
 (defn events
   "Return a bounded core.async channel of provider events.
@@ -472,7 +473,9 @@
   ([provider input] (stream provider {} input))
   ([provider opts input]
    (let [event-ch (events provider opts input)
-         text-ch  (a/chan 256 (keep #(when (= :content (:type %)) (:content %))))]
+         text-ch  (a/chan 256 (keep #(if (instance? Throwable %)
+                                       %
+                                       (when (= :content (:type %)) (:content %)))))]
      (a/pipe event-ch text-ch)
      text-ch)))
 
