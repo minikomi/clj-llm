@@ -696,6 +696,19 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb30-1"><a
 <p>Event types: <code>:content</code>, <code>:tool-call</code>,
 <code>:tool-call-delta</code>, <code>:usage</code>,
 <code>:finish</code>, <code>:error</code>, <code>:done</code>.</p>
+<p>If the stream breaks mid-response, the exception appears on the
+channel. Check for it:</p>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 100&quot;</span>)]</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [v (&lt;!! ch)]</span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">if</span> (<span class="kw">instance?</span> Throwable v)</span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">println</span> <span class="st">&quot;Stream error:&quot;</span> (.getMessage v))</span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">do</span> (<span class="kw">println</span> (<span class="at">:type</span> v))</span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>            (<span class="kw">recur</span>))))))</span></code></pre></div>
+<p><code>generate</code> and <code>run-agent</code> throw mid-stream
+errors automatically. You only need to check when reading
+<code>events</code> or <code>stream</code> channels directly.</p>
 <p>Close the channel to cancel and clean up HTTP resources.</p>
 <h2 id="error-handling">14. Error handling</h2>
 <p>Connection errors throw the underlying Java exception directly
@@ -704,18 +717,18 @@ etc.). No wrapping.</p>
 <p>HTTP errors (non-200) throw <code>ex-info</code> with the status and
 the API’s response body — the actual error message from
 OpenAI/Anthropic:</p>
-<div class="sourceCode" id="cb31"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> clojure.lang.ExceptionInfo <span class="kw">e</span></span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [{<span class="at">:keys</span> [status body]} (ex-data <span class="kw">e</span>)]</span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> <span class="st">&quot;HTTP&quot;</span> status)</span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> body)))</span>
-<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
-<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">;; Connection/timeout errors — plain Java exceptions</span></span>
-<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">println</span> <span class="st">&quot;Connection error:&quot;</span> (.getMessage <span class="kw">e</span>))))</span>
-<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; HTTP 404</span></span>
-<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; {&quot;error&quot;:{&quot;message&quot;:&quot;The model &#39;nonexistent-model&#39; does not exist&quot;,...}}</span></span></code></pre></div>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> clojure.lang.ExceptionInfo <span class="kw">e</span></span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [{<span class="at">:keys</span> [status body]} (ex-data <span class="kw">e</span>)]</span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> <span class="st">&quot;HTTP&quot;</span> status)</span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> body)))</span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">;; Connection/timeout errors — plain Java exceptions</span></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">println</span> <span class="st">&quot;Connection error:&quot;</span> (.getMessage <span class="kw">e</span>))))</span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; HTTP 404</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; {&quot;error&quot;:{&quot;message&quot;:&quot;The model &#39;nonexistent-model&#39; does not exist&quot;,...}}</span></span></code></pre></div>
 <p>Option validation errors (bad keys, missing model) are also
 <code>ex-info</code> with
 <code>:error-type :llm/invalid-request</code>.</p>
@@ -724,18 +737,18 @@ or a library like <code>again</code>.</p>
 <h2 id="multiple-providers">15. Multiple providers</h2>
 <p>The same code works with any provider. Only the connection
 changes.</p>
-<div class="sourceCode" id="cb32"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/backend)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
-<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/backend) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
-<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
-<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>                                        <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
-<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
-<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
-<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
-<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
-<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span></code></pre></div>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/backend)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/backend) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>                                        <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
+<span id="cb33-12"><a href="#cb33-12" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span></code></pre></div>
 </body>
 </html>
