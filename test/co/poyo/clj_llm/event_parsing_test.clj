@@ -5,7 +5,7 @@
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [co.poyo.clj-llm.sse :as sse]
+            [co.poyo.clj-llm.stream :as stream]
             [co.poyo.clj-llm.backends.openai]))
 
 ;; ════════════════════════════════════════════════════════════════════
@@ -16,7 +16,7 @@
   "Parse an SSE fixture file into data maps using the same path as production."
   [fixture-path]
   (with-open [reader (io/reader (io/resource fixture-path))]
-    (into [] (keep sse/parse-data-line) (line-seq reader))))
+    (into [] (keep stream/parse-data-line) (line-seq reader))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; OpenAI event converter — delegates to real implementation
