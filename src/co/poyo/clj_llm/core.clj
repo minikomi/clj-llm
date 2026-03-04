@@ -408,7 +408,7 @@
                           (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
-            n 0]
+            step 0]
        (let [{:keys [text usage] :as result}
              (finalize-state
                (chan-reduce (fn [state event]
@@ -427,37 +427,39 @@
              usage (assoc :usage usage))
 
            (let [_        (when (and on-tool-calls (seq parsed-calls))
-                            (on-tool-calls {:step n :tool-calls parsed-calls :text text}))
+                            (on-tool-calls {:step step :tool-calls parsed-calls :text text}))
                  results  (when (seq parsed-calls)
                             (mapv (fn [tc]
-                                    (let [r (try
-                                              {:call tc :result (execute-tool-call name->fn tc)}
-                                              (catch Exception e
-                                                {:call tc :result (str "Error: " (.getMessage e)) :error e}))]
+                                    (let [tool-exec (try
+                                                      {:call tc :result (execute-tool-call name->fn tc)}
+                                                      (catch Exception e
+                                                        {:call tc :result (str "Error: " (.getMessage e)) :error e}))]
                                       (when on-tool-result
-                                        (on-tool-result {:step n
+                                        (on-tool-result {:step step
                                                          :tool-call tc
-                                                         :result (:result r)
-                                                         :error (:error r)}))
-                                      r))
+                                                         :result (:result tool-exec)
+                                                         :error (:error tool-exec)}))
+                                      tool-exec))
                                   parsed-calls))
-                 msg      (if results
-                            (tool-calls->assistant-message parsed-calls text)
-                            {:role :assistant :content (or text "")})
-                 msgs     (if results
-                            (into [msg] (mapv (fn [{:keys [call result]}]
-                                               (tool-result (:id call) result))
-                                             results))
-                            [msg])
-                 next-history (into history msgs)
+                 assistant-msg (if results
+                                 (tool-calls->assistant-message parsed-calls text)
+                                 {:role :assistant :content (or text "")})
+                 tool-msgs    (if results
+                                (mapv (fn [{:keys [call result]}]
+                                        (tool-result (:id call) result))
+                                      results)
+                                [])
+                 next-history (-> history
+                                 (into [assistant-msg])
+                                 (into tool-msgs))
                  next-steps   (if results
                                 (conj steps {:tool-calls   (vec parsed-calls)
                                              :tool-results (mapv :result results)})
                                 steps)]
-             (if (>= (inc n) max-steps)
+             (if (>= (inc step) max-steps)
                (cond-> {:text text :history next-history :steps next-steps :truncated true}
                  usage (assoc :usage usage))
-               (recur next-history next-steps (inc n))))))))))
+               (recur next-history next-steps (inc step))))))))))
 
 
 (defn stream
