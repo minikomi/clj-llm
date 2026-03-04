@@ -1,11 +1,33 @@
 (ns co.poyo.clj-llm.stream
   "HTTP → bounded core.async channel of decoded SSE events."
   (:require
+   [camel-snake-kebab.core :as csk]
+   [camel-snake-kebab.extras :as cske]
+   [cheshire.core :as json]
    [clojure.core.async :as a]
    [clojure.java.io :as io]
-   [co.poyo.clj-llm.net :as net]
-   [co.poyo.clj-llm.sse :as sse])
+   [clojure.string :as str]
+   [co.poyo.clj-llm.net :as net])
   (:import (java.io BufferedReader InputStream)))
+
+;; ════════════════════════════════════════════════════════════════════
+;; SSE parsing
+;; ════════════════════════════════════════════════════════════════════
+
+(def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
+
+(defn parse-data-line
+  "Parse one SSE text line into a decoded map.
+   Returns nil for non-data lines, blank/[DONE], and invalid JSON."
+  [^String line]
+  (when (str/starts-with? line "data:")
+    (let [data (str/trim (subs line 5))]
+      (when-not (or (str/blank? data)
+                    (= "[DONE]" data))
+        (try
+          (cske/transform-keys ->kebab-key (json/parse-string data))
+          (catch Exception _
+            nil))))))
 
 (defn open-event-stream
   "POST to an SSE endpoint, return a bounded core.async channel of
@@ -26,7 +48,7 @@
           (with-open [^BufferedReader rdr (io/reader ^InputStream body)]
             (loop []
               (when-let [line (.readLine rdr)]
-                (let [evt (sse/parse-data-line line)]
+                (let [evt (parse-data-line line)]
                   (cond
                     (nil? evt)      (recur)   ; non-data line, skip
                     (a/>!! ch evt)  (recur)   ; delivered, continue
