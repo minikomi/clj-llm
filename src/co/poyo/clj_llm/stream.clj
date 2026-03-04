@@ -26,10 +26,11 @@
           (with-open [^BufferedReader rdr (io/reader ^InputStream body)]
             (loop []
               (when-let [line (.readLine rdr)]
-                (if-let [evt (sse/parse-data-line line)]
-                  (when (a/>!! ch evt)
-                    (recur))
-                  (recur)))))
+                (let [evt (sse/parse-data-line line)]
+                  (cond
+                    (nil? evt)      (recur)   ; non-data line, skip
+                    (a/>!! ch evt)  (recur)   ; delivered, continue
+                    :else           nil)))))  ; channel closed, stop
           (catch Exception e
             (when-not (.isInterrupted (Thread/currentThread))
               (a/>!! ch e)))
