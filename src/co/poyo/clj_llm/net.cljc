@@ -4,6 +4,17 @@
                    (java.net URI)
                    (java.time Duration))))
 
+#?(:bb
+   (defn post-stream
+     "Blocking POST. Returns {:status int :body InputStream}.
+      Throws on connection errors."
+     [url headers body]
+     (let [{:keys [status body]} (http/post url {:headers headers
+                                                 :body body
+                                                 :as :stream
+                                                 :throw false})]
+       {:status status :body body})))
+
 #?(:clj
    (def ^:private http-client
      (delay
@@ -12,17 +23,11 @@
            (.connectTimeout (Duration/ofSeconds 10))
            (.build)))))
 
-(defn post-stream
-  "Blocking POST. Returns {:status int :body InputStream}.
-   Throws on connection errors."
-  [url headers body]
-  #?(:bb
-     (let [{:keys [status body]} (http/post url {:headers headers
-                                                 :body body
-                                                 :as :stream
-                                                 :throw false})]
-       {:status status :body body})
-     :clj
+#?(:clj
+   (defn post-stream
+     "Blocking POST. Returns {:status int :body InputStream}.
+      Throws on connection errors."
+     [url headers body]
      (let [req (-> (HttpRequest/newBuilder)
                    (.uri (URI/create url))
                    (.timeout (Duration/ofSeconds 30))
@@ -30,7 +35,7 @@
        (doseq [[k v] headers]
          (.header req k v))
        (let [response (.send @http-client
-                            (.build req)
-                            (HttpResponse$BodyHandlers/ofInputStream))]
+                             (.build req)
+                             (HttpResponse$BodyHandlers/ofInputStream))]
          {:status (.statusCode response)
           :body (.body response)}))))
