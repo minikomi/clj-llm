@@ -122,56 +122,38 @@
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Babashka: pod-golang-image resize
+;;
+;; The user loads the pod before using image resize:
+;;
+;;   ;; Option 1: in bb.edn (once published to pod registry)
+;;   {:pods {co.poyo/pod-golang-image {:version "0.1.0"}}}
+;;
+;;   ;; Option 2: load-pod with a path
+;;   (pods/load-pod "./pod-golang-image")
+;;
+;;   ;; Option 3: load-pod from registry (once published)
+;;   (pods/load-pod 'co.poyo/pod-golang-image "0.1.0")
+;;
+;; Then content/image resize will use it automatically.
+;; Without the pod loaded, resize falls back to raw base64 (no resize).
 ;; ════════════════════════════════════════════════════════════════════
 
 #?(:bb
    (do
-     (def ^:private pod-loaded? (atom false))
-     (def ^:private pod-path (atom nil))
-
-     (defn set-pod-path!
-       "Set the path to the pod-golang-image binary.
-        If not set, searches PATH and ~/pod-golang-image/."
-       [path]
-       (reset! pod-path path))
-
-     (defn- find-pod-binary []
-       (or @pod-path
-           (let [home (System/getProperty "user.home")
-                 candidates ["pod-golang-image"
-                             (str home "/pod-golang-image/pod-golang-image")]]
-             (first (filter #(let [f (java.io.File. ^String %)]
-                               (and (.exists f) (.canExecute f)))
-                           candidates)))))
-
-     (defn- ensure-pod!
-       "Load the pod if available. Returns true if pod is ready."
-       []
-       (if @pod-loaded?
-         true
-         (when-let [bin (find-pod-binary)]
-           (try
-             (pods/load-pod bin)
-             (require '[co.poyo.pod-golang-image])
-             (reset! pod-loaded? true)
-             true
-             (catch Exception _ false)))))
+     (defn- pod-available? []
+       (some? (resolve 'co.poyo.pod-golang-image/resize)))
 
      (defn- bb-resize
        "Resize using pod-golang-image. Returns result map or nil."
        [path opts]
-       (when (ensure-pod!)
-         (let [pod-fn (resolve 'co.poyo.pod-golang-image/resize)]
-           (when pod-fn
-             (pod-fn (str path) opts)))))
+       (when (pod-available?)
+         ((resolve 'co.poyo.pod-golang-image/resize) (str path) opts)))
 
      (defn- bb-to-base64
        "Encode to base64 using pod-golang-image. Returns result map or nil."
        [path]
-       (when (ensure-pod!)
-         (let [pod-fn (resolve 'co.poyo.pod-golang-image/to-base64)]
-           (when pod-fn
-             (pod-fn (str path))))))))
+       (when (pod-available?)
+         ((resolve 'co.poyo.pod-golang-image/to-base64) (str path))))))
 
 ;; Stub jvm-resize for bb so the unified dispatch compiles
 #?(:bb (defn- jvm-resize [_ _] nil))
