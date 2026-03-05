@@ -253,9 +253,25 @@
      (and (string? source)
           (or (.startsWith ^String source "http://")
               (.startsWith ^String source "https://")))
-     {:type   :image
-      :source :url
-      :url    source}
+     (let [opts (if (map? opts-or-media-type) opts-or-media-type {})
+           has-resize? (or (:max-edge opts) (:max-width opts) (:max-height opts))]
+       (if has-resize?
+         ;; Download, resize, return base64
+         (let [url-ext (extension (.getPath (java.net.URL. source)))
+               tmp (java.io.File/createTempFile "clj-llm-" (str "." (or url-ext "png")))
+               _   (.deleteOnExit tmp)]
+           (with-open [in  (.openStream (java.net.URL. source))
+                       out (java.io.FileOutputStream. tmp)]
+             (.transferTo in out))
+           (let [result (resize-image (str tmp) opts)]
+             {:type       :image
+              :source     :base64
+              :media-type (:media-type result)
+              :data       (:data result)}))
+         ;; No resize — pass URL through to model
+         {:type   :image
+          :source :url
+          :url    source}))
 
      ;; File path (string or File)
      :else
