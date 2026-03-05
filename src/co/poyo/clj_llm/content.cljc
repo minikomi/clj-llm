@@ -152,7 +152,7 @@
          (when-let [bin (find-pod-binary)]
            (try
              (pods/load-pod bin)
-             (require '[pod.poyo.image])
+             (require '[co.poyo.pod-golang-image])
              (reset! pod-loaded? true)
              true
              (catch Exception _ false)))))
@@ -161,7 +161,7 @@
        "Resize using pod-golang-image. Returns result map or nil."
        [path opts]
        (when (ensure-pod!)
-         (let [pod-fn (resolve 'pod.poyo.image/resize)]
+         (let [pod-fn (resolve 'co.poyo.pod-golang-image/resize)]
            (when pod-fn
              (pod-fn (str path) opts)))))
 
@@ -169,7 +169,7 @@
        "Encode to base64 using pod-golang-image. Returns result map or nil."
        [path]
        (when (ensure-pod!)
-         (let [pod-fn (resolve 'pod.poyo.image/to-base64)]
+         (let [pod-fn (resolve 'co.poyo.pod-golang-image/to-base64)]
            (when pod-fn
              (pod-fn (str path))))))))
 
