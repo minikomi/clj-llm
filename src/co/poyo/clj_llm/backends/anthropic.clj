@@ -26,9 +26,37 @@
   (when opts
     (cske/transform-keys ->snake-key opts)))
 
+(defn- content-part->anthropic
+  "Convert a clj-llm content part to Anthropic's content array format."
+  [part]
+  (case (:type part)
+    :text  {:type "text" :text (:text part)}
+    :image (case (:source part)
+             :url    {:type "image"
+                      :source {:type "url" :url (:url part)}}
+             :base64 {:type "image"
+                      :source {:type "base64"
+                               :media_type (:media-type part)
+                               :data (:data part)}})
+    :pdf   {:type "document"
+            :source {:type "base64"
+                     :media_type (:media-type part)
+                     :data (:data part)}}))
+
+(defn- normalize-content
+  "If content is a vector of content parts, convert to Anthropic format.
+   Strings pass through as-is."
+  [content]
+  (if (vector? content)
+    (mapv content-part->anthropic content)
+    content))
+
 (defn- normalize-messages [messages]
-  (mapv #(clojure.set/rename-keys % {:tool-calls :tool_calls
-                                     :tool-call-id :tool_call_id}) messages))
+  (mapv (fn [msg]
+          (cond-> (clojure.set/rename-keys msg {:tool-calls :tool_calls
+                                                :tool-call-id :tool_call_id})
+            (:content msg) (update :content normalize-content)))
+        messages))
 
 (defn- build-body
   "Build Anthropic API request body"

@@ -26,9 +26,34 @@
   (when opts
     (cske/transform-keys ->snake-key opts)))
 
+(defn- content-part->openai
+  "Convert a clj-llm content part to OpenAI's content array format."
+  [part]
+  (case (:type part)
+    :text  {:type "text" :text (:text part)}
+    :image (case (:source part)
+             :url    {:type "image_url"
+                      :image_url {:url (:url part)}}
+             :base64 {:type "image_url"
+                      :image_url {:url (str "data:" (:media-type part) ";base64," (:data part))}})
+    :pdf   {:type "file"
+            :file {:filename "document.pdf"
+                   :file_data (str "data:" (:media-type part) ";base64," (:data part))}}))
+
+(defn- normalize-content
+  "If content is a vector of content parts, convert to OpenAI format.
+   Strings pass through as-is."
+  [content]
+  (if (vector? content)
+    (mapv content-part->openai content)
+    content))
+
 (defn- normalize-messages [messages]
-  (mapv #(clojure.set/rename-keys % {:tool-calls :tool_calls
-                                     :tool-call-id :tool_call_id}) messages))
+  (mapv (fn [msg]
+          (cond-> (clojure.set/rename-keys msg {:tool-calls :tool_calls
+                                                :tool-call-id :tool_call_id})
+            (:content msg) (update :content normalize-content)))
+        messages))
 
 (defn- build-body
   "Build OpenAI API request body"
