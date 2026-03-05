@@ -289,7 +289,21 @@ LLM APIs charge by image size and have limits. Resize on the fly:
 
 Multiple constraints? The most restrictive wins. Images that already fit are not upscaled.
 
-On JVM Clojure, resizing uses `javax.imageio`. On babashka, it uses [pod-golang-image](https://github.com/poyo-ai/pod-golang-image) (auto-detected from PATH or `~/pod-golang-image/`).
+On JVM Clojure, resizing uses `javax.imageio` — zero deps. On babashka, it uses [pod-golang-image](https://github.com/poyo-ai/pod-golang-image). Load the pod before using resize:
+
+```clojure
+;; Option 1: bb.edn (once published to pod registry)
+{:pods {co.poyo/pod-golang-image {:version "0.1.0"}}}
+
+;; Option 2: load-pod in your script
+(require '[babashka.pods :as pods])
+(pods/load-pod "path/to/pod-golang-image")
+
+;; Option 3: from pod registry (once published)
+(pods/load-pod 'co.poyo/pod-golang-image "0.1.0")
+```
+
+If the pod isn't loaded, resize opts are ignored and the image is sent at original size.
 
 URL images with resize opts are downloaded, resized, and sent as base64. Without resize opts, URLs pass through directly to the model.
 
@@ -335,10 +349,12 @@ You can also build multipart messages manually in conversation history:
 ### Babashka one-liner: rename files by contents
 
 ```bash
-bb -e '(require (quote [co.poyo.clj-llm.core :as llm])
-         (quote [co.poyo.clj-llm.content :as c])
-         (quote [co.poyo.clj-llm.backends.openai :as openai])
+bb -e '(require (quote [babashka.pods :as pods])
          (quote [babashka.fs :as fs]))
+  (pods/load-pod "path/to/pod-golang-image")
+  (require (quote [co.poyo.clj-llm.core :as llm])
+         (quote [co.poyo.clj-llm.content :as c])
+         (quote [co.poyo.clj-llm.backends.openai :as openai]))
   (def ai (assoc (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_KEY")
                                    :api-base "https://openrouter.ai/api/v1"})
                  :defaults {:model "openai/gpt-4o-mini"}))
