@@ -7,7 +7,8 @@
    [malli.error :as me]
    [malli.transform :as mt]
    [malli.util :as mu]
-   [co.poyo.clj-llm.protocol :as proto]))
+   [co.poyo.clj-llm.protocol :as proto]
+   [co.poyo.clj-llm.content :as content]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
@@ -141,14 +142,35 @@
               {:error-type :llm/invalid-request
                :schema schema :input text})))))
 
+(defn- mixed-content-vector?
+  "Returns true if v is a vector containing content parts (images, text parts)
+   mixed with strings — i.e. a multimodal user message, not a message history."
+  [v]
+  (and (vector? v)
+       (some content/content-part? v)))
+
+(defn- normalize-content-element
+  "Coerce an element of a mixed content vector to a content part.
+   Strings become text parts. Content parts pass through."
+  [x]
+  (cond
+    (string? x) (content/text x)
+    (content/content-part? x) x
+    :else (throw (ex-info
+                  (str "Invalid content element: expected string or content part, got " (type x))
+                  {:error-type :llm/invalid-request :element x}))))
+
 (defn- build-messages
   "Coerce input to a messages vector.
    String  → [{:role :user :content input}]
-   Vector  → used as-is (message history)
+   Vector of content parts/strings → [{:role :user :content [...parts...]}]
+   Vector of messages → used as-is (message history)
    nil     → []"
   [input]
   (cond
     (string? input) [{:role :user :content input}]
+    (mixed-content-vector? input)
+    [{:role :user :content (mapv normalize-content-element input)}]
     (vector? input) input
     (nil? input)    []
     :else (throw (ex-info
