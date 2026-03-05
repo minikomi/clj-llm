@@ -6,13 +6,14 @@
      (generate ai [\"Describe this\" (content/image \"photo.jpg\" {:max-edge 512})])
 
    On JVM Clojure, image resizing uses javax.imageio directly.
-   On babashka, image resizing uses pod-golang-image."
-  #?(:bb  (:require [babashka.pods :as pods])
-     :clj (:import [java.util Base64]
-                   [java.io File FileInputStream ByteArrayOutputStream]
-                   [java.awt.image BufferedImage]
-                   [java.awt Graphics2D RenderingHints]
-                   [javax.imageio ImageIO])))
+   On babashka, image resizing requires ImageMagick (convert/magick on PATH).
+   Without ImageMagick, images are sent at original size."
+  #?@(:bb  []
+      :clj [(:import [java.util Base64]
+                     [java.io File FileInputStream ByteArrayOutputStream]
+                     [java.awt.image BufferedImage]
+                     [java.awt Graphics2D RenderingHints]
+                     [javax.imageio ImageIO])]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Mime type detection
@@ -59,7 +60,7 @@
 ;; JVM: javax.imageio resize
 ;; ════════════════════════════════════════════════════════════════════
 
-#?(:bb :bb ;; bb: jvm-resize defined below via pod
+#?(:bb :bb ;; bb: jvm-resize defined below as stub
    :clj
    (do
      (defn- compute-scale
@@ -121,39 +122,66 @@
             :media-type (if (= fmt "jpeg") "image/jpeg" "image/png")})))))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Babashka: pod-golang-image resize
+;; Babashka: ImageMagick or raw passthrough
 ;;
-;; The user loads the pod before using image resize:
-;;
-;;   ;; Option 1: in bb.edn (once published to pod registry)
-;;   {:pods {co.poyo/pod-golang-image {:version "0.1.0"}}}
-;;
-;;   ;; Option 2: load-pod with a path
-;;   (pods/load-pod "./pod-golang-image")
-;;
-;;   ;; Option 3: load-pod from registry (once published)
-;;   (pods/load-pod 'co.poyo/pod-golang-image "0.1.0")
-;;
-;; Then content/image resize will use it automatically.
-;; Without the pod loaded, resize falls back to raw base64 (no resize).
+;; Resize priority:
+;;   1. ImageMagick `convert`/`magick` (if on PATH)
+;;   2. Skip resize, send original bytes (with warning)
 ;; ════════════════════════════════════════════════════════════════════
 
 #?(:bb
    (do
-     (defn- pod-available? []
-       (some? (resolve 'co.poyo.pod-golang-image/resize)))
+     (defn- find-magick-cmd
+       "Returns the ImageMagick command name available, or nil."
+       []
+       (first
+        (for [cmd ["magick" "convert"]
+              :let [available? (try
+                                 (let [p (.start (ProcessBuilder. [cmd "--version"]))]
+                                   (zero? (.waitFor p)))
+                                 (catch Exception _ false))]
+              :when available?]
+          cmd)))
 
-     (defn- bb-resize
-       "Resize using pod-golang-image. Returns result map or nil."
+     (def ^:private magick-cmd (delay (find-magick-cmd)))
+
+     (defn- magick-resize
+       "Resize using ImageMagick. Returns {:data :media-type} or nil."
        [path opts]
-       (when (pod-available?)
-         ((resolve 'co.poyo.pod-golang-image/resize) (str path) opts)))
+       (when-let [cmd @magick-cmd]
+         (let [geom (cond
+                      (:max-edge opts)
+                      (str (:max-edge opts) "x" (:max-edge opts) ">")
 
-     (defn- bb-to-base64
-       "Encode to base64 using pod-golang-image. Returns result map or nil."
-       [path]
-       (when (pod-available?)
-         ((resolve 'co.poyo.pod-golang-image/to-base64) (str path))))))
+                      (and (:max-width opts) (:max-height opts))
+                      (str (:max-width opts) "x" (:max-height opts) ">")
+
+                      (:max-width opts)
+                      (str (:max-width opts) "x>")
+
+                      (:max-height opts)
+                      (str "x" (:max-height opts) ">"))
+               fmt  (or (:format opts)
+                        (let [ext (extension path)]
+                          (if (#{"jpg" "jpeg"} ext) "jpeg" "png")))
+               out-mime (if (= fmt "jpeg") "image/jpeg" "image/png")
+               args (if (= cmd "magick")
+                      [cmd (str path) "-resize" geom (str fmt ":-")]
+                      [cmd (str path) "-resize" geom (str fmt ":-")])
+               pb   (ProcessBuilder. ^java.util.List args)
+               proc (.start pb)
+               bs   (.readAllBytes (.getInputStream proc))
+               _    (.waitFor proc)]
+           (when (pos? (alength bs))
+             {:data       (bytes->base64 bs)
+              :media-type out-mime}))))
+
+     (defn- bb-resize [path opts]
+       (or (magick-resize path opts)
+           (do (binding [*out* *err*]
+                 (println "clj-llm: ImageMagick not found, sending image at original size."
+                          "Install with: apt install imagemagick / brew install imagemagick"))
+               nil)))))
 
 ;; Stub jvm-resize for bb so the unified dispatch compiles
 #?(:bb (defn- jvm-resize [_ _] nil))
@@ -175,11 +203,9 @@
 (defn- encode-image
   "Encode an image file to base64 without resizing. Returns {:data :media-type}."
   [path]
-  (or #?(:bb  (bb-to-base64 path)
-         :clj nil)
-      (let [bs (slurp-bytes path)]
-        {:data       (bytes->base64 bs)
-         :media-type (or (mime-from-path path) "image/png")})))
+  (let [bs (slurp-bytes path)]
+    {:data       (bytes->base64 bs)
+     :media-type (or (mime-from-path path) "image/png")}))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Content part predicates
@@ -215,7 +241,7 @@
      :max-width  N  — scale so width ≤ N
      :max-height N  — scale so height ≤ N
      :format     \"png\"/\"jpeg\" — output format
-     :quality    85 — JPEG quality (pod only)
+     :quality    85 — JPEG quality
 
    (image \"photo.jpg\")                       ; file, as-is
    (image \"photo.jpg\" {:max-edge 1024})      ; file, resized
