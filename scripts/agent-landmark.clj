@@ -50,8 +50,11 @@
 
 (def opts
   {:max-steps     5
-   :system-prompt "You identify things in images and research them.
-                   Always use search_web to find facts — don't guess."
+   :system-prompt "You're an image research assistant. When given an image:
+                   1. Identify what's in it (landmark, object, scene, etc.)
+                   2. Search the web to find real facts about it
+                   3. Respond with what it is and 3 interesting facts
+                   Always use search_web — never guess at facts."
    :on-tool-calls (fn [{:keys [tool-calls]}]
                     (doseq [tc tool-calls]
                       (println "🛠️ " (:name tc) (:arguments tc))))
@@ -59,8 +62,7 @@
                      (println "  →" (subs (str result) 0 (min 120 (count (str result)))) "..."))})
 
 (defn ask [image-path-or-url]
-  (let [input ["What is this? Look it up and tell me 3 interesting facts."
-               (content/image image-path-or-url {:max-edge 512})]]
+  (let [input [(content/image image-path-or-url {:max-edge 512})]]
     (llm/run-agent ai [#'search-web] opts input)))
 
 ;; ── Main ──────────────────────────────────────────────────────────
