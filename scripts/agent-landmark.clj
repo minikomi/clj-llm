@@ -48,20 +48,17 @@
 
 ;; ── Agent ─────────────────────────────────────────────────────────
 
-(def landmark-agent
-  {:provider ai
-   :tools    [#'search-web]
-   :opts     {:max-steps     5
-              :system-prompt "You identify landmarks from images and research them.
-                              Always use search_web to find facts — don't guess."
-              :on-tool-calls (fn [{:keys [tool-calls]}]
-                               (doseq [tc tool-calls]
-                                 (println "🛠️ " (:name tc) (:arguments tc))))
-              :on-tool-result (fn [{:keys [result]}]
-                                (println "  →" (subs (str result) 0 (min 120 (count (str result)))) "..."))}})
-
-(defn ask [agent input]
-  (llm/run-agent (:provider agent) (:tools agent) (:opts agent) input))
+(defn ask [input]
+  (llm/run-agent ai [#'search-web]
+    {:max-steps     5
+     :system-prompt "You identify things in images and research them.
+                     Always use search_web to find facts — don't guess."
+     :on-tool-calls (fn [{:keys [tool-calls]}]
+                      (doseq [tc tool-calls]
+                        (println "🛠️ " (:name tc) (:arguments tc))))
+     :on-tool-result (fn [{:keys [result]}]
+                       (println "  →" (subs (str result) 0 (min 120 (count (str result)))) "..."))}
+    input))
 
 ;; ── Main ──────────────────────────────────────────────────────────
 
@@ -71,7 +68,6 @@
     (System/exit 1))
   (println "🏛️  Analyzing image...\n")
   (let [img    (content/image src {:max-edge 512})
-        result (ask landmark-agent
-                    ["What is this? Look it up and tell me 3 interesting facts." img])]
+        result (ask ["What is this? Look it up and tell me 3 interesting facts." img])]
     (println "\n---")
     (println (:text result))))
