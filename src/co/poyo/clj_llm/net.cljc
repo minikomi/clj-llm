@@ -4,6 +4,9 @@
                    (java.net URI)
                    (java.time Duration))))
 
+;; Prefer IPv4 — many hosts have broken IPv6 connectivity
+#?(:bb (System/setProperty "java.net.preferIPv4Stack" "true"))
+
 #?(:bb
    (defn post-stream
      "Blocking POST. Returns {:status int :body InputStream}.
