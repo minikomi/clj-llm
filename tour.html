@@ -229,6 +229,9 @@
   </style>
 </head>
 <body>
+<header id="title-block-header">
+<h1 class="title">A Tour of clj-llm</h1>
+</header>
 <h1 id="a-tour-of-clj-llm">A Tour of clj-llm</h1>
 <p>This walks through the library piece by piece. Every example is real
 code.</p>
@@ -290,6 +293,10 @@ maps</td>
 <tr class="even">
 <td>Conversations</td>
 <td><code>(generate ai history-vector)</code></td>
+</tr>
+<tr class="odd">
+<td>Images &amp; PDFs</td>
+<td><code>(generate ai ["describe" (content/image "photo.jpg")])</code></td>
 </tr>
 </tbody>
 </table>
@@ -476,82 +483,164 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb18-1"><a
 <span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>(chat! <span class="st">&quot;How about the second tallest?&quot;</span>)</span>
 <span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;K2, at 8,611 meters.&quot;</span></span></code></pre></div>
-<h2 id="defining-tools">9. Defining tools</h2>
+<h2 id="images-pdfs-and-attachments">9. Images, PDFs, and
+attachments</h2>
+<p>Pass images and documents alongside text using
+<code>content/image</code> and <code>content/pdf</code>:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.<span class="kw">content</span> <span class="at">:as</span> <span class="kw">content</span>])</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; Image from a file</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate ai [<span class="st">&quot;What&#39;s in this image?&quot;</span> (content/image <span class="st">&quot;photo.jpg&quot;</span>)]))</span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;A cat sleeping on a keyboard.&quot;</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="co">;; Image from a URL — passed by reference, model fetches it</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate ai [<span class="st">&quot;Describe this&quot;</span> (content/image <span class="st">&quot;https://example.com/chart.png&quot;</span>)]))</span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;A bar chart showing quarterly revenue...&quot;</span></span></code></pre></div>
+<p>The input vector mixes strings and content parts. Strings become text
+parts automatically.</p>
+<h3 id="resizing-images">Resizing images</h3>
+<p>LLM APIs charge by image size and have limits. Resize on the fly:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; Longest edge ≤ 512px (proportional)</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>(content/image <span class="st">&quot;huge-photo.jpg&quot;</span> {<span class="at">:max-edge</span> <span class="dv">512</span>})</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; Constrain width or height</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>(content/image <span class="st">&quot;wide.png&quot;</span> {<span class="at">:max-width</span> <span class="dv">800</span>})</span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>(content/image <span class="st">&quot;tall.png&quot;</span> {<span class="at">:max-height</span> <span class="dv">600</span>})</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; Output format and quality</span></span>
+<span id="cb20-9"><a href="#cb20-9" aria-hidden="true" tabindex="-1"></a>(content/image <span class="st">&quot;photo.png&quot;</span> {<span class="at">:max-edge</span> <span class="dv">1024</span> <span class="at">:format</span> <span class="st">&quot;jpeg&quot;</span> <span class="at">:quality</span> <span class="dv">85</span>})</span></code></pre></div>
+<p>Multiple constraints? The most restrictive wins. Images that already
+fit are not upscaled.</p>
+<p>On JVM Clojure, resizing uses <code>javax.imageio</code>. On
+babashka, it uses <a
+href="https://github.com/poyo-ai/pod-golang-image">pod-golang-image</a>
+(auto-detected from PATH or <code>~/pod-golang-image/</code>).</p>
+<p>URL images with resize opts are downloaded, resized, and sent as
+base64. Without resize opts, URLs pass through directly to the
+model.</p>
+<h3 id="pdfs">PDFs</h3>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; Anthropic has native PDF support</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate claude-ai [<span class="st">&quot;Summarize this invoice&quot;</span> (content/pdf <span class="st">&quot;invoice.pdf&quot;</span>)]))</span></code></pre></div>
+<h3 id="raw-bytes">Raw bytes</h3>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; From a byte array + explicit mime type</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>(content/image my-byte-array <span class="st">&quot;image/png&quot;</span>)</span></code></pre></div>
+<h3 id="how-it-works">How it works</h3>
+<p>Each constructor returns a content-part map:</p>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>(content/image <span class="st">&quot;cat.jpg&quot;</span>)</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:type :image :source :base64 :media-type &quot;image/jpeg&quot; :data &quot;iVBOR...&quot;}</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>(content/image <span class="st">&quot;https://example.com/cat.png&quot;</span>)</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:type :image :source :url :url &quot;https://example.com/cat.png&quot;}</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>(content/text <span class="st">&quot;describe this&quot;</span>)</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:type :text :text &quot;describe this&quot;}</span></span></code></pre></div>
+<p>When you pass a vector like
+<code>["describe this" (content/image "cat.jpg")]</code> as input,
+<code>generate</code> builds a multipart user message. Each backend
+serializes it to the provider’s format — OpenAI’s <code>image_url</code>
+content blocks, Anthropic’s <code>image</code>/<code>document</code>
+source blocks.</p>
+<p>You can also build multipart messages manually in conversation
+history:</p>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>[{<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> [(content/text <span class="st">&quot;What&#39;s this?&quot;</span>) (content/image <span class="st">&quot;photo.jpg&quot;</span>)]}</span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a> {<span class="at">:role</span> <span class="at">:assistant</span> <span class="at">:content</span> <span class="st">&quot;A cat on a keyboard.&quot;</span>}</span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a> {<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> <span class="st">&quot;What breed?&quot;</span>}]</span></code></pre></div>
+<h3 id="babashka-one-liner-rename-files-by-contents">Babashka one-liner:
+rename files by contents</h3>
+<div class="sourceCode" id="cb25"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="ex">bb</span> <span class="at">-e</span> <span class="st">&#39;(require (quote [co.poyo.clj-llm.core :as llm])</span></span>
+<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="st">         (quote [co.poyo.clj-llm.content :as c])</span></span>
+<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a><span class="st">         (quote [co.poyo.clj-llm.backends.openai :as openai])</span></span>
+<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a><span class="st">         (quote [babashka.fs :as fs]))</span></span>
+<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a><span class="st">  (def ai (assoc (openai/backend {:api-key-fn #(System/getenv &quot;OPENROUTER_KEY&quot;)</span></span>
+<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a><span class="st">                                   :api-base &quot;https://openrouter.ai/api/v1&quot;})</span></span>
+<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a><span class="st">                 :defaults {:model &quot;openai/gpt-4o-mini&quot;}))</span></span>
+<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a><span class="st">  (doseq [f (fs/glob &quot;.&quot; &quot;*.png&quot;)]</span></span>
+<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a><span class="st">    (let [n (:text (llm/generate ai {:system-prompt &quot;Short descriptive filename only, no extension, lowercase hyphens&quot;}</span></span>
+<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a><span class="st">                     [&quot;Name this&quot; (c/image (str f) {:max-edge 512})]))] </span></span>
+<span id="cb25-11"><a href="#cb25-11" aria-hidden="true" tabindex="-1"></a><span class="st">      (println f &quot;-&gt;&quot; n) (fs/move f (str n &quot;.png&quot;))))&#39;</span></span></code></pre></div>
+<h2 id="defining-tools">10. Defining tools</h2>
 <p>Tools are plain functions with standard <a
 href="https://github.com/metosin/malli/blob/master/docs/function-schemas.md">Malli
 function schemas</a>. The <code>:malli/schema</code> metadata tells the
 LLM what the tool does and what arguments it takes:</p>
-<div class="sourceCode" id="cb19"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[cheshire.core <span class="at">:as</span> json])</span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; Geocode: city name → coordinates (free Open-Meteo API, no key needed)</span></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> geocode</span></span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;geocode&quot;</span></span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Look up latitude and longitude for a city&quot;</span>}</span>
-<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:city</span> {<span class="at">:description</span> <span class="st">&quot;City name&quot;</span>} <span class="at">:string</span>]]]</span>
-<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a>                      [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:country</span> <span class="at">:string</span>]</span>
-<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a>                            [<span class="at">:latitude</span> <span class="at">:double</span>] [<span class="at">:longitude</span> <span class="at">:double</span>]]]}</span>
-<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [city]}]</span>
-<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [geo (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://geocoding-api.open-meteo.com/v1/search?name=&quot;</span></span>
-<span id="cb19-12"><a href="#cb19-12" aria-hidden="true" tabindex="-1"></a>                            (java.net.URLEncoder/encode city <span class="st">&quot;UTF-8&quot;</span>) <span class="st">&quot;&amp;count=1&quot;</span>))</span>
-<span id="cb19-13"><a href="#cb19-13" aria-hidden="true" tabindex="-1"></a>                (json/parse-string <span class="va">true</span>))</span>
-<span id="cb19-14"><a href="#cb19-14" aria-hidden="true" tabindex="-1"></a>        loc (<span class="kw">first</span> (<span class="at">:results</span> geo))]</span>
-<span id="cb19-15"><a href="#cb19-15" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">select-keys</span> loc [<span class="at">:name</span> <span class="at">:country</span> <span class="at">:latitude</span> <span class="at">:longitude</span>]))))</span>
-<span id="cb19-16"><a href="#cb19-16" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-17"><a href="#cb19-17" aria-hidden="true" tabindex="-1"></a><span class="co">;; Weather: coordinates → current conditions</span></span>
-<span id="cb19-18"><a href="#cb19-18" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather</span></span>
-<span id="cb19-19"><a href="#cb19-19" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
-<span id="cb19-20"><a href="#cb19-20" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Get current weather at a location. Call geocode first to get coordinates.&quot;</span>}</span>
-<span id="cb19-21"><a href="#cb19-21" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:latitude</span> {<span class="at">:description</span> <span class="st">&quot;Latitude&quot;</span>} <span class="at">:double</span>]</span>
-<span id="cb19-22"><a href="#cb19-22" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:longitude</span> {<span class="at">:description</span> <span class="st">&quot;Longitude&quot;</span>} <span class="at">:double</span>]]]</span>
-<span id="cb19-23"><a href="#cb19-23" aria-hidden="true" tabindex="-1"></a>                      <span class="at">:string</span>]}</span>
-<span id="cb19-24"><a href="#cb19-24" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [latitude longitude]}]</span>
-<span id="cb19-25"><a href="#cb19-25" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [wx (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://api.open-meteo.com/v1/jma?latitude=&quot;</span> latitude</span>
-<span id="cb19-26"><a href="#cb19-26" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;longitude=&quot;</span> longitude</span>
-<span id="cb19-27"><a href="#cb19-27" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;current=temperature_2m,weather_code,wind_speed_10m&quot;</span></span>
-<span id="cb19-28"><a href="#cb19-28" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;timezone=auto&quot;</span>))</span>
-<span id="cb19-29"><a href="#cb19-29" aria-hidden="true" tabindex="-1"></a>               (json/parse-string <span class="va">true</span>))]</span>
-<span id="cb19-30"><a href="#cb19-30" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [c (<span class="at">:current</span> wx)]</span>
-<span id="cb19-31"><a href="#cb19-31" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">str</span> (<span class="at">:temperature</span>_2m c) <span class="st">&quot;°C, wind &quot;</span> (<span class="at">:wind</span>_speed_10m c) <span class="st">&quot; km/h&quot;</span>))))</span></code></pre></div>
+<div class="sourceCode" id="cb26"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[cheshire.core <span class="at">:as</span> json])</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; Geocode: city name → coordinates (free Open-Meteo API, no key needed)</span></span>
+<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> geocode</span></span>
+<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;geocode&quot;</span></span>
+<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Look up latitude and longitude for a city&quot;</span>}</span>
+<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:city</span> {<span class="at">:description</span> <span class="st">&quot;City name&quot;</span>} <span class="at">:string</span>]]]</span>
+<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a>                      [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:country</span> <span class="at">:string</span>]</span>
+<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a>                            [<span class="at">:latitude</span> <span class="at">:double</span>] [<span class="at">:longitude</span> <span class="at">:double</span>]]]}</span>
+<span id="cb26-10"><a href="#cb26-10" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [city]}]</span>
+<span id="cb26-11"><a href="#cb26-11" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [geo (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://geocoding-api.open-meteo.com/v1/search?name=&quot;</span></span>
+<span id="cb26-12"><a href="#cb26-12" aria-hidden="true" tabindex="-1"></a>                            (java.net.URLEncoder/encode city <span class="st">&quot;UTF-8&quot;</span>) <span class="st">&quot;&amp;count=1&quot;</span>))</span>
+<span id="cb26-13"><a href="#cb26-13" aria-hidden="true" tabindex="-1"></a>                (json/parse-string <span class="va">true</span>))</span>
+<span id="cb26-14"><a href="#cb26-14" aria-hidden="true" tabindex="-1"></a>        loc (<span class="kw">first</span> (<span class="at">:results</span> geo))]</span>
+<span id="cb26-15"><a href="#cb26-15" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">select-keys</span> loc [<span class="at">:name</span> <span class="at">:country</span> <span class="at">:latitude</span> <span class="at">:longitude</span>]))))</span>
+<span id="cb26-16"><a href="#cb26-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb26-17"><a href="#cb26-17" aria-hidden="true" tabindex="-1"></a><span class="co">;; Weather: coordinates → current conditions</span></span>
+<span id="cb26-18"><a href="#cb26-18" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather</span></span>
+<span id="cb26-19"><a href="#cb26-19" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:malli/schema</span> [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
+<span id="cb26-20"><a href="#cb26-20" aria-hidden="true" tabindex="-1"></a>                                   <span class="at">:description</span> <span class="st">&quot;Get current weather at a location. Call geocode first to get coordinates.&quot;</span>}</span>
+<span id="cb26-21"><a href="#cb26-21" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:latitude</span> {<span class="at">:description</span> <span class="st">&quot;Latitude&quot;</span>} <span class="at">:double</span>]</span>
+<span id="cb26-22"><a href="#cb26-22" aria-hidden="true" tabindex="-1"></a>                             [<span class="at">:longitude</span> {<span class="at">:description</span> <span class="st">&quot;Longitude&quot;</span>} <span class="at">:double</span>]]]</span>
+<span id="cb26-23"><a href="#cb26-23" aria-hidden="true" tabindex="-1"></a>                      <span class="at">:string</span>]}</span>
+<span id="cb26-24"><a href="#cb26-24" aria-hidden="true" tabindex="-1"></a>  [{<span class="at">:keys</span> [latitude longitude]}]</span>
+<span id="cb26-25"><a href="#cb26-25" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [wx (<span class="kw">-&gt;</span> (<span class="kw">slurp</span> (<span class="kw">str</span> <span class="st">&quot;https://api.open-meteo.com/v1/jma?latitude=&quot;</span> latitude</span>
+<span id="cb26-26"><a href="#cb26-26" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;longitude=&quot;</span> longitude</span>
+<span id="cb26-27"><a href="#cb26-27" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;current=temperature_2m,weather_code,wind_speed_10m&quot;</span></span>
+<span id="cb26-28"><a href="#cb26-28" aria-hidden="true" tabindex="-1"></a>                           <span class="st">&quot;&amp;timezone=auto&quot;</span>))</span>
+<span id="cb26-29"><a href="#cb26-29" aria-hidden="true" tabindex="-1"></a>               (json/parse-string <span class="va">true</span>))]</span>
+<span id="cb26-30"><a href="#cb26-30" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [c (<span class="at">:current</span> wx)]</span>
+<span id="cb26-31"><a href="#cb26-31" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">str</span> (<span class="at">:temperature</span>_2m c) <span class="st">&quot;°C, wind &quot;</span> (<span class="at">:wind</span>_speed_10m c) <span class="st">&quot; km/h&quot;</span>))))</span></code></pre></div>
 <p>Tools are regular Clojure functions. Call them directly, test them,
 compose them:</p>
-<div class="sourceCode" id="cb20"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>(geocode {<span class="at">:city</span> <span class="st">&quot;Tokyo&quot;</span>})</span>
-<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Tokyo&quot; :country &quot;Japan&quot; :latitude 35.6895 :longitude 139.69171}</span></span>
-<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>(get-weather {<span class="at">:latitude</span> <span class="fl">35.6895</span> <span class="at">:longitude</span> <span class="fl">139.6917</span>})</span>
-<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;20.1°C, wind 7.6 km/h&quot;</span></span></code></pre></div>
+<div class="sourceCode" id="cb27"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>(geocode {<span class="at">:city</span> <span class="st">&quot;Tokyo&quot;</span>})</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Tokyo&quot; :country &quot;Japan&quot; :latitude 35.6895 :longitude 139.69171}</span></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>(get-weather {<span class="at">:latitude</span> <span class="fl">35.6895</span> <span class="at">:longitude</span> <span class="fl">139.6917</span>})</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; &quot;20.1°C, wind 7.6 km/h&quot;</span></span></code></pre></div>
 <p>Schemas live in var metadata — standard Malli, nothing custom:</p>
-<div class="sourceCode" id="cb21"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>(<span class="at">:malli/schema</span> (<span class="kw">meta</span> <span class="va">#&#39;geocode</span>))</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; [:=&gt; [:cat [:map {:name &quot;geocode&quot; ...} ...]] :string]</span></span></code></pre></div>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>(<span class="at">:malli/schema</span> (<span class="kw">meta</span> <span class="va">#&#39;geocode</span>))</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; [:=&gt; [:cat [:map {:name &quot;geocode&quot; ...} ...]] :string]</span></span></code></pre></div>
 <p>All three standard Malli approaches work. You can also use
 <code>m/=&gt;</code> to keep the schema separate:</p>
-<div class="sourceCode" id="cb22"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather </span>[{<span class="at">:keys</span> [city]}] (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> city))</span>
-<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>(m/=&gt; get-weather [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
-<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>                                    <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
-<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>                              [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
-<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:string</span>])</span></code></pre></div>
+<div class="sourceCode" id="cb29"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> get-weather </span>[{<span class="at">:keys</span> [city]}] (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> city))</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>(m/=&gt; get-weather [:=&gt; [<span class="at">:cat</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>                                    <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a>                              [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:string</span>])</span></code></pre></div>
 <p>Or <code>mx/defn</code> for inline schema hints:</p>
-<div class="sourceCode" id="cb23"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[malli.experimental <span class="at">:as</span> mx])</span>
-<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>(mx/defn get-weather <span class="at">:-</span> <span class="at">:string</span></span>
-<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  [args <span class="at">:-</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span> <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
-<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>             [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
-<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> (<span class="at">:city</span> args)))</span></code></pre></div>
-<h2 id="single-turn-tool-calls-with-generate">10. Single-turn tool calls
+<div class="sourceCode" id="cb30"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[malli.experimental <span class="at">:as</span> mx])</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>(mx/defn get-weather <span class="at">:-</span> <span class="at">:string</span></span>
+<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a>  [args <span class="at">:-</span> [<span class="at">:map</span> {<span class="at">:name</span> <span class="st">&quot;get_weather&quot;</span> <span class="at">:description</span> <span class="st">&quot;Get weather&quot;</span>}</span>
+<span id="cb30-5"><a href="#cb30-5" aria-hidden="true" tabindex="-1"></a>             [<span class="at">:city</span> <span class="at">:string</span>]]]</span>
+<span id="cb30-6"><a href="#cb30-6" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">str</span> <span class="st">&quot;Sunny in &quot;</span> (<span class="at">:city</span> args)))</span></code></pre></div>
+<h2 id="single-turn-tool-calls-with-generate">11. Single-turn tool calls
 with <code>generate</code></h2>
 <p>Pass <code>:tools</code> to <code>generate</code> for a single LLM
 call with tool access. The model decides whether to call tools. If it
 does, <code>generate</code> executes them and returns everything:</p>
-<div class="sourceCode" id="cb24"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]} <span class="st">&quot;What&#39;s the weather in Tokyo?&quot;</span>)</span>
-<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text nil</span></span>
-<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-calls [{:id &quot;call_abc&quot; :name &quot;geocode&quot; :arguments {:city &quot;Tokyo&quot;}}]</span></span>
-<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-results [&quot;{\&quot;name\&quot;:\&quot;Tokyo\&quot;,...}&quot;]  ;; auto-serialized to JSON</span></span>
-<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :usage {...}}</span></span></code></pre></div>
+<div class="sourceCode" id="cb31"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]} <span class="st">&quot;What&#39;s the weather in Tokyo?&quot;</span>)</span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text nil</span></span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-calls [{:id &quot;call_abc&quot; :name &quot;geocode&quot; :arguments {:city &quot;Tokyo&quot;}}]</span></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-results [&quot;{\&quot;name\&quot;:\&quot;Tokyo\&quot;,...}&quot;]  ;; auto-serialized to JSON</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :usage {...}}</span></span></code></pre></div>
 <p>When tools are configured, <code>generate</code> always returns a map
 with these keys:</p>
 <ul>
@@ -563,32 +652,32 @@ calls (often <code>nil</code>)</li>
 tool call</li>
 </ul>
 <p>If the model decides no tools are needed, you get empty vectors:</p>
-<div class="sourceCode" id="cb25"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]} <span class="st">&quot;What is 2 + 2?&quot;</span>)</span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text &quot;2 + 2 = 4&quot; :tool-calls [] :tool-results [] :usage {...}}</span></span></code></pre></div>
+<div class="sourceCode" id="cb32"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]} <span class="st">&quot;What is 2 + 2?&quot;</span>)</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text &quot;2 + 2 = 4&quot; :tool-calls [] :tool-results [] :usage {...}}</span></span></code></pre></div>
 <p>This is one LLM call. The model sees the tools, optionally calls
 them, and you get back data. No loops, no agents.</p>
-<h2 id="multi-turn-agents-with-run-agent">11. Multi-turn agents with
+<h2 id="multi-turn-agents-with-run-agent">12. Multi-turn agents with
 <code>run-agent</code></h2>
 <p><code>run-agent</code> is the autonomous loop. It calls the LLM,
 executes tools, feeds results back, and repeats until the model stops
 calling tools.</p>
-<div class="sourceCode" id="cb26"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>] <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
-<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 1: LLM calls geocode({:city &quot;Tokyo&quot;}) → coordinates</span></span>
-<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 2: LLM calls get-weather({:latitude 35.69 :longitude 139.69}) → conditions</span></span>
-<span id="cb26-4"><a href="#cb26-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 3: LLM produces final answer</span></span>
-<span id="cb26-5"><a href="#cb26-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text    &quot;It&#39;s currently 20.1°C in Tokyo with light wind.&quot;</span></span>
-<span id="cb26-6"><a href="#cb26-6" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]</span></span>
-<span id="cb26-7"><a href="#cb26-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps   [{:tool-calls [...] :tool-results [...]}</span></span>
-<span id="cb26-8"><a href="#cb26-8" aria-hidden="true" tabindex="-1"></a><span class="co">;;              {:tool-calls [...] :tool-results [...]}]</span></span>
-<span id="cb26-9"><a href="#cb26-9" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :usage   {:prompt-tokens ... :completion-tokens ...}}</span></span></code></pre></div>
+<div class="sourceCode" id="cb33"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>] <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 1: LLM calls geocode({:city &quot;Tokyo&quot;}) → coordinates</span></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 2: LLM calls get-weather({:latitude 35.69 :longitude 139.69}) → conditions</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 3: LLM produces final answer</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text    &quot;It&#39;s currently 20.1°C in Tokyo with light wind.&quot;</span></span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [{:role :user ...} {:role :assistant ...} {:role :tool ...} ...]</span></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps   [{:tool-calls [...] :tool-results [...]}</span></span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a><span class="co">;;              {:tool-calls [...] :tool-results [...]}]</span></span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :usage   {:prompt-tokens ... :completion-tokens ...}}</span></span></code></pre></div>
 <p><code>:text</code> is the final answer. <code>:history</code> is the
 full conversation (reusable). <code>:steps</code> records each
 tool-calling iteration.</p>
 <p>Options go between tools and input:</p>
-<div class="sourceCode" id="cb27"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>] {<span class="at">:max-steps</span> <span class="dv">3</span>} <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb34"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>] {<span class="at">:max-steps</span> <span class="dv">3</span>} <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
 <h3 id="controlling-when-the-agent-stops">Controlling when the agent
 stops</h3>
 <p>By default, the loop stops when the model returns no tool calls —
@@ -596,16 +685,16 @@ it’s done.</p>
 <p>Use <code>:stop-when</code> for explicit control. It’s a predicate
 called after each LLM response, before tools are executed. Return truthy
 to stop:</p>
-<div class="sourceCode" id="cb28"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; Stop when the model calls a &quot;done&quot; tool</span></span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;research</span> <span class="va">#&#39;done</span>]</span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:stop-when</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [tool-calls]}]</span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>                (<span class="kw">some</span> #(<span class="kw">=</span> <span class="st">&quot;done&quot;</span> (<span class="at">:name</span> <span class="va">%</span>)) tool-calls))}</span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Research quantum computing&quot;</span>)</span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text &quot;...&quot;</span></span>
-<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-calls [{:name &quot;done&quot; :arguments {:summary &quot;...&quot;}}]  ;; pending, not executed</span></span>
-<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps [...]</span></span>
-<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [...]}</span></span></code></pre></div>
+<div class="sourceCode" id="cb35"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; Stop when the model calls a &quot;done&quot; tool</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;research</span> <span class="va">#&#39;done</span>]</span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:stop-when</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [tool-calls]}]</span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>                (<span class="kw">some</span> #(<span class="kw">=</span> <span class="st">&quot;done&quot;</span> (<span class="at">:name</span> <span class="va">%</span>)) tool-calls))}</span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Research quantum computing&quot;</span>)</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:text &quot;...&quot;</span></span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :tool-calls [{:name &quot;done&quot; :arguments {:summary &quot;...&quot;}}]  ;; pending, not executed</span></span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :steps [...]</span></span>
+<span id="cb35-9"><a href="#cb35-9" aria-hidden="true" tabindex="-1"></a><span class="co">;;     :history [...]}</span></span></code></pre></div>
 <p>The predicate receives <code>{:tool-calls [...] :text "..."}</code>.
 When <code>:stop-when</code> fires, pending tool calls are returned in
 <code>:tool-calls</code> on the result — they were not executed.</p>
@@ -615,95 +704,95 @@ When <code>:stop-when</code> fires, pending tool calls are returned in
 use</h3>
 <p>For structured output after tool use, compose with
 <code>generate</code>:</p>
-<div class="sourceCode" id="cb29"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [{<span class="at">:keys</span> [history]} (llm/run-agent ai [<span class="va">#&#39;lookup</span>] <span class="st">&quot;Look up user 123&quot;</span>)]</span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  (<span class="at">:structured</span> (llm/generate ai {<span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:status</span> <span class="at">:string</span>]]} history)))</span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Alice&quot; :status &quot;active&quot;}</span></span></code></pre></div>
+<div class="sourceCode" id="cb36"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [{<span class="at">:keys</span> [history]} (llm/run-agent ai [<span class="va">#&#39;lookup</span>] <span class="st">&quot;Look up user 123&quot;</span>)]</span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>  (<span class="at">:structured</span> (llm/generate ai {<span class="at">:schema</span> [<span class="at">:map</span> [<span class="at">:name</span> <span class="at">:string</span>] [<span class="at">:status</span> <span class="at">:string</span>]]} history)))</span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:name &quot;Alice&quot; :status &quot;active&quot;}</span></span></code></pre></div>
 <p>This keeps <code>run-agent</code> focused on the tool loop and
 <code>generate</code> as the single place structured extraction
 happens.</p>
-<h2 id="observing-the-agent">12. Observing the agent</h2>
+<h2 id="observing-the-agent">13. Observing the agent</h2>
 <p><code>run-agent</code> accepts callback hooks for real-time
 visibility into what the agent is doing. All are optional.</p>
 <h3 id="on-text-streaming-text-as-it-arrives"><code>:on-text</code> —
 streaming text as it arrives</h3>
 <p>Called for each text chunk as the LLM streams its response. Use for
 live typing display:</p>
-<div class="sourceCode" id="cb30"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
-<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-text</span> (<span class="kw">fn</span> [<span class="kw">chunk</span>] (<span class="kw">print</span> <span class="kw">chunk</span>) (<span class="kw">flush</span>))}</span>
-<span id="cb30-3"><a href="#cb30-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
-<span id="cb30-4"><a href="#cb30-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; prints text as it streams, character by character</span></span></code></pre></div>
+<div class="sourceCode" id="cb37"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-text</span> (<span class="kw">fn</span> [<span class="kw">chunk</span>] (<span class="kw">print</span> <span class="kw">chunk</span>) (<span class="kw">flush</span>))}</span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; prints text as it streams, character by character</span></span></code></pre></div>
 <h3 id="on-tool-calls-before-tool-execution"><code>:on-tool-calls</code>
 — before tool execution</h3>
 <p>Called when the model returns tool calls, before they are executed.
 Good for logging or UI updates:</p>
-<div class="sourceCode" id="cb31"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
-<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-tool-calls</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [step tool-calls text]}]</span>
-<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a>                    (<span class="kw">println</span> <span class="st">&quot;Step&quot;</span> step <span class="st">&quot;- calling:&quot;</span> (<span class="kw">mapv</span> <span class="at">:name</span> tool-calls)))}</span>
-<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
-<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 0 - calling: [&quot;geocode&quot;]</span></span>
-<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 1 - calling: [&quot;get_weather&quot;]</span></span></code></pre></div>
+<div class="sourceCode" id="cb38"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
+<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-tool-calls</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [step tool-calls text]}]</span>
+<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>                    (<span class="kw">println</span> <span class="st">&quot;Step&quot;</span> step <span class="st">&quot;- calling:&quot;</span> (<span class="kw">mapv</span> <span class="at">:name</span> tool-calls)))}</span>
+<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
+<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 0 - calling: [&quot;geocode&quot;]</span></span>
+<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a><span class="co">;; Step 1 - calling: [&quot;get_weather&quot;]</span></span></code></pre></div>
 <h3
 id="on-tool-result-after-each-tool-finishes"><code>:on-tool-result</code>
 — after each tool finishes</h3>
 <p>Called once per tool call, after execution. Includes the result (or
 error):</p>
-<div class="sourceCode" id="cb32"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
-<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-tool-result</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [step tool-call result error]}]</span>
-<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>                     (<span class="kw">if</span> error</span>
-<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>                       (<span class="kw">println</span> <span class="st">&quot;  ✗&quot;</span> (<span class="at">:name</span> tool-call) <span class="st">&quot;failed:&quot;</span> (.getMessage error))</span>
-<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>                       (<span class="kw">println</span> <span class="st">&quot;  ✓&quot;</span> (<span class="at">:name</span> tool-call) <span class="st">&quot;→&quot;</span> result)))}</span>
-<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
-<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;   ✓ geocode → {:name &quot;Tokyo&quot;, :country &quot;Japan&quot;, ...}</span></span>
-<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a><span class="co">;;   ✓ get_weather → 20.1°C, wind 7.6 km/h</span></span></code></pre></div>
+<div class="sourceCode" id="cb39"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-tool-result</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [step tool-call result error]}]</span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>                     (<span class="kw">if</span> error</span>
+<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a>                       (<span class="kw">println</span> <span class="st">&quot;  ✗&quot;</span> (<span class="at">:name</span> tool-call) <span class="st">&quot;failed:&quot;</span> (.getMessage error))</span>
+<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a>                       (<span class="kw">println</span> <span class="st">&quot;  ✓&quot;</span> (<span class="at">:name</span> tool-call) <span class="st">&quot;→&quot;</span> result)))}</span>
+<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span>
+<span id="cb39-7"><a href="#cb39-7" aria-hidden="true" tabindex="-1"></a><span class="co">;;   ✓ geocode → {:name &quot;Tokyo&quot;, :country &quot;Japan&quot;, ...}</span></span>
+<span id="cb39-8"><a href="#cb39-8" aria-hidden="true" tabindex="-1"></a><span class="co">;;   ✓ get_weather → 20.1°C, wind 7.6 km/h</span></span></code></pre></div>
 <h3 id="combining-callbacks">Combining callbacks</h3>
 <p>Use all three together for a full trace:</p>
-<div class="sourceCode" id="cb33"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
-<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-text</span>        (<span class="kw">fn</span> [<span class="kw">chunk</span>] (<span class="kw">print</span> <span class="kw">chunk</span>) (<span class="kw">flush</span>))</span>
-<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>   <span class="at">:on-tool-calls</span>  (<span class="kw">fn</span> [{<span class="at">:keys</span> [step tool-calls]}]</span>
-<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>                     (<span class="kw">println</span> <span class="st">&quot;</span><span class="sc">\n</span><span class="st">🔧 Step&quot;</span> step (<span class="kw">mapv</span> <span class="at">:name</span> tool-calls)))</span>
-<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>   <span class="at">:on-tool-result</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [tool-call result]}]</span>
-<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a>                     (<span class="kw">println</span> <span class="st">&quot;  →&quot;</span> (<span class="at">:name</span> tool-call) result))}</span>
-<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb40"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a>(llm/run-agent ai [<span class="va">#&#39;geocode</span> <span class="va">#&#39;get-weather</span>]</span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:on-text</span>        (<span class="kw">fn</span> [<span class="kw">chunk</span>] (<span class="kw">print</span> <span class="kw">chunk</span>) (<span class="kw">flush</span>))</span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>   <span class="at">:on-tool-calls</span>  (<span class="kw">fn</span> [{<span class="at">:keys</span> [step tool-calls]}]</span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>                     (<span class="kw">println</span> <span class="st">&quot;</span><span class="sc">\n</span><span class="st">🔧 Step&quot;</span> step (<span class="kw">mapv</span> <span class="at">:name</span> tool-calls)))</span>
+<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>   <span class="at">:on-tool-result</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [tool-call result]}]</span>
+<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>                     (<span class="kw">println</span> <span class="st">&quot;  →&quot;</span> (<span class="at">:name</span> tool-call) result))}</span>
+<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>  <span class="st">&quot;Weather in Tokyo?&quot;</span>)</span></code></pre></div>
 <p>Callback order is guaranteed: <code>on-text</code> during streaming →
 <code>on-tool-calls</code> once → <code>on-tool-result</code> per
 tool.</p>
-<h2 id="manual-tool-result-messages">13. Manual tool result
+<h2 id="manual-tool-result-messages">14. Manual tool result
 messages</h2>
 <p>The <code>tool-result</code> helper creates tool result messages for
 feeding back into history manually. This is useful when you want to
 execute tools yourself instead of letting <code>generate</code> or
 <code>run-agent</code> do it:</p>
-<div class="sourceCode" id="cb34"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>(llm/tool-result <span class="st">&quot;call_abc&quot;</span> <span class="st">&quot;Sunny, 22°C&quot;</span>)</span>
-<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:role :tool :tool-call-id &quot;call_abc&quot; :content &quot;Sunny, 22°C&quot;}</span></span></code></pre></div>
+<div class="sourceCode" id="cb41"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a>(llm/tool-result <span class="st">&quot;call_abc&quot;</span> <span class="st">&quot;Sunny, 22°C&quot;</span>)</span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:role :tool :tool-call-id &quot;call_abc&quot; :content &quot;Sunny, 22°C&quot;}</span></span></code></pre></div>
 <p>Non-string values are automatically JSON-encoded:</p>
-<div class="sourceCode" id="cb35"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a>(llm/tool-result <span class="st">&quot;call_abc&quot;</span> {<span class="at">:name</span> <span class="st">&quot;Tokyo&quot;</span> <span class="at">:latitude</span> <span class="fl">35.69</span>})</span>
-<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:role :tool :tool-call-id &quot;call_abc&quot; :content &quot;{\&quot;name\&quot;:\&quot;Tokyo\&quot;,...}&quot;}</span></span></code></pre></div>
+<div class="sourceCode" id="cb42"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a>(llm/tool-result <span class="st">&quot;call_abc&quot;</span> {<span class="at">:name</span> <span class="st">&quot;Tokyo&quot;</span> <span class="at">:latitude</span> <span class="fl">35.69</span>})</span>
+<span id="cb42-2"><a href="#cb42-2" aria-hidden="true" tabindex="-1"></a><span class="co">;; =&gt; {:role :tool :tool-call-id &quot;call_abc&quot; :content &quot;{\&quot;name\&quot;:\&quot;Tokyo\&quot;,...}&quot;}</span></span></code></pre></div>
 <p>Use it to build manual tool-calling workflows when
 <code>run-agent</code> doesn’t fit:</p>
-<div class="sourceCode" id="cb36"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; 1. Get tool calls from the model</span></span>
-<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> result </span>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;geocode</span>]} <span class="st">&quot;Where is Tokyo?&quot;</span>))</span>
-<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; 2. Execute yourself, build result messages</span></span>
-<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> tool-msgs</span></span>
-<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">mapv</span> (<span class="kw">fn</span> [tc]</span>
-<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>          (<span class="kw">let</span> [output (geocode (<span class="at">:arguments</span> tc))]</span>
-<span id="cb36-8"><a href="#cb36-8" aria-hidden="true" tabindex="-1"></a>            (llm/tool-result (<span class="at">:id</span> tc) output)))</span>
-<span id="cb36-9"><a href="#cb36-9" aria-hidden="true" tabindex="-1"></a>        (<span class="at">:tool-calls</span> result)))</span>
-<span id="cb36-10"><a href="#cb36-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb36-11"><a href="#cb36-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; 3. Continue the conversation with tool results</span></span>
-<span id="cb36-12"><a href="#cb36-12" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> history </span>(<span class="kw">into</span> [{<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> <span class="st">&quot;Where is Tokyo?&quot;</span>}</span>
-<span id="cb36-13"><a href="#cb36-13" aria-hidden="true" tabindex="-1"></a>                    {<span class="at">:role</span> <span class="at">:assistant</span> <span class="at">:tool-calls</span> (<span class="at">:tool-calls</span> result)}]</span>
-<span id="cb36-14"><a href="#cb36-14" aria-hidden="true" tabindex="-1"></a>                   tool-msgs))</span>
-<span id="cb36-15"><a href="#cb36-15" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate ai history))</span></code></pre></div>
-<h2 id="generate-vs-run-agent">14. <code>generate</code> vs
+<div class="sourceCode" id="cb43"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a><span class="co">;; 1. Get tool calls from the model</span></span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> result </span>(llm/generate ai {<span class="at">:tools</span> [<span class="va">#&#39;geocode</span>]} <span class="st">&quot;Where is Tokyo?&quot;</span>))</span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a><span class="co">;; 2. Execute yourself, build result messages</span></span>
+<span id="cb43-5"><a href="#cb43-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> tool-msgs</span></span>
+<span id="cb43-6"><a href="#cb43-6" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">mapv</span> (<span class="kw">fn</span> [tc]</span>
+<span id="cb43-7"><a href="#cb43-7" aria-hidden="true" tabindex="-1"></a>          (<span class="kw">let</span> [output (geocode (<span class="at">:arguments</span> tc))]</span>
+<span id="cb43-8"><a href="#cb43-8" aria-hidden="true" tabindex="-1"></a>            (llm/tool-result (<span class="at">:id</span> tc) output)))</span>
+<span id="cb43-9"><a href="#cb43-9" aria-hidden="true" tabindex="-1"></a>        (<span class="at">:tool-calls</span> result)))</span>
+<span id="cb43-10"><a href="#cb43-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb43-11"><a href="#cb43-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; 3. Continue the conversation with tool results</span></span>
+<span id="cb43-12"><a href="#cb43-12" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> history </span>(<span class="kw">into</span> [{<span class="at">:role</span> <span class="at">:user</span> <span class="at">:content</span> <span class="st">&quot;Where is Tokyo?&quot;</span>}</span>
+<span id="cb43-13"><a href="#cb43-13" aria-hidden="true" tabindex="-1"></a>                    {<span class="at">:role</span> <span class="at">:assistant</span> <span class="at">:tool-calls</span> (<span class="at">:tool-calls</span> result)}]</span>
+<span id="cb43-14"><a href="#cb43-14" aria-hidden="true" tabindex="-1"></a>                   tool-msgs))</span>
+<span id="cb43-15"><a href="#cb43-15" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate ai history))</span></code></pre></div>
+<h2 id="generate-vs-run-agent">15. <code>generate</code> vs
 <code>run-agent</code></h2>
 <table>
 <colgroup>
@@ -754,94 +843,94 @@ class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb36-1"><a
 </table>
 <p><code>generate</code> is the workhorse. <code>run-agent</code> is for
 when the model needs to drive.</p>
-<h2 id="raw-event-stream">15. Raw event stream</h2>
+<h2 id="raw-event-stream">16. Raw event stream</h2>
 <p><code>events</code> returns a <code>core.async</code> channel of raw
 provider events. Use it when you need fine-grained control over the
 stream:</p>
-<div class="sourceCode" id="cb37"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[clojure.core.async <span class="at">:refer</span> [&lt;!!]])</span>
-<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 5&quot;</span>)]</span>
-<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
-<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [event (&lt;!! ch)]</span>
-<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> (<span class="at">:type</span> event) (<span class="kw">dissoc</span> event <span class="at">:type</span>))</span>
-<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">recur</span>))))</span>
-<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:content &quot;1&quot;}</span></span>
-<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:content &quot;, 2&quot;}</span></span>
-<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; ...</span></span>
-<span id="cb37-11"><a href="#cb37-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; :usage {:prompt-tokens 10 :completion-tokens 20 ...}</span></span>
-<span id="cb37-12"><a href="#cb37-12" aria-hidden="true" tabindex="-1"></a><span class="co">;; :done {}</span></span></code></pre></div>
+<div class="sourceCode" id="cb44"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[clojure.core.async <span class="at">:refer</span> [&lt;!!]])</span>
+<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 5&quot;</span>)]</span>
+<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
+<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [event (&lt;!! ch)]</span>
+<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> (<span class="at">:type</span> event) (<span class="kw">dissoc</span> event <span class="at">:type</span>))</span>
+<span id="cb44-7"><a href="#cb44-7" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">recur</span>))))</span>
+<span id="cb44-8"><a href="#cb44-8" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:content &quot;1&quot;}</span></span>
+<span id="cb44-9"><a href="#cb44-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; :content {:content &quot;, 2&quot;}</span></span>
+<span id="cb44-10"><a href="#cb44-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; ...</span></span>
+<span id="cb44-11"><a href="#cb44-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; :usage {:prompt-tokens 10 :completion-tokens 20 ...}</span></span>
+<span id="cb44-12"><a href="#cb44-12" aria-hidden="true" tabindex="-1"></a><span class="co">;; :done {}</span></span></code></pre></div>
 <p>Event types: <code>:content</code>, <code>:tool-call</code>,
 <code>:tool-call-delta</code>, <code>:usage</code>,
 <code>:finish</code>, <code>:error</code>, <code>:done</code>.</p>
 <p>If the stream breaks mid-response, the exception appears on the
 channel. Check for it:</p>
-<div class="sourceCode" id="cb38"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 100&quot;</span>)]</span>
-<span id="cb38-2"><a href="#cb38-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
-<span id="cb38-3"><a href="#cb38-3" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [v (&lt;!! ch)]</span>
-<span id="cb38-4"><a href="#cb38-4" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">if</span> (<span class="kw">instance?</span> Throwable v)</span>
-<span id="cb38-5"><a href="#cb38-5" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">println</span> <span class="st">&quot;Stream error:&quot;</span> (.getMessage v))</span>
-<span id="cb38-6"><a href="#cb38-6" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">do</span> (<span class="kw">println</span> (<span class="at">:type</span> v))</span>
-<span id="cb38-7"><a href="#cb38-7" aria-hidden="true" tabindex="-1"></a>            (<span class="kw">recur</span>))))))</span></code></pre></div>
+<div class="sourceCode" id="cb45"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">let</span> [ch (llm/events ai <span class="st">&quot;Count to 100&quot;</span>)]</span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">loop</span> []</span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">when-let</span> [v (&lt;!! ch)]</span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">if</span> (<span class="kw">instance?</span> Throwable v)</span>
+<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">println</span> <span class="st">&quot;Stream error:&quot;</span> (.getMessage v))</span>
+<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a>        (<span class="kw">do</span> (<span class="kw">println</span> (<span class="at">:type</span> v))</span>
+<span id="cb45-7"><a href="#cb45-7" aria-hidden="true" tabindex="-1"></a>            (<span class="kw">recur</span>))))))</span></code></pre></div>
 <p><code>generate</code> and <code>run-agent</code> throw mid-stream
 errors automatically. You only need to check when reading
 <code>events</code> or <code>stream</code> channels directly.</p>
 <p>Close the channel to cancel and clean up HTTP resources.</p>
-<h2 id="babashka">16. Babashka</h2>
+<h2 id="babashka">17. Babashka</h2>
 <p>clj-llm works with <a href="https://babashka.org/">Babashka</a> out
 of the box. The HTTP layer automatically switches between
 <code>java.net.http</code> (JVM Clojure) and
 <code>babashka.http-client</code> (bb). Everything else — providers,
 generate, run-agent, streaming — works identically.</p>
-<div class="sourceCode" id="cb39"><pre
-class="sourceCode bash"><code class="sourceCode bash"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bb</span></span>
-<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">require</span> <span class="st">&#39;[co.poyo.clj-llm.core :as llm]</span></span>
-<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a><span class="st">         &#39;</span>[co.poyo.clj-llm.backends.openai :as openai]<span class="kw">)</span></span>
-<span id="cb39-4"><a href="#cb39-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb39-5"><a href="#cb39-5" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">def</span> ai <span class="er">(</span><span class="ex">assoc</span> <span class="er">(</span><span class="ex">openai/backend</span><span class="kw">)</span> <span class="ex">:defaults</span> {:model <span class="st">&quot;gpt-4o-mini&quot;</span>}<span class="kw">))</span></span>
-<span id="cb39-6"><a href="#cb39-6" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">println</span> <span class="er">(</span><span class="ex">:text</span> <span class="er">(</span><span class="ex">llm/generate</span> ai <span class="st">&quot;Hello from Babashka!&quot;</span><span class="kw">)))</span></span></code></pre></div>
+<div class="sourceCode" id="cb46"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bb</span></span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">require</span> <span class="st">&#39;[co.poyo.clj-llm.core :as llm]</span></span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a><span class="st">         &#39;</span>[co.poyo.clj-llm.backends.openai :as openai]<span class="kw">)</span></span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">def</span> ai <span class="er">(</span><span class="ex">assoc</span> <span class="er">(</span><span class="ex">openai/backend</span><span class="kw">)</span> <span class="ex">:defaults</span> {:model <span class="st">&quot;gpt-4o-mini&quot;</span>}<span class="kw">))</span></span>
+<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a><span class="kw">(</span><span class="ex">println</span> <span class="er">(</span><span class="ex">:text</span> <span class="er">(</span><span class="ex">llm/generate</span> ai <span class="st">&quot;Hello from Babashka!&quot;</span><span class="kw">)))</span></span></code></pre></div>
 <p>Run your scripts, CLIs, and automation with the same library. No
 separate dependency or configuration.</p>
-<h2 id="error-handling">17. Error handling</h2>
+<h2 id="error-handling">18. Error handling</h2>
 <p>Connection errors throw the underlying Java exception directly
 (<code>ConnectException</code>, <code>HttpTimeoutException</code>,
 etc.). No wrapping.</p>
 <p>HTTP errors (non-200) throw <code>ex-info</code> with the status and
 the API’s response body — the actual error message from
 OpenAI/Anthropic:</p>
-<div class="sourceCode" id="cb40"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
-<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
-<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> clojure.lang.ExceptionInfo <span class="kw">e</span></span>
-<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [{<span class="at">:keys</span> [status body]} (ex-data <span class="kw">e</span>)]</span>
-<span id="cb40-5"><a href="#cb40-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> <span class="st">&quot;HTTP&quot;</span> status)</span>
-<span id="cb40-6"><a href="#cb40-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> body)))</span>
-<span id="cb40-7"><a href="#cb40-7" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
-<span id="cb40-8"><a href="#cb40-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">;; Connection/timeout errors — plain Java exceptions</span></span>
-<span id="cb40-9"><a href="#cb40-9" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">println</span> <span class="st">&quot;Connection error:&quot;</span> (.getMessage <span class="kw">e</span>))))</span>
-<span id="cb40-10"><a href="#cb40-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; HTTP 404</span></span>
-<span id="cb40-11"><a href="#cb40-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; {&quot;error&quot;:{&quot;message&quot;:&quot;The model &#39;nonexistent-model&#39; does not exist&quot;,...}}</span></span></code></pre></div>
+<div class="sourceCode" id="cb47"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">try</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a>  (llm/generate ai {<span class="at">:model</span> <span class="st">&quot;nonexistent-model&quot;</span>} <span class="st">&quot;hello&quot;</span>)</span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> clojure.lang.ExceptionInfo <span class="kw">e</span></span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">let</span> [{<span class="at">:keys</span> [status body]} (ex-data <span class="kw">e</span>)]</span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> <span class="st">&quot;HTTP&quot;</span> status)</span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a>      (<span class="kw">println</span> body)))</span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">catch</span> Exception <span class="kw">e</span></span>
+<span id="cb47-8"><a href="#cb47-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">;; Connection/timeout errors — plain Java exceptions</span></span>
+<span id="cb47-9"><a href="#cb47-9" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">println</span> <span class="st">&quot;Connection error:&quot;</span> (.getMessage <span class="kw">e</span>))))</span>
+<span id="cb47-10"><a href="#cb47-10" aria-hidden="true" tabindex="-1"></a><span class="co">;; HTTP 404</span></span>
+<span id="cb47-11"><a href="#cb47-11" aria-hidden="true" tabindex="-1"></a><span class="co">;; {&quot;error&quot;:{&quot;message&quot;:&quot;The model &#39;nonexistent-model&#39; does not exist&quot;,...}}</span></span></code></pre></div>
 <p>Option validation errors (bad keys, missing model) are also
 <code>ex-info</code> with
 <code>:error-type :llm/invalid-request</code>.</p>
 <p>The library does not do automatic retries. Use your own retry logic
 or a library like <code>again</code>.</p>
-<h2 id="multiple-providers">18. Multiple providers</h2>
+<h2 id="multiple-providers">19. Multiple providers</h2>
 <p>The same code works with any provider. Only the connection
 changes.</p>
-<div class="sourceCode" id="cb41"><pre
-class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
-<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/backend)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
-<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/backend) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
-<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
-<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>                                        <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
-<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
-<span id="cb41-8"><a href="#cb41-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb41-9"><a href="#cb41-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
-<span id="cb41-10"><a href="#cb41-10" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
-<span id="cb41-11"><a href="#cb41-11" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
-<span id="cb41-12"><a href="#cb41-12" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span></code></pre></div>
+<div class="sourceCode" id="cb48"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a>(<span class="kw">require</span> &#39;[co.poyo.clj-llm.backends.anthropic <span class="at">:as</span> anthropic])</span>
+<span id="cb48-2"><a href="#cb48-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-3"><a href="#cb48-3" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> openai-ai  </span>(<span class="kw">assoc</span> (openai/backend)     <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;gpt-4o-mini&quot;</span>}))</span>
+<span id="cb48-4"><a href="#cb48-4" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> claude-ai  </span>(<span class="kw">assoc</span> (anthropic/backend) <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;claude-sonnet-4-20250514&quot;</span>}))</span>
+<span id="cb48-5"><a href="#cb48-5" aria-hidden="true" tabindex="-1"></a>(<span class="bu">def</span><span class="fu"> local-ai   </span>(<span class="kw">assoc</span> (openai/backend {<span class="at">:api-base</span> <span class="st">&quot;http://localhost:11434/v1&quot;</span></span>
+<span id="cb48-6"><a href="#cb48-6" aria-hidden="true" tabindex="-1"></a>                                        <span class="at">:api-key</span> <span class="st">&quot;x&quot;</span>})</span>
+<span id="cb48-7"><a href="#cb48-7" aria-hidden="true" tabindex="-1"></a>                       <span class="at">:defaults</span> {<span class="at">:model</span> <span class="st">&quot;llama3&quot;</span>}))</span>
+<span id="cb48-8"><a href="#cb48-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb48-9"><a href="#cb48-9" aria-hidden="true" tabindex="-1"></a><span class="co">;; Same call, any provider</span></span>
+<span id="cb48-10"><a href="#cb48-10" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate openai-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
+<span id="cb48-11"><a href="#cb48-11" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate claude-ai <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span>
+<span id="cb48-12"><a href="#cb48-12" aria-hidden="true" tabindex="-1"></a>(<span class="at">:text</span> (llm/generate local-ai  <span class="st">&quot;Explain monads in one sentence.&quot;</span>))</span></code></pre></div>
 </body>
 </html>
