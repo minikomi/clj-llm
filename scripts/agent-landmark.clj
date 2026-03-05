@@ -48,18 +48,20 @@
 
 ;; ── Agent ─────────────────────────────────────────────────────────
 
+(def opts
+  {:max-steps     5
+   :system-prompt "You identify things in images and research them.
+                   Always use search_web to find facts — don't guess."
+   :on-tool-calls (fn [{:keys [tool-calls]}]
+                    (doseq [tc tool-calls]
+                      (println "🛠️ " (:name tc) (:arguments tc))))
+   :on-tool-result (fn [{:keys [result]}]
+                     (println "  →" (subs (str result) 0 (min 120 (count (str result)))) "..."))})
+
 (defn ask [image-path-or-url]
-  (llm/run-agent ai [#'search-web]
-    {:max-steps     5
-     :system-prompt "You identify things in images and research them.
-                     Always use search_web to find facts — don't guess."
-     :on-tool-calls (fn [{:keys [tool-calls]}]
-                      (doseq [tc tool-calls]
-                        (println "🛠️ " (:name tc) (:arguments tc))))
-     :on-tool-result (fn [{:keys [result]}]
-                       (println "  →" (subs (str result) 0 (min 120 (count (str result)))) "..."))}
-    ["What is this? Look it up and tell me 3 interesting facts."
-     (content/image image-path-or-url {:max-edge 512})]))
+  (let [input ["What is this? Look it up and tell me 3 interesting facts."
+               (content/image image-path-or-url {:max-edge 512})]]
+    (llm/run-agent ai [#'search-web] opts input)))
 
 ;; ── Main ──────────────────────────────────────────────────────────
 
