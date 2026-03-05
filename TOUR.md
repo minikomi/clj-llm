@@ -16,6 +16,7 @@ This walks through the library piece by piece. Every example is real code.
 | Streaming | `(stream ai "prompt")` → core.async channel of text chunks |
 | Raw events | `(events ai "prompt")` → core.async channel of event maps |
 | Conversations | `(generate ai history-vector)` |
+| Images & PDFs | `(generate ai ["describe" (content/image "photo.jpg")])` |
 
 Everything is data. Providers are maps. Options are maps. History is a vector. Compose with the tools Clojure already gives you.
 
@@ -252,7 +253,102 @@ A simple chat loop:
 ;; => "K2, at 8,611 meters."
 ```
 
-## 9. Defining tools
+## 9. Images, PDFs, and attachments
+
+Pass images and documents alongside text using `content/image` and `content/pdf`:
+
+```clojure
+(require '[co.poyo.clj-llm.content :as content])
+
+;; Image from a file
+(:text (llm/generate ai ["What's in this image?" (content/image "photo.jpg")]))
+;; => "A cat sleeping on a keyboard."
+
+;; Image from a URL — passed by reference, model fetches it
+(:text (llm/generate ai ["Describe this" (content/image "https://example.com/chart.png")]))
+;; => "A bar chart showing quarterly revenue..."
+```
+
+The input vector mixes strings and content parts. Strings become text parts automatically.
+
+### Resizing images
+
+LLM APIs charge by image size and have limits. Resize on the fly:
+
+```clojure
+;; Longest edge ≤ 512px (proportional)
+(content/image "huge-photo.jpg" {:max-edge 512})
+
+;; Constrain width or height
+(content/image "wide.png" {:max-width 800})
+(content/image "tall.png" {:max-height 600})
+
+;; Output format and quality
+(content/image "photo.png" {:max-edge 1024 :format "jpeg" :quality 85})
+```
+
+Multiple constraints? The most restrictive wins. Images that already fit are not upscaled.
+
+On JVM Clojure, resizing uses `javax.imageio`. On babashka, it uses [pod-golang-image](https://github.com/poyo-ai/pod-golang-image) (auto-detected from PATH or `~/pod-golang-image/`).
+
+URL images with resize opts are downloaded, resized, and sent as base64. Without resize opts, URLs pass through directly to the model.
+
+### PDFs
+
+```clojure
+;; Anthropic has native PDF support
+(:text (llm/generate claude-ai ["Summarize this invoice" (content/pdf "invoice.pdf")]))
+```
+
+### Raw bytes
+
+```clojure
+;; From a byte array + explicit mime type
+(content/image my-byte-array "image/png")
+```
+
+### How it works
+
+Each constructor returns a content-part map:
+
+```clojure
+(content/image "cat.jpg")
+;; => {:type :image :source :base64 :media-type "image/jpeg" :data "iVBOR..."}
+
+(content/image "https://example.com/cat.png")
+;; => {:type :image :source :url :url "https://example.com/cat.png"}
+
+(content/text "describe this")
+;; => {:type :text :text "describe this"}
+```
+
+When you pass a vector like `["describe this" (content/image "cat.jpg")]` as input, `generate` builds a multipart user message. Each backend serializes it to the provider's format — OpenAI's `image_url` content blocks, Anthropic's `image`/`document` source blocks.
+
+You can also build multipart messages manually in conversation history:
+
+```clojure
+[{:role :user :content [(content/text "What's this?") (content/image "photo.jpg")]}
+ {:role :assistant :content "A cat on a keyboard."}
+ {:role :user :content "What breed?"}]
+```
+
+### Babashka one-liner: rename files by contents
+
+```bash
+bb -e '(require (quote [co.poyo.clj-llm.core :as llm])
+         (quote [co.poyo.clj-llm.content :as c])
+         (quote [co.poyo.clj-llm.backends.openai :as openai])
+         (quote [babashka.fs :as fs]))
+  (def ai (assoc (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_KEY")
+                                   :api-base "https://openrouter.ai/api/v1"})
+                 :defaults {:model "openai/gpt-4o-mini"}))
+  (doseq [f (fs/glob "." "*.png")]
+    (let [n (:text (llm/generate ai {:system-prompt "Short descriptive filename only, no extension, lowercase hyphens"}
+                     ["Name this" (c/image (str f) {:max-edge 512})]))] 
+      (println f "->" n) (fs/move f (str n ".png"))))'
+```
+
+## 10. Defining tools
 
 Tools are plain functions with standard [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md). The `:malli/schema` metadata tells the LLM what the tool does and what arguments it takes:
 
@@ -328,7 +424,7 @@ Or `mx/defn` for inline schema hints:
   (str "Sunny in " (:city args)))
 ```
 
-## 10. Single-turn tool calls with `generate`
+## 11. Single-turn tool calls with `generate`
 
 Pass `:tools` to `generate` for a single LLM call with tool access. The model decides whether to call tools. If it does, `generate` executes them and returns everything:
 
@@ -355,7 +451,7 @@ If the model decides no tools are needed, you get empty vectors:
 
 This is one LLM call. The model sees the tools, optionally calls them, and you get back data. No loops, no agents.
 
-## 11. Multi-turn agents with `run-agent`
+## 12. Multi-turn agents with `run-agent`
 
 `run-agent` is the autonomous loop. It calls the LLM, executes tools, feeds results back, and repeats until the model stops calling tools.
 
@@ -413,7 +509,7 @@ For structured output after tool use, compose with `generate`:
 
 This keeps `run-agent` focused on the tool loop and `generate` as the single place structured extraction happens.
 
-## 12. Observing the agent
+## 13. Observing the agent
 
 `run-agent` accepts callback hooks for real-time visibility into what the agent is doing. All are optional.
 
@@ -472,7 +568,7 @@ Use all three together for a full trace:
 
 Callback order is guaranteed: `on-text` during streaming → `on-tool-calls` once → `on-tool-result` per tool.
 
-## 13. Manual tool result messages
+## 14. Manual tool result messages
 
 The `tool-result` helper creates tool result messages for feeding back into history manually. This is useful when you want to execute tools yourself instead of letting `generate` or `run-agent` do it:
 
@@ -508,7 +604,7 @@ Use it to build manual tool-calling workflows when `run-agent` doesn't fit:
 (:text (llm/generate ai history))
 ```
 
-## 14. `generate` vs `run-agent`
+## 15. `generate` vs `run-agent`
 
 | | `generate` | `run-agent` |
 |---|---|---|
@@ -521,7 +617,7 @@ Use it to build manual tool-calling workflows when `run-agent` doesn't fit:
 
 `generate` is the workhorse. `run-agent` is for when the model needs to drive.
 
-## 15. Raw event stream
+## 16. Raw event stream
 
 `events` returns a `core.async` channel of raw provider events. Use it when you need fine-grained control over the stream:
 
@@ -558,7 +654,7 @@ If the stream breaks mid-response, the exception appears on the channel. Check f
 
 Close the channel to cancel and clean up HTTP resources.
 
-## 16. Babashka
+## 17. Babashka
 
 clj-llm works with [Babashka](https://babashka.org/) out of the box. The HTTP layer automatically switches between `java.net.http` (JVM Clojure) and `babashka.http-client` (bb). Everything else — providers, generate, run-agent, streaming — works identically.
 
@@ -573,7 +669,7 @@ clj-llm works with [Babashka](https://babashka.org/) out of the box. The HTTP la
 
 Run your scripts, CLIs, and automation with the same library. No separate dependency or configuration.
 
-## 17. Error handling
+## 18. Error handling
 
 Connection errors throw the underlying Java exception directly (`ConnectException`, `HttpTimeoutException`, etc.). No wrapping.
 
@@ -597,7 +693,7 @@ Option validation errors (bad keys, missing model) are also `ex-info` with `:err
 
 The library does not do automatic retries. Use your own retry logic or a library like `again`.
 
-## 18. Multiple providers
+## 19. Multiple providers
 
 The same code works with any provider. Only the connection changes.
 
