@@ -48,7 +48,7 @@
 
 ;; ── Agent ─────────────────────────────────────────────────────────
 
-(defn ask [input]
+(defn ask [image-path-or-url]
   (llm/run-agent ai [#'search-web]
     {:max-steps     5
      :system-prompt "You identify things in images and research them.
@@ -58,7 +58,8 @@
                         (println "🛠️ " (:name tc) (:arguments tc))))
      :on-tool-result (fn [{:keys [result]}]
                        (println "  →" (subs (str result) 0 (min 120 (count (str result)))) "..."))}
-    input))
+    ["What is this? Look it up and tell me 3 interesting facts."
+     (content/image image-path-or-url {:max-edge 512})]))
 
 ;; ── Main ──────────────────────────────────────────────────────────
 
@@ -67,7 +68,6 @@
     (println "Usage: bb scripts/agent-landmark.clj <image-path-or-url>")
     (System/exit 1))
   (println "🏛️  Analyzing image...\n")
-  (let [img    (content/image src {:max-edge 512})
-        result (ask ["What is this? Look it up and tell me 3 interesting facts." img])]
+  (let [result (ask src)]
     (println "\n---")
     (println (:text result))))
