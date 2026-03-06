@@ -528,13 +528,24 @@ For structured output after tool use, compose with `generate`:
 
 This keeps `run-agent` focused on the tool loop and `generate` as the single place structured extraction happens.
 
-## 13. Observing the agent
+## 13. Callbacks
 
-`run-agent` accepts callback hooks for real-time visibility into what the agent is doing. All are optional.
+Both `generate` and `run-agent` accept callback hooks for real-time visibility. All are optional.
 
 ### `:on-text` — streaming text as it arrives
 
-Called for each text chunk as the LLM streams its response. Use for live typing display:
+Called for each text chunk as the LLM streams its response. Use for live typing display. Works with both `generate` and `run-agent`:
+
+```clojure
+;; Stream text to the terminal while still getting the full result back
+(llm/generate ai
+  {:on-text (fn [chunk] (print chunk) (flush))}
+  "Explain monads in one sentence.")
+;; prints: A monad is a design pattern...
+;; => {:text "A monad is a design pattern..." :usage {...}}
+```
+
+With `run-agent`:
 
 ```clojure
 (llm/run-agent ai [#'geocode #'get-weather]
@@ -545,9 +556,18 @@ Called for each text chunk as the LLM streams its response. Use for live typing 
 
 ### `:on-tool-calls` — before tool execution
 
-Called when the model returns tool calls, before they are executed. Good for logging or UI updates:
+Called when the model returns tool calls, before they are executed. Good for logging or UI updates. Works with both `generate` and `run-agent`:
 
 ```clojure
+;; With generate (single turn)
+(llm/generate ai
+  {:tools [#'geocode]
+   :on-tool-calls (fn [{:keys [tool-calls text]}]
+                    (println "🔧 Calling:" (mapv :name tool-calls)))}
+  "Where is Tokyo?")
+;; 🔧 Calling: ["geocode"]
+
+;; With run-agent (multi-turn — includes :step)
 (llm/run-agent ai [#'geocode #'get-weather]
   {:on-tool-calls (fn [{:keys [step tool-calls text]}]
                     (println "Step" step "- calling:" (mapv :name tool-calls)))}
@@ -558,9 +578,19 @@ Called when the model returns tool calls, before they are executed. Good for log
 
 ### `:on-tool-result` — after each tool finishes
 
-Called once per tool call, after execution. Includes the result (or error):
+Called once per tool call, after execution. Includes the result (or error). Works with both `generate` and `run-agent`:
 
 ```clojure
+(llm/generate ai
+  {:tools [#'geocode]
+   :on-tool-result (fn [{:keys [tool-call result error]}]
+                     (if error
+                       (println "  ✗" (:name tool-call) "failed:" (.getMessage error))
+                       (println "  ✓" (:name tool-call) "→" result)))}
+  "Where is Tokyo?")
+;;   ✓ geocode → {:name "Tokyo", :country "Japan", ...}
+
+;; run-agent callbacks also include :step
 (llm/run-agent ai [#'geocode #'get-weather]
   {:on-tool-result (fn [{:keys [step tool-call result error]}]
                      (if error

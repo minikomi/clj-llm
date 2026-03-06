@@ -420,3 +420,90 @@
           printed (pr-str result)]
       (is (clojure.string/includes? printed ":text"))
       (is (clojure.string/includes? printed "\"hi\"")))))
+
+;; ════════════════════════════════════════════════════════════════════
+;; generate callback tests
+;; ════════════════════════════════════════════════════════════════════
+
+(deftest test-generate-on-text-callback
+  (testing ":on-text fires for each content chunk"
+    (let [chunks (atom [])
+          provider (mock-provider [{:type :content :content "Hello "}
+                                   {:type :content :content "world!"}])
+          result (llm/generate provider {:on-text #(swap! chunks conj %)} "test")]
+      (is (= ["Hello " "world!"] @chunks))
+      (is (= "Hello world!" (:text result))))))
+
+(deftest test-generate-on-tool-calls-callback
+  (testing ":on-tool-calls fires before tool execution"
+    (let [seen (atom nil)
+          exec-order (atom [])
+          provider (mock-provider [{:type :tool-call :index 0 :id "c1" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"x\"}"}])
+          ping (with-meta
+                 (fn [{:keys [host]}]
+                   (swap! exec-order conj :executed)
+                   (str "pong " host))
+                 {:malli/schema [:=> [:cat [:map {:name "ping" :description "P"}
+                                            [:host :string]]] :string]})
+          result (llm/generate provider
+                   {:tools [ping]
+                    :on-tool-calls (fn [info]
+                                    (swap! exec-order conj :on-tool-calls)
+                                    (reset! seen info))}
+                   "test")]
+      ;; callback fired before execution
+      (is (= [:on-tool-calls :executed] @exec-order))
+      (is (= 1 (count (:tool-calls @seen))))
+      (is (= "ping" (:name (first (:tool-calls @seen))))))))
+
+(deftest test-generate-on-tool-result-callback
+  (testing ":on-tool-result fires after each tool"
+    (let [seen (atom [])
+          provider (mock-provider [{:type :tool-call :index 0 :id "c1" :name "ping" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"host\":\"a\"}"}])
+          ping (with-meta
+                 (fn [{:keys [host]}] (str "pong " host))
+                 {:malli/schema [:=> [:cat [:map {:name "ping" :description "P"}
+                                            [:host :string]]] :string]})
+          result (llm/generate provider
+                   {:tools [ping]
+                    :on-tool-result (fn [info] (swap! seen conj info))}
+                   "test")]
+      (is (= 1 (count @seen)))
+      (is (= "pong a" (:result (first @seen))))
+      (is (nil? (:error (first @seen))))
+      (is (= "ping" (:name (:tool-call (first @seen))))))))
+
+(deftest test-generate-on-tool-result-with-error
+  (testing ":on-tool-result reports errors"
+    (let [seen (atom [])
+          provider (mock-provider [{:type :tool-call :index 0 :id "c1" :name "boom" :arguments ""}
+                                   {:type :tool-call-delta :index 0 :arguments "{\"x\":\"y\"}"}])
+          boom (with-meta
+                 (fn [_] (throw (ex-info "kaboom" {})))
+                 {:malli/schema [:=> [:cat [:map {:name "boom" :description "B"}
+                                            [:x :string]]] :string]})
+          result (llm/generate provider
+                   {:tools [boom]
+                    :on-tool-result (fn [info] (swap! seen conj info))}
+                   "test")]
+      (is (= 1 (count @seen)))
+      (is (some? (:error (first @seen))))
+      (is (clojure.string/starts-with? (:result (first @seen)) "Error:")))))
+
+(deftest test-generate-callbacks-without-tools
+  (testing ":on-text works without tools"
+    (let [chunks (atom [])
+          provider (mock-provider [{:type :content :content "hi"}])
+          result (llm/generate provider {:on-text #(swap! chunks conj %)} "test")]
+      (is (= ["hi"] @chunks))
+      (is (= "hi" (:text result)))))
+
+  (testing ":on-tool-calls and :on-tool-result are silently ignored without tools"
+    (let [provider (mock-provider [{:type :content :content "hi"}])
+          result (llm/generate provider
+                   {:on-tool-calls (fn [_] (throw (Exception. "should not fire")))
+                    :on-tool-result (fn [_] (throw (Exception. "should not fire")))}
+                   "test")]
+      (is (= "hi" (:text result))))))

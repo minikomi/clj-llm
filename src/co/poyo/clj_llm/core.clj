@@ -89,17 +89,17 @@
    [:temperature {:optional true} number?]
    [:max-tokens {:optional true} :int]
    [:top-p {:optional true} number?]
-   [:provider-opts {:optional true} [:map-of :keyword :any]]])
+   [:provider-opts {:optional true} [:map-of :keyword :any]]
+   [:on-text {:optional true} fn?]
+   [:on-tool-calls {:optional true} fn?]
+   [:on-tool-result {:optional true} fn?]])
 
 (def ^:private agent-opts-schema
   "Schema for run-agent options (superset of opts-schema)."
   (mu/merge opts-schema
             [:map {:closed true}
              [:max-steps {:optional true} :int]
-             [:stop-when {:optional true} fn?]
-             [:on-tool-calls {:optional true} fn?]
-             [:on-tool-result {:optional true} fn?]
-             [:on-text {:optional true} fn?]]))
+             [:stop-when {:optional true} fn?]]))
 
 ;; Keys that get forwarded to the provider API (not consumed by clj-llm itself)
 (def ^:private api-forward-keys
@@ -417,13 +417,18 @@
    ;;     :usage {...}}
 
    Common options:
-     :model          - model name string
+     :model           - model name string
      :system-prompt   - system message string
      :schema          - Malli schema for structured output
      :temperature     - float, e.g. 0.7
      :max-tokens      - int, max tokens to generate
      :top-p           - float, nucleus sampling
      :provider-opts   - map of additional provider-specific API params
+
+   Callbacks (all optional):
+     :on-text         - (fn [chunk] ...) called for each text chunk as it streams
+     :on-tool-calls   - (fn [{:keys [tool-calls text]}] ...) called before tools execute
+     :on-tool-result  - (fn [{:keys [tool-call result error]}] ...) called after each tool
 
    Input is last — string, message-history vector, or a GenerateResult from
    a previous call. Results auto-unwrap when chained, so :text is not needed:
@@ -440,22 +445,45 @@
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
-   (let [tools (or (:tools opts) (:tools (:defaults provider)))
-         schema (or (:schema opts) (:schema (:defaults provider)))
-         input-schemas (when tools (tools->input-schemas tools))
-         api-opts (if tools
-                    (assoc (dissoc opts :tools) :tools input-schemas)
-                    opts)
-         result (finalize-state (chan-reduce next-state init-state
-                                              (events provider api-opts input)))]
+   (let [tools          (or (:tools opts) (:tools (:defaults provider)))
+         schema         (or (:schema opts) (:schema (:defaults provider)))
+         on-text        (:on-text opts)
+         on-tool-calls  (:on-tool-calls opts)
+         on-tool-result (:on-tool-result opts)
+         input-schemas  (when tools (tools->input-schemas tools))
+         api-opts       (cond-> (dissoc opts :on-text :on-tool-calls :on-tool-result)
+                          tools (-> (dissoc :tools) (assoc :tools input-schemas)))
+         result         (finalize-state
+                          (chan-reduce
+                            (fn [state event]
+                              (when (and on-text (= :content (:type event)))
+                                (on-text (:content event)))
+                              (next-state state event))
+                            init-state
+                            (events provider api-opts input)))]
      (->result
        (cond
          tools
-         (let [name->fn (build-name->fn tools input-schemas)
-               parsed-calls (or (parse-tool-calls (:tool-calls result)) [])]
-           (cond-> {:text       (not-empty (:text result))
-                    :tool-calls parsed-calls
-                    :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)}
+         (let [name->fn      (build-name->fn tools input-schemas)
+               parsed-calls  (or (parse-tool-calls (:tool-calls result)) [])
+               _             (when (and on-tool-calls (seq parsed-calls))
+                               (on-tool-calls {:tool-calls parsed-calls
+                                               :text (not-empty (:text result))}))
+               tool-results  (mapv (fn [tc]
+                                     (let [res (try
+                                                 {:result (execute-tool-call name->fn tc)}
+                                                 (catch Exception e
+                                                   {:result (str "Error: " (.getMessage e))
+                                                    :error e}))]
+                                       (when on-tool-result
+                                         (on-tool-result {:tool-call tc
+                                                          :result (:result res)
+                                                          :error (:error res)}))
+                                       (:result res)))
+                                   parsed-calls)]
+           (cond-> {:text         (not-empty (:text result))
+                    :tool-calls   parsed-calls
+                    :tool-results tool-results}
              (:usage result) (assoc :usage (:usage result))))
 
          schema
