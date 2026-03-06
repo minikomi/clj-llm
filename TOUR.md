@@ -34,7 +34,7 @@ A provider is a map that knows how to talk to an LLM API.
 
 ;; Or point at anything with an OpenAI-compatible API
 (def ollama (openai/backend {:api-base "http://localhost:11434/v1"
-                             :api-key "not-needed"}))
+                             :api-key false}))  ;; no auth needed
 
 (def openrouter (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_API_KEY")
                                  :api-base "https://openrouter.ai/api/v1"}))
