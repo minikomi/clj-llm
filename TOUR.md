@@ -36,7 +36,7 @@ A provider is a map that knows how to talk to an LLM API.
 (def ollama (openai/backend {:api-base "http://localhost:11434/v1"
                              :api-key false}))  ;; no auth needed
 
-(def openrouter (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_API_KEY")
+(def openrouter (openai/backend {:api-key #(System/getenv "OPENROUTER_API_KEY")
                                  :api-base "https://openrouter.ai/api/v1"}))
 ```
 
@@ -345,7 +345,7 @@ bb -e '(require (quote [co.poyo.clj-llm.core :as llm])
          (quote [co.poyo.clj-llm.content :as c])
          (quote [co.poyo.clj-llm.backends.openai :as openai])
          (quote [babashka.fs :as fs]))
-  (def ai (assoc (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_KEY")
+  (def ai (assoc (openai/backend {:api-key #(System/getenv "OPENROUTER_KEY")
                                    :api-base "https://openrouter.ai/api/v1"})
                  :defaults {:model "openai/gpt-4o-mini"}))
   (doseq [f (fs/glob "." "*.png")]

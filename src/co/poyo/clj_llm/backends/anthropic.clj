@@ -156,17 +156,19 @@
 
 (defn backend
   "Create an Anthropic provider.
-   Config: :api-key, :api-key-fn, :api-base, :api-version.
-   Default reads ANTHROPIC_API_KEY env var.
-   Pass :api-key false to skip auth."
+   Config: :api-key, :api-base, :api-version.
+   :api-key can be a string, a zero-arg fn, or false (skip auth).
+   Default reads ANTHROPIC_API_KEY env var."
   ([] (backend {}))
   ([{:keys [api-key api-key-fn api-base api-version]}]
    (->AnthropicBackend
     (or api-base (:api-base default-config))
     (cond (false? api-key)  (constantly nil)
-          api-key-fn         api-key-fn
-          (some? api-key)    (constantly api-key)
-          :else              default-api-key-fn)
+          (fn? api-key)     api-key
+          (some? api-key)   (constantly api-key)
+          ;; legacy :api-key-fn support
+          api-key-fn        api-key-fn
+          :else             default-api-key-fn)
     (or api-version (:api-version default-config))
     {})))
 
