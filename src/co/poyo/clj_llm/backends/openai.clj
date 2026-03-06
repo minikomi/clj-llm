@@ -131,12 +131,9 @@
   proto/LLMProvider
   (request-events [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
     (let [api-key (api-key-fn)
-          _ (when-not api-key
-              (throw (ex-info "API key function returned nil"
-                              {:provider "openai"})))
           url (str api-base "/chat/completions")
-          headers {"Authorization" (str "Bearer " api-key)
-                   "Content-Type" "application/json"}
+          headers (cond-> {"Content-Type" "application/json"}
+                   api-key (assoc "Authorization" (str "Bearer " api-key)))
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
       (let [raw-ch (stream/open-event-stream url headers body)
             ch     (a/chan 256 (mapcat #(data->events % schema tools)))]
@@ -146,14 +143,16 @@
 (defn backend
   "Create an OpenAI provider.
    Config: :api-key, :api-key-fn, :api-base.
-   Default reads OPENAI_API_KEY env var."
+   Default reads OPENAI_API_KEY env var.
+   Pass :api-key false to skip auth (e.g. Ollama, LM Studio)."
   ([] (backend {}))
   ([{:keys [api-key api-key-fn api-base]}]
    (->OpenAIBackend
     (or api-base (:api-base default-config))
-    (cond api-key-fn api-key-fn
-          api-key    (constantly api-key)
-          :else      default-api-key-fn)
+    (cond (false? api-key)  (constantly nil)
+          api-key-fn         api-key-fn
+          (some? api-key)    (constantly api-key)
+          :else              default-api-key-fn)
     {})))
 
 (defmethod print-method OpenAIBackend [b writer]

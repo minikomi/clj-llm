@@ -144,13 +144,10 @@
   proto/LLMProvider
   (request-events [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
     (let [api-key (api-key-fn)
-          _ (when-not api-key
-              (throw (ex-info "API key function returned nil"
-                              {:provider "anthropic"})))
           url (str api-base "/v1/messages")
-          headers {"x-api-key" api-key
-                   "anthropic-version" api-version
-                   "Content-Type" "application/json"}
+          headers (cond-> {"Content-Type" "application/json"
+                           "anthropic-version" api-version}
+                   api-key (assoc "x-api-key" api-key))
           body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
       (let [raw-ch (stream/open-event-stream url headers body)
             ch     (a/chan 256 (keep #(data->event % schema tools)))]
@@ -160,14 +157,16 @@
 (defn backend
   "Create an Anthropic provider.
    Config: :api-key, :api-key-fn, :api-base, :api-version.
-   Default reads ANTHROPIC_API_KEY env var."
+   Default reads ANTHROPIC_API_KEY env var.
+   Pass :api-key false to skip auth."
   ([] (backend {}))
   ([{:keys [api-key api-key-fn api-base api-version]}]
    (->AnthropicBackend
     (or api-base (:api-base default-config))
-    (cond api-key-fn api-key-fn
-          api-key    (constantly api-key)
-          :else      default-api-key-fn)
+    (cond (false? api-key)  (constantly nil)
+          api-key-fn         api-key-fn
+          (some? api-key)    (constantly api-key)
+          :else              default-api-key-fn)
     (or api-version (:api-version default-config))
     {})))
 
