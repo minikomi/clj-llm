@@ -70,7 +70,7 @@
 (defn ->result
   "Wrap a map as a GenerateResult. The result behaves like a normal map but
    coerces to its :text value when used as a string, and auto-unwraps when
-   passed as input to generate/stream/events."
+   passed as input to generate/events."
   [m]
   (GenerateResult. (vary-meta m assoc ::result true)))
 
@@ -592,25 +592,6 @@
                    usage (assoc :usage usage)))
                (recur next-history next-steps (inc step))))))))))
 
-
-(defn stream
-  "Returns a core.async channel of text chunks, streamed from the provider.
-   Channel is bounded (default 256) — provides backpressure.
-   Close the channel to cancel the stream and clean up resources.
-
-   (let [ch (llm/stream ai \"Tell me a story\")]
-     (loop []
-       (when-let [chunk (a/<!! ch)]
-         (print chunk) (flush)
-         (recur))))"
-  ([provider input] (stream provider {} input))
-  ([provider opts input]
-   (let [event-ch (events provider opts input)
-         text-ch  (a/chan 256 (keep #(if (instance? Throwable %)
-                                       %
-                                       (when (= :content (:type %)) (:content %)))))]
-     (a/pipe event-ch text-ch)
-     text-ch)))
 
 
 

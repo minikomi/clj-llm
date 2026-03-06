@@ -45,22 +45,14 @@
   ;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
 
   ;; ======================================
-  ;; Streaming
+  ;; Streaming -- :on-text callback
   ;; ======================================
 
-  ;; stream returns a core.async channel of text chunks
-  (let [ch (llm/stream ai "Tell me a story about a robot.")]
-    (loop []
-      (when-let [chunk (a/<!! ch)]
-        (print chunk) (flush)
-        (recur))))
-
-  ;; collect into a string
-  (let [ch (llm/stream ai "Count to 5")]
-    (loop [sb (StringBuilder.)]
-      (if-let [chunk (a/<!! ch)]
-        (recur (.append sb chunk))
-        (str sb))))
+  ;; Stream to terminal while getting the full result back
+  (llm/generate ai
+    {:on-text (fn [chunk] (print chunk) (flush))}
+    "Tell me a story about a robot.")
+  ;; prints chunks live, returns {:text "..." :usage {...}}
 
   ;; ======================================
   ;; Tool calling -- defns with Malli schemas
@@ -126,12 +118,11 @@
         (recur))))
 
   ;; ======================================
-  ;; Composition -- threading with :text
+  ;; Composition -- results auto-unwrap
   ;; ======================================
 
   (->> "Raw technical document with some errors"
        (llm/generate ai {:system-prompt "Fix grammar"})
-       :text
        (llm/generate ai {:system-prompt "Translate to French"}))
 
   ;; ======================================
