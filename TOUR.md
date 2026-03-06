@@ -13,7 +13,7 @@ This walks through the library piece by piece. Every example is real code.
 | Structured output | `(generate ai {:schema s} "prompt")` → `{:structured {...} ...}` |
 | Single tool call | `(generate ai {:tools [...]} "prompt")` → `{:text :tool-calls :tool-results}` |
 | Agent loop | `(run-agent ai [#'tool-fn] "prompt")` → `{:text :steps :history}` |
-| Streaming | `(stream ai "prompt")` → core.async channel of text chunks |
+| Streaming | `(generate ai {:on-text print} "prompt")` — stream + full result |
 | Raw events | `(events ai "prompt")` → core.async channel of event maps |
 | Conversations | `(generate ai history-vector)` |
 | Images & PDFs | `(generate ai ["describe" (content/image "photo.jpg")])` |
@@ -197,41 +197,28 @@ No special `task` or `chain` function. It's `assoc` and `merge`.
 
 ## 7. Streaming
 
-`stream` returns a `core.async` channel of text chunks:
+Pass `:on-text` to `generate` to stream text as it arrives while still getting the full result:
 
 ```clojure
-(require '[clojure.core.async :refer [<!!]])
-
-(let [ch (llm/stream ai "Write a haiku about Clojure")]
-  (loop []
-    (when-let [chunk (<!! ch)]
-      (print chunk)
-      (flush)
-      (recur))))
+(llm/generate ai
+  {:on-text (fn [chunk] (print chunk) (flush))}
+  "Write a haiku about Clojure")
 ;; prints: Data flows like water / Parentheses embrace all / REPL sparks joy
+;; => {:text "Data flows like water / ..." :usage {...}}
 ```
 
-Collect into a string:
+You get both streaming display *and* the complete result map — no need to choose.
+
+Options compose naturally:
 
 ```clojure
-(let [ch (llm/stream ai "Count from 1 to 5")]
-  (loop [sb (StringBuilder.)]
-    (if-let [chunk (<!! ch)]
-      (recur (.append sb chunk))
-      (str sb))))
+(llm/generate ai
+  {:system-prompt "Respond in ALL CAPS"
+   :on-text (fn [chunk] (print chunk) (flush))}
+  "Say hello")
 ```
 
-Options go in the same position:
-
-```clojure
-(let [ch (llm/stream ai {:system-prompt "Respond in ALL CAPS"} "Say hello")]
-  (loop []
-    (when-let [chunk (<!! ch)]
-      (print chunk) (flush)
-      (recur))))
-```
-
-Close the channel to cancel the stream and clean up HTTP resources.
+For raw event-level control, see `events` below which returns a `core.async` channel.
 
 ## 8. Conversations
 
@@ -661,6 +648,7 @@ Use it to build manual tool-calling workflows when `run-agent` doesn't fit:
 | Tools | Optional — pass `:tools` in opts | Required — pass as second arg |
 | Executes tools | Yes, once | Yes, each iteration |
 | Returns | `{:text :usage}`, `{:structured ...}`, or `{:text :tool-calls :tool-results}` | `{:text :history :steps}` |
+| Callbacks | `:on-text`, `:on-tool-calls`, `:on-tool-result` | Same, plus `:step` in callback maps |
 | Stop control | N/A (one call) | `:stop-when` predicate, `:max-steps` |
 | Use when | You know one call is enough | The model needs to iterate |
 
@@ -699,7 +687,7 @@ If the stream breaks mid-response, the exception appears on the channel. Check f
             (recur))))))
 ```
 
-`generate` and `run-agent` throw mid-stream errors automatically. You only need to check when reading `events` or `stream` channels directly.
+`generate` and `run-agent` throw mid-stream errors automatically. You only need to check when reading `events` channels directly.
 
 Close the channel to cancel and clean up HTTP resources.
 
