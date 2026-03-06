@@ -338,3 +338,85 @@
           result (llm/generate provider "test")]
       (is (map? result))
       (is (= "hi" (:text result))))))
+
+;; ════════════════════════════════════════════════════════════════════
+;; GenerateResult auto-unwrap tests
+;; ════════════════════════════════════════════════════════════════════
+
+(deftest test-generate-result-type
+  (testing "generate returns a GenerateResult"
+    (let [provider (mock-provider [{:type :content :content "hello"}])
+          result (llm/generate provider "test")]
+      (is (llm/result? result))
+      (is (map? result))))
+
+  (testing "run-agent returns a GenerateResult"
+    (let [provider (mock-provider [{:type :content :content "done"}])
+          dummy (with-meta (fn [{:keys [x]}] x)
+                  {:malli/schema [:=> [:cat [:map {:name "dummy" :description "D"}
+                                             [:x :string]]] :string]})
+          result (llm/run-agent provider [dummy] "test")]
+      (is (llm/result? result)))))
+
+(deftest test-generate-result-str-coercion
+  (testing "str returns :text value"
+    (let [provider (mock-provider [{:type :content :content "The answer is 42"}])
+          result (llm/generate provider "test")]
+      (is (= "The answer is 42" (str result))))))
+
+(deftest test-generate-result-map-behavior
+  (testing "GenerateResult behaves as a map"
+    (let [provider (mock-provider [{:type :content :content "hi"}
+                                   {:type :usage :prompt-tokens 5 :completion-tokens 2}])
+          result (llm/generate provider "test")]
+      (is (= "hi" (:text result)))
+      (is (= 5 (get-in result [:usage :prompt-tokens])))
+      (is (contains? result :text))
+      (is (= #{:text :usage} (set (keys result))))
+      (is (= "hi" (result :text))))))
+
+(deftest test-generate-result-auto-unwrap-chaining
+  (testing "generate accepts a GenerateResult as input, unwraps :text"
+    (let [calls (atom [])
+          provider (->MockProvider
+                     (atom [{:type :content :content "response"}])
+                     {:model "test-model"}
+                     calls)
+          ;; Simulate a previous result
+          prev-result (llm/generate provider "first call")]
+      ;; Reset responses for next call
+      (reset! (.responses provider) [{:type :content :content "second response"}])
+      ;; Pass the result directly as input
+      (let [result (llm/generate provider prev-result)]
+        (is (= "second response" (:text result)))
+        ;; The second call should have received :text from prev-result as content
+        (is (= "response" (get-in (second @calls) [:messages 0 :content])))))))
+
+(deftest test-generate-result-threading
+  (testing "->> threading works without :text extraction"
+    (let [call-count (atom 0)
+          provider (->MockProvider
+                     (atom [{:type :content :content "step1"}])
+                     {:model "test-model"}
+                     (atom []))
+          run (fn [input]
+                (swap! call-count inc)
+                (let [n @call-count]
+                  (reset! (.responses provider)
+                          [{:type :content :content (str "step" (inc n))}]))
+                (llm/generate provider input))]
+      (let [result (->> "start"
+                        run
+                        run
+                        run)]
+        (is (llm/result? result))
+        (is (string? (str result)))
+        (is (= 3 @call-count))))))
+
+(deftest test-generate-result-print
+  (testing "pr-str renders as a map"
+    (let [provider (mock-provider [{:type :content :content "hi"}])
+          result (llm/generate provider "test")
+          printed (pr-str result)]
+      (is (clojure.string/includes? printed ":text"))
+      (is (clojure.string/includes? printed "\"hi\"")))))

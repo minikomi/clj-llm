@@ -17,8 +17,9 @@ This walks through the library piece by piece. Every example is real code.
 | Raw events | `(events ai "prompt")` → core.async channel of event maps |
 | Conversations | `(generate ai history-vector)` |
 | Images & PDFs | `(generate ai ["describe" (content/image "photo.jpg")])` |
+| Chaining | Results auto-unwrap: `(->> "text" (generate ai) (generate ai))` |
 
-Everything is data. Providers are maps. Options are maps. History is a vector. Compose with the tools Clojure already gives you.
+Everything is data. Providers are maps. Options are maps. History is a vector. Results auto-unwrap for chaining. Compose with the tools Clojure already gives you.
 
 ## 1. Connect to a provider
 
@@ -101,15 +102,27 @@ For provider-specific parameters not listed above, use `:provider-opts`:
 
 ## 4. Threading
 
-Because input is last and the result is a map, extract `:text` when threading between calls:
+`generate` results auto-unwrap when passed as input to the next call — no `:text` extraction needed:
 
 ```clojure
 (->> "The mitochondria is the powerhouse of the cell. It make ATP."
      (llm/generate ai {:system-prompt "Fix grammar and spelling."})
-     :text
-     (llm/generate ai {:system-prompt "Translate to French."})
-     :text)
-;; => "La mitochondrie est la centrale énergétique de la cellule. Elle produit de l'ATP."
+     (llm/generate ai {:system-prompt "Translate to French."}))
+;; => {:text "La mitochondrie est la centrale ..." :usage {...}}
+```
+
+Results also coerce to their `:text` value via `str`:
+
+```clojure
+(str (llm/generate ai "What is the capital of France?"))
+;; => "The capital of France is Paris."
+```
+
+They still behave as maps — `:text`, `:usage`, `:structured`, etc. all work:
+
+```clojure
+(:text (llm/generate ai "hello"))
+;; => "Hello!"
 ```
 
 No special pipeline abstraction. Just Clojure.

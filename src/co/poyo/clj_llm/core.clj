@@ -11,6 +11,70 @@
    [co.poyo.clj-llm.content :as content]))
 
 ;; ════════════════════════════════════════════════════════════════════
+;; Result type — a map that coerces to string via :text
+;; ════════════════════════════════════════════════════════════════════
+
+(deftype GenerateResult [m]
+  Object
+  (toString [_] (str (:text m)))
+  (hashCode [_] (.hashCode ^Object m))
+  (equals [_ o] (= m o))
+
+  clojure.lang.IPersistentMap
+  (assoc [_ k v] (GenerateResult. (assoc m k v)))
+  (assocEx [_ k v] (GenerateResult. (assoc m k v)))
+  (without [_ k] (GenerateResult. (dissoc m k)))
+
+  clojure.lang.ILookup
+  (valAt [_ k] (get m k))
+  (valAt [_ k d] (get m k d))
+
+  clojure.lang.Seqable
+  (seq [_] (seq m))
+
+  clojure.lang.Counted
+  (count [_] (count m))
+
+  clojure.lang.IPersistentCollection
+  (cons [_ o] (GenerateResult. (conj m o)))
+  (empty [_] (GenerateResult. {}))
+  (equiv [_ o] (= m o))
+
+  clojure.lang.Associative
+  (containsKey [_ k] (contains? m k))
+  (entryAt [_ k] (find m k))
+
+  java.lang.Iterable
+  (iterator [_] (.iterator ^java.lang.Iterable (seq m)))
+
+  clojure.lang.IFn
+  (invoke [_ k] (get m k))
+  (invoke [_ k d] (get m k d))
+
+  clojure.lang.IHashEq
+  (hasheq [_] (hash m))
+
+  clojure.lang.IObj
+  (withMeta [_ meta] (GenerateResult. (with-meta m meta)))
+  (meta [_] (meta m)))
+
+(defmethod print-method GenerateResult [^GenerateResult r ^java.io.Writer w]
+  (print-method (into {} r) w))
+
+(defn result?
+  "Returns true if x is a GenerateResult."
+  [x]
+  (or (instance? GenerateResult x)
+      (::result (meta x))))
+
+(defn ->result
+  "Wrap a map as a GenerateResult. The result behaves like a normal map but
+   coerces to its :text value when used as a string, and auto-unwraps when
+   passed as input to generate/stream/events."
+  [m]
+  (GenerateResult. (vary-meta m assoc ::result true)))
+
+;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
 ;; ════════════════════════════════════════════════════════════════════
 
@@ -160,14 +224,22 @@
                   (str "Invalid content element: expected string or content part, got " (type x))
                   {:error-type :llm/invalid-request :element x}))))
 
+(defn- unwrap-result
+  "If input is a GenerateResult, extract its text content for chaining.
+   Returns the :text value as a string."
+  [input]
+  (or (:text input) ""))
+
 (defn- build-messages
   "Coerce input to a messages vector.
+   GenerateResult → auto-unwrap :text and treat as string input
    String  → [{:role :user :content input}]
    Vector of content parts/strings → [{:role :user :content [...parts...]}]
    Vector of messages → used as-is (message history)
    nil     → []"
   [input]
   (cond
+    (result? input) [{:role :user :content (unwrap-result input)}]
     (string? input) [{:role :user :content input}]
     (mixed-content-vector? input)
     [{:role :user :content (mapv normalize-content-element input)}]
@@ -353,12 +425,18 @@
      :top-p           - float, nucleus sampling
      :provider-opts   - map of additional provider-specific API params
 
-   Input is last — string or message-history vector. Threads with ->>:
+   Input is last — string, message-history vector, or a GenerateResult from
+   a previous call. Results auto-unwrap when chained, so :text is not needed:
 
    (->> \"raw text\"
         (llm/generate ai {:system-prompt \"Fix grammar\"})
-        :text
-        (llm/generate ai {:system-prompt \"Translate to French\"}))"
+        (llm/generate ai {:system-prompt \"Translate to French\"}))
+
+   Results coerce to their :text value via str:
+
+   (str (llm/generate ai \"hello\"))  ;=> \"Hello!\"
+
+   They still behave as maps — (:text result), (:usage result), etc. all work."
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
@@ -370,21 +448,22 @@
                     opts)
          result (finalize-state (chan-reduce next-state init-state
                                               (events provider api-opts input)))]
-     (cond
-       tools
-       (let [name->fn (build-name->fn tools input-schemas)
-             parsed-calls (or (parse-tool-calls (:tool-calls result)) [])]
-         (cond-> {:text       (not-empty (:text result))
-                  :tool-calls parsed-calls
-                  :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)}
-           (:usage result) (assoc :usage (:usage result))))
+     (->result
+       (cond
+         tools
+         (let [name->fn (build-name->fn tools input-schemas)
+               parsed-calls (or (parse-tool-calls (:tool-calls result)) [])]
+           (cond-> {:text       (not-empty (:text result))
+                    :tool-calls parsed-calls
+                    :tool-results (mapv (partial execute-tool-call name->fn) parsed-calls)}
+             (:usage result) (assoc :usage (:usage result))))
 
-       schema
-       (cond-> {:text (:text result)
-                :structured (parse-structured-output (:text result) schema)}
-         (:usage result) (assoc :usage (:usage result)))
+         schema
+         (cond-> {:text (:text result)
+                  :structured (parse-structured-output (:text result) schema)}
+           (:usage result) (assoc :usage (:usage result)))
 
-       :else result))))
+         :else result)))))
 
 
 (defn run-agent
@@ -442,11 +521,12 @@
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
-           (cond-> {:text       text
-                    :history    (conj history {:role :assistant :content (or text "")})
-                    :steps      steps
-                    :tool-calls (not-empty parsed-calls)}
-             usage (assoc :usage usage))
+           (->result
+             (cond-> {:text       text
+                      :history    (conj history {:role :assistant :content (or text "")})
+                      :steps      steps
+                      :tool-calls (not-empty parsed-calls)}
+               usage (assoc :usage usage)))
 
            (let [_        (when (and on-tool-calls (seq parsed-calls))
                             (on-tool-calls {:step step :tool-calls parsed-calls :text text}))
@@ -479,8 +559,9 @@
                                              :tool-results (mapv :result results)})
                                 steps)]
              (if (>= (inc step) max-steps)
-               (cond-> {:text text :history next-history :steps next-steps :truncated true}
-                 usage (assoc :usage usage))
+               (->result
+                 (cond-> {:text text :history next-history :steps next-steps :truncated true}
+                   usage (assoc :usage usage)))
                (recur next-history next-steps (inc step))))))))))
 
 
