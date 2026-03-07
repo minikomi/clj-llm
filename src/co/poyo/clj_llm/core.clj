@@ -169,7 +169,8 @@
    nil     → []"
   [input]
   (cond
-    (:text input)   [{:role :user :content (:text input)}]
+    (:structured input) [{:role :user :content (prn-str (:structured input))}]
+    (:text input)        [{:role :user :content (:text input)}]
     (string? input) [{:role :user :content input}]
     (mixed-content-vector? input)
     [{:role :user :content (mapv normalize-content-element input)}]
