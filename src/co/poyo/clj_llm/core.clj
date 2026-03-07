@@ -11,68 +11,18 @@
    [co.poyo.clj-llm.content :as content]))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; Result type — a map that coerces to string via :text
+;; Result — a plain map tagged with ::result metadata
 ;; ════════════════════════════════════════════════════════════════════
 
-(deftype GenerateResult [m]
-  Object
-  (toString [_] (str (:text m)))
-  (hashCode [_] (.hashCode ^Object m))
-  (equals [_ o] (= m o))
-
-  clojure.lang.IPersistentMap
-  (assoc [_ k v] (GenerateResult. (assoc m k v)))
-  (assocEx [_ k v] (GenerateResult. (assoc m k v)))
-  (without [_ k] (GenerateResult. (dissoc m k)))
-
-  clojure.lang.ILookup
-  (valAt [_ k] (get m k))
-  (valAt [_ k d] (get m k d))
-
-  clojure.lang.Seqable
-  (seq [_] (seq m))
-
-  clojure.lang.Counted
-  (count [_] (count m))
-
-  clojure.lang.IPersistentCollection
-  (cons [_ o] (GenerateResult. (conj m o)))
-  (empty [_] (GenerateResult. {}))
-  (equiv [_ o] (= m o))
-
-  clojure.lang.Associative
-  (containsKey [_ k] (contains? m k))
-  (entryAt [_ k] (find m k))
-
-  java.lang.Iterable
-  (iterator [_] (.iterator ^java.lang.Iterable (seq m)))
-
-  clojure.lang.IFn
-  (invoke [_ k] (get m k))
-  (invoke [_ k d] (get m k d))
-
-  clojure.lang.IHashEq
-  (hasheq [_] (hash m))
-
-  clojure.lang.IObj
-  (withMeta [_ meta] (GenerateResult. (with-meta m meta)))
-  (meta [_] (meta m)))
-
-(defmethod print-method GenerateResult [^GenerateResult r ^java.io.Writer w]
-  (print-method (into {} r) w))
-
 (defn result?
-  "Returns true if x is a GenerateResult."
+  "Returns true if x is a generate/run-agent result map."
   [x]
-  (or (instance? GenerateResult x)
-      (::result (meta x))))
+  (boolean (::result (meta x))))
 
 (defn ->result
-  "Wrap a map as a GenerateResult. The result behaves like a normal map but
-   coerces to its :text value when used as a string, and auto-unwraps when
-   passed as input to generate/events."
+  "Tag a map as a result for auto-unwrapping when passed back into generate."
   [m]
-  (GenerateResult. (vary-meta m assoc ::result true)))
+  (vary-meta m assoc ::result true))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
@@ -225,14 +175,13 @@
                   {:error-type :llm/invalid-request :element x}))))
 
 (defn- unwrap-result
-  "If input is a GenerateResult, extract its text content for chaining.
-   Returns the :text value as a string."
+  "Extract text content from a result map for chaining."
   [input]
   (or (:text input) ""))
 
 (defn- build-messages
   "Coerce input to a messages vector.
-   GenerateResult → auto-unwrap :text and treat as string input
+   Result map → auto-unwrap :text and treat as string input
    String  → [{:role :user :content input}]
    Vector of content parts/strings → [{:role :user :content [...parts...]}]
    Vector of messages → used as-is (message history)
@@ -430,18 +379,14 @@
      :on-tool-calls   - (fn [{:keys [tool-calls text]}] ...) called before tools execute
      :on-tool-result  - (fn [{:keys [tool-call result error]}] ...) called after each tool
 
-   Input is last — string, message-history vector, or a GenerateResult from
-   a previous call. Results auto-unwrap when chained, so :text is not needed:
+   Input is last — string, message-history vector, or a result map from
+   a previous call. Results auto-unwrap :text when chained:
 
    (->> \"raw text\"
         (llm/generate ai {:system-prompt \"Fix grammar\"})
         (llm/generate ai {:system-prompt \"Translate to French\"}))
 
-   Results coerce to their :text value via str:
-
-   (str (llm/generate ai \"hello\"))  ;=> \"Hello!\"
-
-   They still behave as maps — (:text result), (:usage result), etc. all work."
+   Results are plain maps — (:text result), (:usage result), etc."
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
