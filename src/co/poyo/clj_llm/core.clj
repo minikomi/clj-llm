@@ -10,11 +10,6 @@
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.content :as content]))
 
-(defn result?
-  "Returns true if x is a generate/run-agent result map."
-  [x]
-  (and (map? x) (contains? x :text)))
-
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
 ;; ════════════════════════════════════════════════════════════════════
@@ -165,11 +160,6 @@
                   (str "Invalid content element: expected string or content part, got " (type x))
                   {:error-type :llm/invalid-request :element x}))))
 
-(defn- unwrap-result
-  "Extract text content from a result map for chaining."
-  [input]
-  (or (:text input) ""))
-
 (defn- build-messages
   "Coerce input to a messages vector.
    Map     → auto-unwrap :text (result from previous generate/run-agent)
@@ -179,7 +169,7 @@
    nil     → []"
   [input]
   (cond
-    (result? input) [{:role :user :content (unwrap-result input)}]
+    (:text input)   [{:role :user :content (:text input)}]
     (string? input) [{:role :user :content input}]
     (mixed-content-vector? input)
     [{:role :user :content (mapv normalize-content-element input)}]
