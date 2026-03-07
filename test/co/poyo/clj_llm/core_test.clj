@@ -347,7 +347,7 @@
   (testing "generate returns a result map"
     (let [provider (mock-provider [{:type :content :content "hello"}])
           result (llm/generate provider "test")]
-      (is (llm/result? result))
+      (is (contains? result :text))
       (is (map? result))))
 
   (testing "run-agent returns a result map"
@@ -356,7 +356,7 @@
                   {:malli/schema [:=> [:cat [:map {:name "dummy" :description "D"}
                                              [:x :string]]] :string]})
           result (llm/run-agent provider [dummy] "test")]
-      (is (llm/result? result)))))
+      (is (contains? result :text)))))
 
 (deftest test-generate-result-str-coercion
   (testing "str renders as a map"
@@ -411,7 +411,7 @@
                         run
                         run
                         run)]
-        (is (llm/result? result))
+        (is (contains? result :text))
         (is (string? (str result)))
         (is (= 3 @call-count))))))
 
