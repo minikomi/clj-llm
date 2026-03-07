@@ -10,19 +10,10 @@
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.content :as content]))
 
-;; ════════════════════════════════════════════════════════════════════
-;; Result — a plain map tagged with ::result metadata
-;; ════════════════════════════════════════════════════════════════════
-
 (defn result?
   "Returns true if x is a generate/run-agent result map."
   [x]
-  (boolean (::result (meta x))))
-
-(defn ->result
-  "Tag a map as a result for auto-unwrapping when passed back into generate."
-  [m]
-  (vary-meta m assoc ::result true))
+  (map? x))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
@@ -181,14 +172,14 @@
 
 (defn- build-messages
   "Coerce input to a messages vector.
-   Result map → auto-unwrap :text and treat as string input
+   Map     → auto-unwrap :text (result from previous generate/run-agent)
    String  → [{:role :user :content input}]
    Vector of content parts/strings → [{:role :user :content [...parts...]}]
    Vector of messages → used as-is (message history)
    nil     → []"
   [input]
   (cond
-    (result? input) [{:role :user :content (unwrap-result input)}]
+    (map? input)    [{:role :user :content (unwrap-result input)}]
     (string? input) [{:role :user :content input}]
     (mixed-content-vector? input)
     [{:role :user :content (mapv normalize-content-element input)}]
@@ -406,8 +397,7 @@
                               (next-state state event))
                             init-state
                             (events provider api-opts input)))]
-     (->result
-       (cond
+     (cond
          tools
          (let [name->fn      (build-name->fn tools input-schemas)
                parsed-calls  (or (parse-tool-calls (:tool-calls result)) [])
@@ -436,7 +426,7 @@
                   :structured (parse-structured-output (:text result) schema)}
            (:usage result) (assoc :usage (:usage result)))
 
-         :else result)))))
+         :else result))))
 
 
 (defn run-agent
@@ -494,12 +484,11 @@
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
              stop?    (stop-when {:tool-calls parsed-calls :text text})]
          (if stop?
-           (->result
-             (cond-> {:text       text
-                      :history    (conj history {:role :assistant :content (or text "")})
-                      :steps      steps
-                      :tool-calls (not-empty parsed-calls)}
-               usage (assoc :usage usage)))
+           (cond-> {:text       text
+                    :history    (conj history {:role :assistant :content (or text "")})
+                    :steps      steps
+                    :tool-calls (not-empty parsed-calls)}
+             usage (assoc :usage usage))
 
            (let [_        (when (and on-tool-calls (seq parsed-calls))
                             (on-tool-calls {:step step :tool-calls parsed-calls :text text}))
@@ -532,9 +521,8 @@
                                              :tool-results (mapv :result results)})
                                 steps)]
              (if (>= (inc step) max-steps)
-               (->result
-                 (cond-> {:text text :history next-history :steps next-steps :truncated true}
-                   usage (assoc :usage usage)))
+               (cond-> {:text text :history next-history :steps next-steps :truncated true}
+                 usage (assoc :usage usage))
                (recur next-history next-steps (inc step))))))))))
 
 
