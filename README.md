@@ -1,45 +1,6 @@
 # clj-llm
 
-An LLM library that doesn't get in your way.
-
-Built for Clojure developers who want maximum flexibility without sacrificing simplicity. Minimal opinionated glue for any LLM provider — from OpenAI to your local Ollama setup.
-
-## Summary
-
-| Concept | How |
-|---|---|
-| Provider | `(openai/backend)` — a map |
-| Config | `(assoc provider :defaults {...})` |
-| Text generation | `(generate ai "prompt")` → string |
-| With options | `(generate ai {:system-prompt "..."} "prompt")` |
-| Structured output | `(generate ai {:schema s} "prompt")` → parsed data |
-| Tool calling | `(run-agent ai [#'tool-fn] "prompt")` → `{:text ... :steps ...}` |
-| Tool hooks | `:on-tool-calls`, `:on-tool-result` — observe the agent in real time |
-| Streaming | `(stream-print ai "prompt")` or `(stream ai "prompt")` |
-| Conversations | `(generate ai history-vector)` |
-| Full access | `(request ai "prompt")` → Response record |
-
-## Why clj-llm?
-
-**You're in control.** No magic configuration, no hidden behavior. Everything is explicit data.
-
-**Composable.** Input-last design means `generate` threads naturally with `->>`. Config is just `assoc`/`merge`.
-
-**Natural returns.** `generate` returns the value you want — a string for text, a parsed map for structured output — not a wrapper you have to unwrap.
-
-```clojure
-;; Same interface, any provider
-(def openai (openai/backend))  ;; reads OPENAI_API_KEY env var by default
-(def local  (openai/backend {:api-base "http://localhost:11434/v1"}))
-(def claude (anthropic/backend))  ;; reads ANTHROPIC_API_KEY env var by default
-
-;; Put defaults on the provider
-(def ai (assoc openai :defaults {:model "gpt-4o-mini"}))
-
-;; Generate — returns a string
-(llm/generate ai "Explain quantum computing")
-;; => "Quantum computing uses quantum mechanical phenomena..."
-```
+A Clojure library for talking to LLMs. Providers are plain maps. Results are plain maps. Everything composes with standard Clojure.
 
 ## Installation
 
@@ -48,299 +9,255 @@ Built for Clojure developers who want maximum flexibility without sacrificing si
                          :git/sha "..."}}}
 ```
 
-## Quick Start
+## Quick start
 
 ```clojure
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
-;; Provider = connection details
-(def provider (openai/backend))
+(def ai (assoc (openai/backend) :defaults {:model "gpt-4o-mini"}))
 
-;; Task = provider + configuration
-(def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
-
-;; Generate text
-(llm/generate ai "What is the meaning of life?")
-;; => "The meaning of life is a profound philosophical question..."
+(:text (llm/generate ai "What is the capital of France?"))
+;; => "The capital of France is Paris."
 ```
 
-## Core Design
+## Overview
 
-### Input-last, threads with `->>`
+| Concept | How |
+|---|---|
+| Provider | `(openai/backend)` — a map |
+| Config | `(assoc provider :defaults {...})` |
+| Text | `(generate ai "prompt")` → `{:text "..." :usage {...}}` |
+| Options | `(generate ai {:system-prompt "..."} "prompt")` |
+| Structured | `(generate ai {:schema s} "prompt")` → `{:structured {...} ...}` |
+| Tool call | `(generate ai {:tools [...]} "prompt")` → `{:tool-calls [...] :tool-results [...]}` |
+| Agent loop | `(run-agent ai [#'tool] "prompt")` → `{:text ... :steps ... :history ...}` |
+| Streaming | `(generate ai {:on-text print} "prompt")` |
+| Raw events | `(events ai "prompt")` → core.async channel |
+| Images/PDFs | `(generate ai ["describe" (content/image "photo.jpg")])` |
+| Chaining | `(->> "text" (generate ai) (generate ai))` |
 
-The input (string or message history) is always the last argument:
+## Providers
+
+A provider is just a map. Put defaults on `:defaults`:
 
 ```clojure
-;; Pipeline — output flows naturally
-(->> "Raw technical document with errors"
-     (llm/generate ai {:system-prompt "Fix grammar and spelling"})
-     (llm/generate ai {:system-prompt "Simplify for a general audience"})
-     (llm/generate ai {:system-prompt "Translate to French"}))
+(def openai  (openai/backend))                                      ;; reads OPENAI_API_KEY
+(def claude  (anthropic/backend))                                   ;; reads ANTHROPIC_API_KEY
+(def ollama  (openai/backend {:api-base "http://localhost:11434/v1"
+                              :api-key false}))
+(def router  (openai/backend {:api-key #(System/getenv "OPENROUTER_KEY")
+                              :api-base "https://openrouter.ai/api/v1"}))
+
+(def ai (assoc openai :defaults {:model "gpt-4o-mini"}))
+
+;; Layer more config with standard map ops
+(def careful (update ai :defaults merge {:model "gpt-4o" :temperature 0.2}))
 ```
 
-### Natural returns
+`api-key` can be a string, a zero-arg function (called on every request), or `false`.
 
-`generate` returns the value you actually want:
+## Generate
+
+Input is always last. Options go before it:
 
 ```clojure
-;; Text → string
 (llm/generate ai "hello")
-;; => "Hello! How can I help?"
+;; => {:text "Hello!" :usage {:prompt-tokens 5 :completion-tokens 3}}
 
-;; Schema → parsed map
-(llm/generate ai {:schema person-schema} "Marie Curie was a 66yo physicist")
-;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
+(llm/generate ai {:system-prompt "Answer in one word."} "Capital of France?")
+;; => {:text "Paris." :usage {...}}
 
-```
-
-### Providers are just maps
-
-```clojure
-;; Provider = just the connection
-(def provider (openai/backend))
-
-;; Defaults = what you want it to do
-(def ai (assoc provider :defaults {:model "gpt-4o-mini"}))
-
-;; Layer more config with merge
-(def extractor (update ai :defaults merge
-                        {:system-prompt "Extract structured data"
-                         :schema person-schema}))
-
-;; Use it
-(llm/generate extractor "Marie Curie was a 66yo physicist")
-;; => {:name "Marie Curie" :age 66 :occupation "physicist"}
-
-;; Override per-call when needed
-(llm/generate extractor {:model "gpt-4o"} "Albert Einstein...")
-```
-
-### Common options
-
-```clojure
 (llm/generate ai {:model         "gpt-4o"
                   :system-prompt "Be concise."
                   :temperature   0.2
-                  :max-tokens    500
-                  :top-p         0.9}
-  "Explain quantum computing")
-
-;; For provider-specific params not listed above:
-(llm/generate ai {:provider-opts {:frequency_penalty 0.5}} "hello")
+                  :max-tokens    100}
+  "Explain recursion")
 ```
 
-## Structured Output
+For provider-specific params: `:provider-opts {:frequency_penalty 0.5}`.
+
+## Chaining
+
+Results have `:text` and `:structured` — both auto-unwrap when passed as input:
 
 ```clojure
-(def invoice-schema
-  [:map
-   [:invoice-number :string]
-   [:total [:double {:min 0}]]
-   [:items [:vector [:map [:name :string] [:price :double]]]]])
+(->> "The mitochondria is the powerhouse of the cell. It make ATP."
+     (llm/generate ai {:system-prompt "Fix grammar."})
+     (llm/generate ai {:system-prompt "Translate to French."}))
+;; => {:text "La mitochondrie est la centrale..." :usage {...}}
+```
 
-(llm/generate ai {:schema invoice-schema} invoice-text)
-;; => {:invoice-number "INV-001" :total 150.0 :items [...]}
+A result with `:structured` unwraps via `prn-str`.
+
+## Structured output
+
+Pass a Malli schema to get parsed, validated data:
+
+```clojure
+(llm/generate ai
+  {:schema [:map [:name :string] [:age :int] [:occupation :string]]}
+  "Marie Curie was a 66 year old physicist")
+;; => {:text "{...}" :structured {:name "Marie Curie" :age 66 :occupation "physicist"} :usage {...}}
+```
+
+Build reusable extractors with `update`/`merge`:
+
+```clojure
+(def extractor
+  (update ai :defaults merge
+    {:system-prompt "Extract structured data."
+     :schema [:map [:name :string] [:age :int] [:occupation :string]]}))
+
+(:structured (llm/generate extractor "Albert Einstein was a 76 year old physicist"))
+;; => {:name "Albert Einstein" :age 76 :occupation "theoretical physicist"}
 ```
 
 ## Streaming
 
-```clojure
-;; Print as it streams, get full text back
-(llm/stream-print ai "Write a long story")
+`:on-text` streams chunks while still returning the full result:
 
-;; Channel for custom processing
-(let [ch (llm/stream ai "Count to 10")]
-  (loop []
-    (when-let [chunk (<!! ch)]
-      (print chunk) (flush)
-      (recur))))
+```clojure
+(llm/generate ai {:on-text (fn [chunk] (print chunk) (flush))} "Write a haiku")
+;; prints live, then returns {:text "..." :usage {...}}
 ```
 
 ## Conversations
 
-Message history is just a vector you pass as input:
+Message history is a vector you pass as input:
 
 ```clojure
-(def conversation
-  (atom [{:role :system :content "You are a helpful coding assistant"}]))
+(def convo (atom []))
 
-(defn chat! [message]
-  (swap! conversation conj {:role :user :content message})
-  (let [response (llm/generate ai @conversation)]
-    (swap! conversation conj {:role :assistant :content response})
-    response))
+(defn chat! [msg]
+  (swap! convo conj {:role :user :content msg})
+  (let [{:keys [text]} (llm/generate ai @convo)]
+    (swap! convo conj {:role :assistant :content text})
+    text))
 
-(chat! "How do I reverse a list in Clojure?")
-(chat! "What about in Python?")  ;; remembers context
+(chat! "What's the tallest mountain?")  ;; => "Mount Everest..."
+(chat! "Second tallest?")               ;; => "K2..."
 ```
 
-## Tool Calling
-
-Tools are plain functions with standard [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md):
+## Images and PDFs
 
 ```clojure
-(require '[cheshire.core :as json])
+(require '[co.poyo.clj-llm.content :as content])
 
-;; Geocode: city name → coordinates (free Open-Meteo API, no key needed)
-(defn geocode
-  {:malli/schema [:=> [:cat [:map {:name "geocode"
-                                   :description "Look up latitude and longitude for a city"}
+(:text (llm/generate ai ["What's in this image?" (content/image "photo.jpg")]))
+(:text (llm/generate ai ["Describe this" (content/image "https://example.com/chart.png")]))
+(:text (llm/generate claude-ai ["Summarize" (content/pdf "invoice.pdf")]))
+
+;; Resize to control cost and size limits
+(content/image "huge.jpg" {:max-edge 512})
+(content/image "photo.png" {:max-edge 1024 :format "jpeg" :quality 85})
+```
+
+## Tool calling
+
+Tools are plain functions with [Malli function schemas](https://github.com/metosin/malli/blob/master/docs/function-schemas.md):
+
+```clojure
+(defn get-weather
+  {:malli/schema [:=> [:cat [:map {:name "get_weather"
+                                   :description "Get current weather"}
                              [:city {:description "City name"} :string]]]
                       :string]}
   [{:keys [city]}]
-  (let [geo (-> (slurp (str "https://geocoding-api.open-meteo.com/v1/search?name="
-                            (java.net.URLEncoder/encode city "UTF-8") "&count=1"))
-                (json/parse-string true))
-        loc (first (:results geo))]
-    (json/generate-string (select-keys loc [:name :country :latitude :longitude]))))
+  (str "Sunny, 22°C in " city))
 
-;; Weather: coordinates → current conditions
-(defn get-weather
-  {:malli/schema [:=> [:cat [:map {:name "get_weather"
-                                   :description "Get current weather at a location. Call geocode first to get coordinates."}
-                             [:latitude {:description "Latitude"} :double]
-                             [:longitude {:description "Longitude"} :double]]]
-                      :string]}
-  [{:keys [latitude longitude]}]
-  (let [wx (-> (slurp (str "https://api.open-meteo.com/v1/jma?latitude=" latitude
-                           "&longitude=" longitude
-                           "&current=temperature_2m,weather_code,wind_speed_10m"
-                           "&timezone=auto"))
-               (json/parse-string true))]
-    (let [c (:current wx)]
-      (str (:temperature_2m c) "°C, wind " (:wind_speed_10m c) " km/h"))))
+;; Single LLM call — model decides whether to use tools
+(llm/generate ai {:tools [#'get-weather]} "Weather in Tokyo?")
+;; => {:text nil
+;;     :tool-calls [{:id "call_1" :name "get_weather" :arguments {:city "Tokyo"}}]
+;;     :tool-results ["Sunny, 22°C in Tokyo"]
+;;     :usage {...}}
 
-;; They're regular functions — call them, test them, compose them
-(geocode {:city "Tokyo"})
-;; => "{\"name\":\"Tokyo\",\"country\":\"Japan\",\"latitude\":35.6895,\"longitude\":139.69171}"
-
-(get-weather {:latitude 35.6895 :longitude 139.6917})
-;; => "20.1°C, wind 7.6 km/h"
-```
-
-`run-agent` reads `:malli/schema` from var metadata, calls the functions when the model invokes them, and chains multi-step tool use automatically:
-
-```clojure
-(llm/run-agent ai [#'geocode #'get-weather] "Weather in Tokyo?")
-;; => {:text "It's currently 20.1°C in Tokyo with light wind."
+;; Agent loop — keeps calling tools until the model is done
+(llm/run-agent ai [#'get-weather] "Weather in Tokyo?")
+;; => {:text    "It's currently sunny and 22°C in Tokyo."
 ;;     :history [...]
-;;     :steps [{:tool-calls [...] :tool-results [...]} ...]}
+;;     :steps   [{:tool-calls [...] :tool-results [...]}]
+;;     :usage   {...}}
 ```
 
-All three standard Malli approaches work — `{:malli/schema ...}` metadata, `mx/defn`, and `m/=>`:
+All Malli schema styles work: `{:malli/schema ...}` metadata, `mx/defn`, `m/=>`.
+
+### Agent options
 
 ```clojure
-;; m/=> annotation (schema separate from defn)
-(defn get-weather [{:keys [city]}] (str "Sunny in " city))
-(m/=> get-weather [:=> [:cat [:map {:name "get_weather"} [:city :string]]] :string])
+(llm/run-agent ai [#'search #'done]
+  {:max-steps  5
+   :stop-when  (fn [{:keys [tool-calls]}]
+                 (some #(= "done" (:name %)) tool-calls))
+   :on-text        (fn [chunk] (print chunk) (flush))
+   :on-tool-calls  (fn [{:keys [step tool-calls]}]
+                     (println "Step" step (mapv :name tool-calls)))
+   :on-tool-result (fn [{:keys [tool-call result error]}]
+                     (println " ->" (:name tool-call) result))}
+  "Research quantum computing")
 ```
 
-For structured output after tool use, compose with `generate`:
+`:stop-when` fires before tools execute — pending calls are returned in `:tool-calls` without being run.
+
+### Structured output after tool use
 
 ```clojure
-(let [{:keys [history]} (llm/run-agent ai [#'lookup] "find user 123")]
-  (llm/generate ai {:schema user-schema} history))
-;; => {:name "Alice" :status "active"}
+(let [{:keys [history]} (llm/run-agent ai [#'lookup] "Find user 123")]
+  (:structured (llm/generate ai {:schema [:map [:name :string] [:status :string]]} history)))
 ```
 
-`generate` does not accept tools — it's a pure value function. If getting the value requires tool calls, use `run-agent`.
+## generate vs run-agent
 
-### Observing tool execution
+| | `generate` | `run-agent` |
+|---|---|---|
+| LLM calls | Exactly one | Loop until done |
+| Tools | Optional (`:tools` in opts) | Required (second arg) |
+| Stop control | N/A | `:stop-when`, `:max-steps` |
+| Returns | `{:text :usage}` or `{:structured}` or `{:tool-calls :tool-results}` | `{:text :history :steps}` |
 
-Use `:on-tool-calls` and `:on-tool-result` to watch the agent work in real time — for logging, progress UI, streaming updates, etc:
+## Raw events
 
 ```clojure
-(llm/run-agent ai [#'geocode #'get-weather]
-  {:on-tool-calls  (fn [{:keys [step tool-calls]}]
-                     (println "Step" step "→" (mapv :name tool-calls)))
-   :on-tool-result (fn [{:keys [tool-call result]}]
-                     (println "  " (:name tool-call) "=>" (subs result 0 (min 60 (count result)))))
-  "Weather in Tokyo?")
-;; Step 0 → ["geocode"]
-;;   geocode => {"name":"Tokyo","country":"Japan","latitude":35.6895
-;; Step 1 → ["get_weather"]
-;;   get_weather => {"temperature_c":20.1,"conditions":"Clear sky"
-;; => {:text "It's currently 20.1°C in Tokyo..." :steps [...] ...}
+(require '[clojure.core.async :refer [<!!]])
+
+(let [ch (llm/events ai "Count to 5")]
+  (loop []
+    (when-let [event (<!! ch)]
+      (println (:type event) (dissoc event :type))
+      (recur))))
+;; :content {:content "1"}
+;; :usage {:prompt-tokens 10 :completion-tokens 20}
+;; :done {}
 ```
 
-Both callbacks receive the current `:step` index (0-based). `:on-tool-result` also includes `:error` (the exception) when a tool throws.
+Event types: `:content`, `:tool-call`, `:tool-call-delta`, `:usage`, `:finish`, `:error`, `:done`.
 
-## Provider Flexibility
+## Error handling
 
-```clojure
-;; OpenAI — reads OPENAI_API_KEY env var by default
-(def openai (openai/backend))
-
-;; Static key
-(def openai (openai/backend {:api-key "sk-..."}))
-
-;; Custom key function — vault, SSM, rotation, whatever
-(def openai (openai/backend {:api-key-fn #(fetch-from-vault "openai-key")}))
-
-;; Custom env var
-(def router (openai/backend {:api-key-fn #(System/getenv "OPENROUTER_KEY")
-                             :api-base "https://openrouter.ai/api/v1"}))
-
-;; Local models (Ollama, LM Studio, etc)
-(def local (openai/backend {:api-base "http://localhost:11434/v1"
-                            :api-key "not-needed"}))
-
-;; Same code, any provider
-(def ai (assoc any-provider :defaults {:model "gpt-4o-mini"}))
-(llm/generate ai "Same interface everywhere")
-```
-
-The `api-key-fn` is called on every request — no caching. For expensive key lookups, wrap with `memoize` or your own TTL cache.
-
-## Error Handling
-
-Errors are `ex-info` exceptions with `:error-type` in `ex-data`:
+Connection errors throw plain Java exceptions. HTTP errors throw `ex-info` with `:status` and `:body`:
 
 ```clojure
-(require '[co.poyo.clj-llm.errors :as errors])
-
 (try
-  (llm/generate ai {:model "invalid-model"} "Hello")
+  (llm/generate ai {:model "nonexistent"} "hello")
+  (catch clojure.lang.ExceptionInfo e
+    (let [{:keys [status body]} (ex-data e)]
+      (println "HTTP" status body)))
   (catch Exception e
-    (case (errors/error-type e)
-      :llm/rate-limit    (println "Rate limited, retry in" (errors/retry-after e) "ms")
-      :llm/network-error (println "Network issue, retrying...")
-      :llm/invalid-key   (println "Check your API key")
-      :llm/server-error  (println "Server error, try again")
-      (throw e))))
+    (println "Connection error:" (.getMessage e))))
 ```
 
-The library does not do automatic retries. Use your own retry logic or a library like `again`.
+Option validation errors are `ex-info` with `:error-type :llm/invalid-request`. No automatic retries.
 
-## Full Response Access
+## Babashka
 
-When you need token usage or raw events, use `request` directly:
-
-```clojure
-(def resp (llm/request ai "Explain AI briefly"))
-
-@resp              ;; block for text (IDeref)
-@(:text resp)      ;; same
-@(:usage resp)     ;; token counts
-(:chunks resp)     ;; channel of text chunks
-(:events resp)     ;; channel of raw events
-```
-
-## Try It Now
+Works out of the box — the HTTP layer switches automatically between `java.net.http` and `babashka.http-client`.
 
 ```bash
-# Interactive chat REPL
-./scripts/chat.clj gpt-4o-mini
+#!/usr/bin/env bb
+(require '[co.poyo.clj-llm.core :as llm]
+         '[co.poyo.clj-llm.backends.openai :as openai])
 
-# See structured output in action  
-./scripts/generate.clj
-
-# Test streaming
-./scripts/streaming.clj
-
-# Tool calling
-./scripts/tools.clj
+(def ai (assoc (openai/backend) :defaults {:model "gpt-4o-mini"}))
+(println (:text (llm/generate ai "Hello from Babashka!")))
 ```
-
-Built with ❤️ for Clojure developers who value simplicity and control.

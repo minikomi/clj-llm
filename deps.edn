@@ -2,7 +2,8 @@
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         cheshire/cheshire {:mvn/version "6.0.0"}
         metosin/malli {:mvn/version "0.17.0"}
-        camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}}
+        camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
+        org.clojure/core.async {:mvn/version "1.6.681"}}
 
  :aliases
  {:test {:extra-paths ["test"]
