@@ -340,17 +340,17 @@
       (is (= "hi" (:text result))))))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; GenerateResult auto-unwrap tests
+;; result? / auto-unwrap tests
 ;; ════════════════════════════════════════════════════════════════════
 
 (deftest test-generate-result-type
-  (testing "generate returns a GenerateResult"
+  (testing "generate returns a result map"
     (let [provider (mock-provider [{:type :content :content "hello"}])
           result (llm/generate provider "test")]
       (is (llm/result? result))
       (is (map? result))))
 
-  (testing "run-agent returns a GenerateResult"
+  (testing "run-agent returns a result map"
     (let [provider (mock-provider [{:type :content :content "done"}])
           dummy (with-meta (fn [{:keys [x]}] x)
                   {:malli/schema [:=> [:cat [:map {:name "dummy" :description "D"}
@@ -359,13 +359,15 @@
       (is (llm/result? result)))))
 
 (deftest test-generate-result-str-coercion
-  (testing "str returns :text value"
-    (let [provider (mock-provider [{:type :content :content "The answer is 42"}])
-          result (llm/generate provider "test")]
-      (is (= "The answer is 42" (str result))))))
+  (testing "str renders as a map"
+    (let [provider (mock-provider [{:type :content :content "hi"}])
+          result (llm/generate provider "test")
+          s (str result)]
+      (is (clojure.string/includes? s ":text"))
+      (is (clojure.string/includes? s "\"hi\"")))))
 
 (deftest test-generate-result-map-behavior
-  (testing "GenerateResult behaves as a map"
+  (testing "result map behaves as a map"
     (let [provider (mock-provider [{:type :content :content "hi"}
                                    {:type :usage :prompt-tokens 5 :completion-tokens 2}])
           result (llm/generate provider "test")]
@@ -373,7 +375,7 @@
       (is (= 5 (get-in result [:usage :prompt-tokens])))
       (is (contains? result :text))
       (is (= #{:text :usage} (set (keys result))))
-      (is (= "hi" (result :text))))))
+      (is (= "hi" (:text result))))))
 
 (deftest test-generate-result-auto-unwrap-chaining
   (testing "generate accepts a GenerateResult as input, unwraps :text"
