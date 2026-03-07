@@ -13,7 +13,7 @@
 (defn result?
   "Returns true if x is a generate/run-agent result map."
   [x]
-  (map? x))
+  (and (map? x) (contains? x :text)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
@@ -179,7 +179,7 @@
    nil     → []"
   [input]
   (cond
-    (map? input)    [{:role :user :content (unwrap-result input)}]
+    (result? input) [{:role :user :content (unwrap-result input)}]
     (string? input) [{:role :user :content input}]
     (mixed-content-vector? input)
     [{:role :user :content (mapv normalize-content-element input)}]
