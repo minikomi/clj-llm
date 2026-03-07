@@ -378,7 +378,20 @@
       (is (= "hi" (:text result))))))
 
 (deftest test-generate-result-auto-unwrap-chaining
-  (testing "generate accepts a GenerateResult as input, unwraps :text"
+  (testing "chaining on :structured uses prn-str as content"
+    (let [calls (atom [])
+          provider (->MockProvider
+                     (atom [{:type :content :content "{\"name\":\"Alice\"}"}])
+                     {:model "test-model"}
+                     calls)
+          schema [:map [:name :string]]
+          prev-result (llm/generate provider {:schema schema} "extract")
+          _ (reset! (.responses provider) [{:type :content :content "ok"}])
+          _ (llm/generate provider prev-result)]
+      (is (= (prn-str {:name "Alice"})
+             (get-in (second @calls) [:messages 0 :content])))))
+
+  (testing "generate accepts a result as input, unwraps :text"
     (let [calls (atom [])
           provider (->MockProvider
                      (atom [{:type :content :content "response"}])
