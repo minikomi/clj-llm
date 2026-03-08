@@ -381,14 +381,17 @@
          on-text        (:on-text opts)
          on-tool-calls  (:on-tool-calls opts)
          on-tool-result (:on-tool-result opts)
+         on-reasoning  (:on-reasoning opts)
          input-schemas  (when tools (tools->input-schemas tools))
-         api-opts       (cond-> (dissoc opts :on-text :on-tool-calls :on-tool-result)
+         api-opts       (cond-> (dissoc opts :on-text :on-tool-calls :on-tool-result :on-reasoning)
                           tools (-> (dissoc :tools) (assoc :tools input-schemas)))
          result         (finalize-state
                           (chan-reduce
                             (fn [state event]
                               (when (and on-text (= :content (:type event)))
                                 (on-text (:content event)))
+                              (when (and on-reasoning (= :reasoning (:type event)))
+                                (on-reasoning (:content event)))
                               (next-state state event))
                             init-state
                             (events provider api-opts input)))]
@@ -463,7 +466,8 @@
          on-tool-calls  (:on-tool-calls parsed)
          on-tool-result (:on-tool-result parsed)
          on-text        (:on-text parsed)
-         request-opts (-> (dissoc parsed :max-steps :stop-when :on-tool-calls :on-tool-result :on-text)
+         on-reasoning   (:on-reasoning parsed)
+         request-opts (-> (dissoc parsed :max-steps :stop-when :on-tool-calls :on-tool-result :on-text :on-reasoning)
                           (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
@@ -473,6 +477,8 @@
                (chan-reduce (fn [state event]
                               (when (and on-text (= :content (:type event)))
                                 (on-text (:content event)))
+                              (when (and on-reasoning (= :reasoning (:type event)))
+                                (on-reasoning (:content event)))
                               (next-state state event))
                             init-state
                             (events provider request-opts history)))

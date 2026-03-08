@@ -30,3 +30,13 @@
                     :on-text #(.append sb %)}
                 "Say hello")
   (println (str sb)))
+
+;; stream reasoning content (gpt-5 and o1/o3 models)
+(println "\n--- stream reasoning content ---")
+(print "[reasoning:")
+(flush)
+(llm/generate ai
+            {:on-reasoning #(do (print %) (flush))
+             :on-text #(do (print %) (flush))}
+            "Count from 1 to 3, one per line.")
+(println "")
