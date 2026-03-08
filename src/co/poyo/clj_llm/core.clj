@@ -67,7 +67,7 @@
 
 (def ^:private init-state
   "Initial accumulator for the event stream consumer."
-  {:chunks [] :tool-calls [] :tool-call-positions {} :usage {} :finish-reason nil :error nil})
+  {:chunks [] :reasoning-chunks [] :tool-calls [] :tool-call-positions {} :usage {} :finish-reason nil :error nil})
 
 (defn- next-state
   "Pure state transition: state × event → state'.
@@ -76,6 +76,9 @@
   (case (:type event)
     :content
     (update state :chunks conj (:content event))
+
+    :reasoning
+    (update state :reasoning-chunks conj (:content event))
 
     :tool-call
     (let [idx  (or (:index event) (count (:tool-calls state)))
@@ -109,10 +112,11 @@
 
 (defn- finalize-state
   "Turn accumulated state into a result map."
-  [{:keys [chunks error usage finish-reason tool-calls]}]
+  [{:keys [chunks reasoning-chunks error usage finish-reason tool-calls]}]
   (if error
     (throw error)
     (cond-> {:text (apply str chunks)}
+      (seq reasoning-chunks) (assoc :reasoning (apply str reasoning-chunks))
       (seq usage)      (assoc :usage (cond-> usage finish-reason (assoc :finish-reason finish-reason)))
       (seq tool-calls) (assoc :tool-calls tool-calls))))
 

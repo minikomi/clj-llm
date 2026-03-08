@@ -83,15 +83,21 @@
 (defn- data->events
   "Convert one OpenAI chunk to a seq of internal events, or nil.
    In schema mode, tool calls are treated as content.
-   In tools mode, tool calls are emitted as :tool-call events."
+   In tools mode, tool calls are emitted as :tool-call events.
+   Reasoning content (from o1/o3 models and OpenRouter) is emitted as :reasoning events."
   [data schema tools]
   (let [content (get-in data [:choices 0 :delta :content])
+        reasoning-content (or (get-in data [:choices 0 :delta :reasoning])
+                             (get-in data [:choices 0 :delta :reasoning_content]))
         tool-calls (get-in data [:choices 0 :delta :tool-calls])
         finish-reason (get-in data [:choices 0 :finish-reason])
         usage (:usage data)]
     (cond
       (:error data)
       [{:type :error :error (:error data)}]
+
+      (not-empty reasoning-content)
+      [{:type :reasoning :content reasoning-content}]
 
       (not-empty content)
       [{:type :content :content content}]
