@@ -1,7 +1,6 @@
 #!/usr/bin/env bb
 
-(require '[clojure.core.async :as a]
-         '[co.poyo.clj-llm.core :as llm]
+(require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
 (def model (or (first *command-line-args*)
@@ -27,14 +26,13 @@
   (when-let [input (read-line)]
     (when-not (empty? input)
       (swap! history conj {:role :user :content input})
-      (let [ch (llm/stream ai @history)
-            sb (StringBuilder.)]
-        (loop []
-          (if-let [chunk (a/<!! ch)]
-            (do (.append sb chunk)
-                (print chunk) (flush)
-                (recur))
-            (do (println)
-                (swap! history conj {:role :assistant :content (str sb)}))))))
+      (let [sb (StringBuilder.)
+            result (llm/generate ai
+                                 {:on-text (fn [chunk]
+                                             (.append sb chunk)
+                                             (print chunk) (flush))}
+                                 @history)]
+        (println)
+        (swap! history conj {:role :assistant :content (:text result)})))
     (println)
     (recur)))
