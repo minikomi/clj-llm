@@ -142,17 +142,43 @@
 
 (defrecord AnthropicBackend [api-base api-key-fn api-version defaults]
   proto/LLMProvider
-  (request-events [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
-    (let [api-key (api-key-fn)
-          url (str api-base "/v1/messages")
-          headers (cond-> {"Content-Type" "application/json"
-                           "anthropic-version" api-version}
-                   api-key (assoc "x-api-key" api-key))
-          body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [raw-ch (stream/open-event-stream url headers body)
-            ch     (a/chan 256 (keep #(data->event % schema tools)))]
-        (a/pipe raw-ch ch)
-        ch))))
+  (api-key [_] (api-key-fn))
+
+  (build-url [_ _model] (str api-base "/v1/messages"))
+
+  (build-headers [_]
+    (let [key (api-key-fn)]
+      (cond-> {"Content-Type" "application/json"
+               "anthropic-version" api-version}
+        key (assoc "x-api-key" key))))
+
+  (build-body [_ model system-prompt messages schema tools tool-choice provider-opts]
+    (let [messages (normalize-messages messages)
+          tools-config (cond
+                         tools
+                         (cond-> {:tools (mapv schema/malli->tool-definition tools)}
+                           (not= tool-choice "none")
+                           (assoc :tool_choice (cond
+                                                (= tool-choice "auto") {:type "auto"}
+                                                (= tool-choice "required") {:type "any"}
+                                                :else (or tool-choice {:type "auto"}))))
+
+                         schema
+                         {:tools [(schema/malli->tool-definition schema)]
+                          :tool_choice {:type "any"}})
+          api-opts (convert-options-for-api provider-opts)]
+      (merge
+       {:model model
+        :max_tokens (or (:max_tokens api-opts) 4096)
+        :messages messages
+        :stream true}
+       api-opts
+       tools-config
+       (when system-prompt {:system system-prompt}))))
+
+  (parse-chunk [_ chunk schema tools]
+    (or (data->event chunk schema tools) [])))
+
 
 (defn backend
   "Create an Anthropic provider.
