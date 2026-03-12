@@ -8,7 +8,9 @@
    On JVM Clojure, image resizing uses javax.imageio directly.
    On babashka, image resizing requires ImageMagick (convert/magick on PATH).
    Without ImageMagick, images are sent at original size."
-  #?@(:bb  []
+  #?@(:bb  [(:import [java.util Base64]
+                    [java.io File FileInputStream ByteArrayOutputStream]
+                    [java.util.concurrent.atomic AtomicInteger])]
       :clj [(:import [java.util Base64]
                      [java.io File FileInputStream ByteArrayOutputStream]
                      [java.awt.image BufferedImage]
@@ -84,7 +86,7 @@
                "jpg"  "jpeg"
                "jpeg" "jpeg"
                "png"  "png"
-               "png"))))
+               nil))))
 
      (defn- jvm-resize
        "Resize an image using javax.imageio + java.awt.
@@ -265,7 +267,8 @@
            has-resize? (or (:max-edge opts) (:max-width opts) (:max-height opts))]
        (if has-resize?
          ;; Download, resize, return base64
-         (let [url-ext (extension (.getPath (java.net.URL. source)))
+         (let [url-obj (java.net.URL. source)
+               url-ext (some-> (.getPath url-obj) extension)
                tmp (java.io.File/createTempFile "clj-llm-" (str "." (or url-ext "png")))
                _   (.deleteOnExit tmp)]
            (with-open [in  (.openStream (java.net.URL. source))
