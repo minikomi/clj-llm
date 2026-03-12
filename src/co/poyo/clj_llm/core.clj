@@ -8,7 +8,8 @@
    [malli.transform :as mt]
    [malli.util :as mu]
    [co.poyo.clj-llm.protocol :as proto]
-   [co.poyo.clj-llm.content :as content]))
+   [co.poyo.clj-llm.content :as content]
+   [co.poyo.clj-llm.stream :as stream]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Option schemas
@@ -185,6 +186,21 @@
                   {:error-type :llm/invalid-request
                    :input input}))))
 
+(defn- provider-request-events
+  "Orchestrate request using LLMProvider protocol methods.
+   Returns core.async channel of events."
+  [provider request]
+  (let [{:keys [model system-prompt messages schema tools tool-choice provider-opts]} request
+        body-map (proto/build-body provider model system-prompt messages
+                                   schema tools tool-choice provider-opts)]
+    (let [req {:url (proto/build-url provider model)
+               :headers (proto/build-headers provider)
+               :body (json/generate-string body-map)}]
+      (let [raw-ch (stream/open-event-stream (:url req) (:headers req) (:body req))
+            ch (a/chan 256 (mapcat #(proto/parse-chunk provider % schema tools)))]
+        (a/pipe raw-ch ch)
+        ch))))
+
 ;; ════════════════════════════════════════════════════════════════════
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
@@ -216,7 +232,7 @@
          _ (when-not model
              (throw (ex-info "No model specified"
                              {:error-type :llm/invalid-request :opts parsed})))]
-     (proto/request-events provider
+     (provider-request-events provider
        {:model model :system-prompt system-prompt
         :messages (build-messages input)
         :schema schema :tools tools :tool-choice tool-choice
@@ -525,6 +541,7 @@
                (cond-> {:text text :history next-history :steps next-steps :truncated true}
                  usage (assoc :usage usage))
                (recur next-history next-steps (inc step))))))))))
+
 
 
 
