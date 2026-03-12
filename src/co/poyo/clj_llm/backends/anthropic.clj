@@ -185,21 +185,19 @@
 
 (defn backend
   "Create an Anthropic provider.
-   Config: :api-key, :api-base, :api-version.
-   :api-key can be a string, a zero-arg fn, or false (skip auth).
-   Default reads ANTHROPIC_API_KEY env var."
+   Config: :api-key, :api-base, :api-version, :defaults.
+   :api-key can be a string, a zero-arg fn, or false (skip auth)."
   ([] (backend {}))
-  ([{:keys [api-key api-key-fn api-base api-version]}]
-   (->AnthropicBackend
-    (or api-base (:api-base default-config))
-    (cond (false? api-key)  (constantly nil)
-          (fn? api-key)     api-key
-          (some? api-key)   (constantly api-key)
-          ;; legacy :api-key-fn support
-          api-key-fn        api-key-fn
-          :else             default-api-key-fn)
-    (or api-version (:api-version default-config))
-    {})))
+  ([{:keys [api-key api-base api-version defaults]}]
+   (let [b (->AnthropicBackend
+            (or api-base (:api-base default-config))
+            (cond (false? api-key)  (constantly nil)
+                  (fn? api-key)     api-key
+                  :else             (constantly api-key))
+            (or api-version (:api-version default-config)))]
+     (if defaults
+       (assoc b :defaults defaults)
+       b))))
 
 (defmethod print-method AnthropicBackend [b writer]
   (let [model (get-in b [:defaults :model])]

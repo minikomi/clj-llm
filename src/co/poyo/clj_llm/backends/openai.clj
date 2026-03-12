@@ -15,11 +15,6 @@
 (def ^:private default-config
   {:api-base "https://api.openai.com/v1"})
 
-(defn- default-api-key-fn
-  "Default: read API key from OPENAI_API_KEY env var."
-  []
-  (System/getenv "OPENAI_API_KEY"))
-
 (def ^:private ->snake-key (memoize csk/->snake_case_keyword))
 
 (defn- convert-options-for-api [opts]
@@ -141,7 +136,7 @@
 ;; OpenAI Backend
 ;; ==========================================
 
-(defrecord OpenAIBackend [api-base api-key-fn defaults]
+(defrecord OpenAIBackend [api-base api-key-fn]
   proto/LLMProvider
   (api-key [_] (api-key-fn))
 
@@ -163,26 +158,21 @@
 
 (defn backend
   "Create an OpenAI provider.
-   Config: :api-key, :api-base, :model, :temperature, :max-tokens.
-   :api-key can be a string, a zero-arg fn, or false (skip auth).
-   Default reads OPENAI_API_KEY env var."
+   Config: :api-key, :api-base, :defaults.
+   :api-key can be a string, a zero-arg fn, or false (skip auth)."
   ([] (backend {}))
-  ([{:keys [api-key api-key-fn api-base model temperature max-tokens]}]
-   (->OpenAIBackend
-    (or api-base (:api-base default-config))
-    (cond (false? api-key)  (constantly nil)
-          (fn? api-key)     api-key
-          (some? api-key)   (constantly api-key)
-          ;; legacy :api-key-fn support
-          api-key-fn        api-key-fn
-          :else             default-api-key-fn)
-    (cond-> {}
-      model (assoc :model model)
-      temperature (assoc :temperature temperature)
-      max-tokens (assoc :max-tokens max-tokens)))))
+  ([{:keys [api-key api-base defaults]}]
+   (let [b (->OpenAIBackend
+            (or api-base (:api-base default-config))
+            (cond (false? api-key)  (constantly nil)
+                  (fn? api-key)     api-key
+                  :else             (constantly api-key)))]
+     (if defaults
+       (assoc b :defaults defaults)
+       b))))
 
 (defmethod print-method OpenAIBackend [b writer]
-  (let [model (get-in b [:defaults :model])]
+  (let [model nil]
     (.write writer "#OpenAI")
     (when model
       (.write writer (str " " (pr-str model))))
