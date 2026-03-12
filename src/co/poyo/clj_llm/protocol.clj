@@ -9,4 +9,7 @@
   (build-body [this model system-prompt messages schema tools tool-choice provider-opts]
     "Construct request body as a map")
   (parse-chunk [this chunk schema tools]
-    "Return vector of events (may be empty)"))
+    "Return vector of events (may be empty)")
+  (stream-events [this url headers body]
+    "Open an event stream from URL with headers and body.
+     Returns a core.async channel of raw chunk maps."))

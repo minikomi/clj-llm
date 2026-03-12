@@ -13,10 +13,28 @@
 
 (defrecord MockProvider [responses defaults calls]
   proto/LLMProvider
-  (request-events [_ request]
+  (api-key [_] "mock-api-key")
+  (build-url [_ model] (str "https://mock.example.com/" model))
+  (build-headers [_] {"Content-Type" "application/json"})
+  (build-body [this model system-prompt messages schema tools tool-choice provider-opts]
     (when calls
-      (swap! calls conj request))
-    (let [events (conj (vec @responses) {:type :done})
+      (swap! calls conj {:model model
+                         :system-prompt system-prompt
+                         :messages messages
+                         :schema schema
+                         :tools tools
+                         :tool-choice tool-choice
+                         :provider-opts provider-opts}))
+    ;; Return minimal body - mock doesn't need actual API format
+    {:model model
+     :messages (if system-prompt
+                 (into [{:role "system" :content system-prompt}] messages)
+                 messages)})
+  (parse-chunk [_ chunk _schema _tools]
+    ;; Test events are already in internal event format - pass through
+    (if (:type chunk) [chunk] []))
+  (stream-events [this _url _headers _body]
+    (let [events (conj (vec @(.responses this)) {:type :done})
           ch (a/chan 256)]
       (a/thread
         (doseq [e events]
@@ -31,7 +49,6 @@
                    (merge {:model "test-model"} defaults)
                    (atom []))))
 
-;; ════════════════════════════════════════════════════════════════════
 ;; Tests
 ;; ════════════════════════════════════════════════════════════════════
 

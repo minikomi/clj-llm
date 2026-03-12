@@ -192,14 +192,14 @@
   [provider request]
   (let [{:keys [model system-prompt messages schema tools tool-choice provider-opts]} request
         body-map (proto/build-body provider model system-prompt messages
-                                   schema tools tool-choice provider-opts)]
-    (let [req {:url (proto/build-url provider model)
-               :headers (proto/build-headers provider)
-               :body (json/generate-string body-map)}]
-      (let [raw-ch (stream/open-event-stream (:url req) (:headers req) (:body req))
-            ch (a/chan 256 (mapcat #(proto/parse-chunk provider % schema tools)))]
-        (a/pipe raw-ch ch)
-        ch))))
+                                   schema tools tool-choice provider-opts)
+        url (proto/build-url provider model)
+        headers (proto/build-headers provider)
+        body (json/generate-string body-map)]
+    (let [raw-ch (proto/stream-events provider url headers body)
+          ch (a/chan 256 (mapcat #(proto/parse-chunk provider % schema tools)))]
+      (a/pipe raw-ch ch)
+      ch)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Core API
