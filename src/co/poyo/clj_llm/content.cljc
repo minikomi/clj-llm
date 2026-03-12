@@ -8,9 +8,10 @@
    On JVM Clojure, image resizing uses javax.imageio directly.
    On babashka, image resizing requires ImageMagick (convert/magick on PATH).
    Without ImageMagick, images are sent at original size."
-  #?@(:bb  [(:require [clojure.java.shell :as shell])
+  #?@(:bb  [(:require [clojure.java.shell :as shell]
+                        [clojure.string :refer [shellescape]])
                     (:import [java.util Base64]
-                    [java.io File])]
+                             [java.io File])]
       :clj [(:import [java.util Base64]
                      [java.io File FileInputStream ByteArrayOutputStream]
                      [java.awt.image BufferedImage]
