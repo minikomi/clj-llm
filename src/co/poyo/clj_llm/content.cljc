@@ -8,9 +8,9 @@
    On JVM Clojure, image resizing uses javax.imageio directly.
    On babashka, image resizing requires ImageMagick (convert/magick on PATH).
    Without ImageMagick, images are sent at original size."
-  #?@(:bb  [(:import [java.util Base64]
-                    [java.io File FileInputStream ByteArrayOutputStream]
-                    [java.util.concurrent.atomic AtomicInteger])]
+  #?@(:bb  [(:require [clojure.java.shell :as shell])
+                    (:import [java.util Base64]
+                    [java.io File])]
       :clj [(:import [java.util Base64]
                      [java.io File FileInputStream ByteArrayOutputStream]
                      [java.awt.image BufferedImage]
@@ -47,16 +47,18 @@
      :clj (.encodeToString (Base64/getEncoder) bs)))
 
 (defn- slurp-bytes ^bytes [path]
-  (let [f #?(:bb  (java.io.File. (str path))
-             :clj (File. (str path)))
-        bs (byte-array (.length f))]
-    (with-open [is #?(:bb  (java.io.FileInputStream. f)
-                      :clj (FileInputStream. f))]
-      (loop [off 0]
-        (let [n (.read is bs off (- (alength bs) off))]
-          (when (pos? n)
-            (recur (+ off n))))))
-    bs))
+  #?(:clj  (let [f (File. (str path))
+                 bs (byte-array (.length f))]
+             (with-open [is (FileInputStream. f)]
+               (loop [off 0]
+                 (let [n (.read is bs off (- (alength bs) off))]
+                   (when (pos? n)
+                     (recur (+ off n))))))
+             bs)
+      :bb  (-> (format "cat %s" (shellescape path))
+               (shell/sh)
+               :out
+               .getBytes)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; JVM: javax.imageio resize
