@@ -28,6 +28,7 @@
    [:top-p {:optional true} number?]
    [:provider-opts {:optional true} [:map-of :keyword :any]]
    [:on-text {:optional true} fn?]
+   [:on-reasoning {:optional true} fn?]
    [:on-tool-calls {:optional true} fn?]
    [:on-tool-result {:optional true} fn?]])
 

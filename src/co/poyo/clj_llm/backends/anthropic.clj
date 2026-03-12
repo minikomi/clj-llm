@@ -188,16 +188,14 @@
    Config: :api-key, :api-base, :api-version, :defaults.
    :api-key can be a string, a zero-arg fn, or false (skip auth)."
   ([] (backend {}))
-  ([{:keys [api-key api-base api-version defaults]}]
-   (let [b (->AnthropicBackend
-            (or api-base (:api-base default-config))
-            (cond (false? api-key)  (constantly nil)
-                  (fn? api-key)     api-key
-                  :else             (constantly api-key))
-            (or api-version (:api-version default-config)))]
-     (if defaults
-       (assoc b :defaults defaults)
-       b))))
+([{:keys [api-key api-base api-version defaults]}]
+   (->AnthropicBackend
+    (or api-base (:api-base default-config))
+    (cond (false? api-key)  (constantly nil)
+          (fn? api-key)     api-key
+          :else             (constantly api-key))
+    (or api-version (:api-version default-config))
+    (or defaults {}))))
 
 (defmethod print-method AnthropicBackend [b writer]
   (let [model (get-in b [:defaults :model])]
