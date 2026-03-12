@@ -55,22 +55,30 @@
             (:content msg) (update :content normalize-content)))
         messages))
 
-(defn- build-body
-  "Build OpenAI API request body"
+(defn- build-tools-config
+  "Extract tools/schema configuration logic."
+  [schema tools tool-choice]
+  (cond
+    tools
+    {:tools (mapv schema/malli->tool-definition tools)
+     :tool_choice (or tool-choice "auto")}
+
+    schema
+    {:tools [(schema/malli->tool-definition schema)]
+     :tool_choice "required"}
+
+    :else
+    nil))
+
+(defn- build-body-internal
+  "Build OpenAI API request body as a map."
   [model system-prompt messages schema tools tool-choice opts]
   (let [messages (normalize-messages messages)
         messages-with-system (if system-prompt
                                (into [{:role "system" :content system-prompt}]
                                      messages)
                                messages)
-        tools-config (cond
-                       tools
-                       {:tools (mapv schema/malli->tool-definition tools)
-                        :tool_choice (or tool-choice "auto")}
-
-                       schema
-                       {:tools [(schema/malli->tool-definition schema)]
-                        :tool_choice "required"})
+        tools-config (build-tools-config schema tools tool-choice)
         api-opts (convert-options-for-api opts)]
     (merge
      {:stream true
@@ -135,24 +143,28 @@
 
 (defrecord OpenAIBackend [api-base api-key-fn defaults]
   proto/LLMProvider
-  (request-events [_ {:keys [model system-prompt messages schema tools tool-choice provider-opts]}]
-    (let [api-key (api-key-fn)
-          url (str api-base "/chat/completions")
-          headers (cond-> {"Content-Type" "application/json"}
-                   api-key (assoc "Authorization" (str "Bearer " api-key)))
-          body (json/generate-string (build-body model system-prompt messages schema tools tool-choice provider-opts))]
-      (let [raw-ch (stream/open-event-stream url headers body)
-            ch     (a/chan 256 (mapcat #(data->events % schema tools)))]
-        (a/pipe raw-ch ch)
-        ch))))
+  (api-key [_] (api-key-fn))
+
+  (build-url [_ _model] (str api-base "/chat/completions"))
+
+  (build-headers [_]
+    (let [key (api-key-fn)]
+      (cond-> {"Content-Type" "application/json"}
+        key (assoc "Authorization" (str "Bearer " key)))))
+
+  (build-body [_ model system-prompt messages schema tools tool-choice provider-opts]
+    (build-body-internal model system-prompt messages schema tools tool-choice provider-opts))
+
+  (parse-chunk [_ chunk schema tools]
+    (or (data->events chunk schema tools) [])))
 
 (defn backend
   "Create an OpenAI provider.
-   Config: :api-key, :api-base.
+   Config: :api-key, :api-base, :model, :temperature, :max-tokens.
    :api-key can be a string, a zero-arg fn, or false (skip auth).
    Default reads OPENAI_API_KEY env var."
   ([] (backend {}))
-  ([{:keys [api-key api-key-fn api-base]}]
+  ([{:keys [api-key api-key-fn api-base model temperature max-tokens]}]
    (->OpenAIBackend
     (or api-base (:api-base default-config))
     (cond (false? api-key)  (constantly nil)
@@ -161,7 +173,10 @@
           ;; legacy :api-key-fn support
           api-key-fn        api-key-fn
           :else             default-api-key-fn)
-    {})))
+    (cond-> {}
+      model (assoc :model model)
+      temperature (assoc :temperature temperature)
+      max-tokens (assoc :max-tokens max-tokens))))
 
 (defmethod print-method OpenAIBackend [b writer]
   (let [model (get-in b [:defaults :model])]
