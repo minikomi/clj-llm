@@ -176,7 +176,7 @@
     (cond-> {}
       model (assoc :model model)
       temperature (assoc :temperature temperature)
-      max-tokens (assoc :max-tokens max-tokens))))
+      max-tokens (assoc :max-tokens max-tokens)))))
 
 (defmethod print-method OpenAIBackend [b writer]
   (let [model (get-in b [:defaults :model])]
