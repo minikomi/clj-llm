@@ -156,7 +156,10 @@
     (build-body-internal model system-prompt messages schema tools tool-choice provider-opts))
 
   (parse-chunk [_ chunk schema tools]
-    (or (data->events chunk schema tools) [])))
+    (or (data->events chunk schema tools) []))
+
+  (stream-events [_ url headers body]
+    (stream/open-event-stream url headers body)))
 
 (defn backend
   "Create an OpenAI provider.

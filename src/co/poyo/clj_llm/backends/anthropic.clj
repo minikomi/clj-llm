@@ -177,7 +177,10 @@
        (when system-prompt {:system system-prompt}))))
 
   (parse-chunk [_ chunk schema tools]
-    (or (data->event chunk schema tools) [])))
+    (or (data->event chunk schema tools) []))
+
+  (stream-events [_ url headers body]
+    (stream/open-event-stream url headers body)))
 
 
 (defn backend
