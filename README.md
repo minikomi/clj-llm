@@ -15,7 +15,8 @@ A Clojure library for talking to LLMs. Providers are plain maps. Results are pla
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
-(def ai (assoc (openai/backend) :defaults {:model "gpt-4o-mini"}))
+(def ai (openai/backend {:api-key "sk-..."
+                         :defaults {:model "gpt-4o-mini"}))
 
 (:text (llm/generate ai "What is the capital of France?"))
 ;; => "The capital of France is Paris."
@@ -42,14 +43,15 @@ A Clojure library for talking to LLMs. Providers are plain maps. Results are pla
 A provider is just a map. Put defaults on `:defaults`:
 
 ```clojure
-(def openai  (openai/backend))                                      ;; reads OPENAI_API_KEY
-(def claude  (anthropic/backend))                                   ;; reads ANTHROPIC_API_KEY
+(def openai  (openai/backend {:api-key "sk-..."}))
+(def claude  (anthropic/backend {:api-key "sk-ant-..."}))
 (def ollama  (openai/backend {:api-base "http://localhost:11434/v1"
                               :api-key false}))
-(def router  (openai/backend {:api-key #(System/getenv "OPENROUTER_KEY")
+(def router  (openai/backend {:api-key "sk-..."
                               :api-base "https://openrouter.ai/api/v1"}))
 
-(def ai (assoc openai :defaults {:model "gpt-4o-mini"}))
+(def ai (openai/backend {:api-key "sk-..."
+                         :defaults {:model "gpt-4o-mini"}}))
 
 ;; Layer more config with standard map ops
 (def careful (update ai :defaults merge {:model "gpt-4o" :temperature 0.2}))
@@ -258,6 +260,7 @@ Works out of the box — the HTTP layer switches automatically between `java.net
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.backends.openai :as openai])
 
-(def ai (assoc (openai/backend) :defaults {:model "gpt-4o-mini"}))
+(def ai (openai/backend {:api-key "sk-..."
+                         :defaults {:model "gpt-4o-mini"}))
 (println (:text (llm/generate ai "Hello from Babashka!")))
 ```
