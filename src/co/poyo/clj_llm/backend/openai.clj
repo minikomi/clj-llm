@@ -127,7 +127,8 @@
             tool-calls)
 
       finish-reason
-      [{:type :finish :reason finish-reason}]
+      (cond-> [{:type :finish :reason finish-reason}]
+        usage (conj (into {:type :usage} usage)))
 
       usage
       [(into {:type :usage} usage)])))

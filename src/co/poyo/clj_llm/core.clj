@@ -395,6 +395,7 @@
   ([provider opts input]
    (let [tools          (or (:tools opts) (:tools (:defaults provider)))
          schema         (or (:schema opts) (:schema (:defaults provider)))
+         model          (or (:model opts) (:model (:defaults provider)))
          on-text        (:on-text opts)
          on-tool-calls  (:on-tool-calls opts)
          on-tool-result (:on-tool-result opts)
@@ -403,45 +404,48 @@
          api-opts       (cond-> (dissoc opts :on-text :on-tool-calls :on-tool-result :on-reasoning)
                           tools (-> (dissoc :tools) (assoc :tools input-schemas)))
          result         (finalize-state
-                          (chan-reduce
-                            (fn [state event]
-                              (when (and on-text (= :content (:type event)))
-                                (on-text (:content event)))
-                              (when (and on-reasoning (= :reasoning (:type event)))
-                                (on-reasoning (:content event)))
-                              (next-state state event))
-                            init-state
-                            (events provider api-opts input)))]
+                         (chan-reduce
+                          (fn [state event]
+                            (when (and on-text (= :content (:type event)))
+                              (on-text (:content event)))
+                            (when (and on-reasoning (= :reasoning (:type event)))
+                              (on-reasoning (:content event)))
+                            (next-state state event))
+                          init-state
+                          (events provider api-opts input)))
+         usage        (when (:usage result) (assoc (:usage result) :model model))]
      (cond
-         tools
-         (let [name->fn      (build-name->fn tools input-schemas)
-               parsed-calls  (or (parse-tool-calls (:tool-calls result)) [])
-               _             (when (and on-tool-calls (seq parsed-calls))
-                               (on-tool-calls {:tool-calls parsed-calls
-                                               :text (not-empty (:text result))}))
-               tool-results  (mapv (fn [tc]
-                                     (let [res (try
-                                                 {:result (execute-tool-call name->fn tc)}
-                                                 (catch Exception e
-                                                   {:result (str "Error: " (.getMessage e))
-                                                    :error e}))]
-                                       (when on-tool-result
-                                         (on-tool-result {:tool-call tc
-                                                          :result (:result res)
-                                                          :error (:error res)}))
-                                       (:result res)))
-                                   parsed-calls)]
-           (cond-> {:text         (not-empty (:text result))
-                    :tool-calls   parsed-calls
-                    :tool-results tool-results}
-             (:usage result) (assoc :usage (:usage result))))
+       tools
+       (let [name->fn      (build-name->fn tools input-schemas)
+             parsed-calls  (or (parse-tool-calls (:tool-calls result)) [])
+             _             (when (and on-tool-calls (seq parsed-calls))
+                             (on-tool-calls {:tool-calls parsed-calls
+                                             :text (not-empty (:text result))}))
+             tool-results  (mapv (fn [tc]
+                                   (let [res (try
+                                               {:result (execute-tool-call name->fn tc)}
+                                               (catch Exception e
+                                                 {:result (str "Error: " (.getMessage e))
+                                                  :error e}))]
+                                     (when on-tool-result
+                                       (on-tool-result {:tool-call tc
+                                                        :result (:result res)
+                                                        :error (:error res)}))
+                                     (:result res)))
+                                 parsed-calls)]
+         (cond-> {:text         (not-empty (:text result))
+                  :tool-calls   parsed-calls
+                  :tool-results tool-results}
+           usage (assoc :usage usage)))
 
-         schema
-         (cond-> {:text (:text result)
-                  :structured (parse-structured-output (:text result) schema)}
-           (:usage result) (assoc :usage (:usage result)))
+       schema
+       (cond-> {:text (:text result)
+                :structured (parse-structured-output (:text result) schema)}
+         usage (assoc :usage usage))
 
-         :else result))))
+       :else
+       (cond-> {:text (:text result)}
+         usage (assoc :usage usage))))))
 
 
 (defn run-agent
@@ -542,8 +546,3 @@
                (cond-> {:text text :history next-history :steps next-steps :truncated true}
                  usage (assoc :usage usage))
                (recur next-history next-steps (inc step))))))))))
-
-
-
-
-
