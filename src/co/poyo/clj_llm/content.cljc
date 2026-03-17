@@ -4,8 +4,8 @@
    [co.poyo.clj-llm.impl.mime-util :as mime-util]
    [co.poyo.clj-llm.impl.bytes-util :as bytes-util]
    ;; bb must come first for override
-   #?(:bb  [co.poyo.clj-llm.impl.image-bb :as impl]
-      :clj [co.poyo.clj-llm.impl.image-jvm :as impl]))
+   #?(:bb  [co.poyo.clj-llm.impl.image.bb :as impl]
+      :clj [co.poyo.clj-llm.impl.image.jvm :as impl]))
   (:import
    [java.io File FileOutputStream]
    [java.net URL]))

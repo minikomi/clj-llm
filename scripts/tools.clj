@@ -36,7 +36,7 @@
     (if-not loc
       (str "Could not find city: " city)
       {:name (:name loc) :country (:country loc)
-       :latitude (:latitude loc) :longitude (:longitude loc)}))))
+       :latitude (:latitude loc) :longitude (:longitude loc)})))
 
 (def wmo-codes
   {0 "Clear sky" 1 "Mainly clear" 2 "Partly cloudy" 3 "Overcast"

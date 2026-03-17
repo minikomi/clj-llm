@@ -1,4 +1,4 @@
-(ns co.poyo.clj-llm.impl.net-bb
+(ns co.poyo.clj-llm.impl.net.bb
   (:require
    [babashka.http-client :as http]))
 
