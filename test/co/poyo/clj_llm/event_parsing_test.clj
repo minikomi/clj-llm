@@ -16,7 +16,7 @@
   "Parse an SSE fixture file into data maps using the same path as production."
   [fixture-path]
   (with-open [reader (io/reader (io/resource fixture-path))]
-    (into [] (keep stream/parse-data-line) (line-seq reader))))
+    (into [] (keep stream/parse-sse-data) (line-seq reader))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; OpenAI event converter — delegates to real implementation

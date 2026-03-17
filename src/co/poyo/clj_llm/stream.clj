@@ -8,7 +8,7 @@
    [clojure.java.io         :as io]
    [clojure.string          :as str]
    [co.poyo.clj-llm.net     :as net])
-  (:import (java.io BufferedReader InputStream)))
+  (:import (java.io InputStream)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; SSE parsing
@@ -16,7 +16,7 @@
 
 (def ^:private ->kebab-key (memoize csk/->kebab-case-keyword))
 
-(defn- parse-sse-data
+(defn parse-sse-data
   "Extract and parse JSON from a 'data: …' SSE line.
    Returns a decoded map, or nil for non-data / blank / [DONE] / bad JSON."
   [^String line]
