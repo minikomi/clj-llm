@@ -2,7 +2,7 @@
   "REPL-friendly examples for clj-llm"
   (:require [clojure.core.async :as a]
             [co.poyo.clj-llm.core :as llm]
-            [co.poyo.clj-llm.backends.openai :as openai]
+            [co.poyo.clj-llm.backend.openai :as openai]
             [cheshire.core :as json]
             [clojure.string :as str]))
 

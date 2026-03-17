@@ -1,4 +1,4 @@
-(ns co.poyo.clj-llm.backends.openai
+(ns co.poyo.clj-llm.backend.openai
   "OpenAI and OpenAI-compatible API provider implementation.
    
    Supports OpenAI, OpenRouter, Together.ai, and any OpenAI-compatible endpoint."
@@ -172,7 +172,7 @@
        b))))
 
 (defmethod print-method OpenAIBackend [b writer]
-  (let [model nil]
+  (let [model (get-in b [:defaults :model])]
     (.write writer "#OpenAI")
     (when model
       (.write writer (str " " (pr-str model))))

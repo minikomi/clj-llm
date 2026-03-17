@@ -1,18 +1,21 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai]
+         '[co.poyo.clj-llm.backend.openai :as openai]
+         '[co.poyo.clj-llm.backend.openrouter :as openrouter]
          '[cheshire.core :as json])
 
 ;; Works with OPENAI_API_KEY or OPENROUTER_KEY
 (def provider
-  (let [openrouter-key (System/getenv "OPENROUTER_KEY")]
-    (if openrouter-key
-      (openai/backend {:api-key openrouter-key
-                        :api-base "https://openrouter.ai/api/v1"})
-      (openai/backend))))
+  (cond->
+      (if (System/getenv "OPENROUTER_KEY")
+        (openrouter/backend)
+        (openai/backend))
+    ;; Override default model
+    (System/getenv "LLM_MODEL")
+    (assoc-in [:defaults :model] (System/getenv "LLM_MODEL"))))
 
-(def ai (assoc provider :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))
+(println provider)
 
 ;; Tools are plain functions with standard Malli function schemas.
 ;; The :malli/schema on the var tells run-agent what the LLM sees.
@@ -66,30 +69,26 @@
 (println "Direct call:" (geocode {:city "Tokyo"}))
 (println "Direct call:" (get-weather {:latitude 35.6895 :longitude 139.6917}))
 
+(defn tool-call-reporter [{:keys [tool-calls text] :as fn-args}]
+  (when text (println "LLM said:" text))
+  (println "LLM Called:")
+  (doseq [tool-call tool-calls]
+    (println "  - " (:name tool-call) ":" (:arguments tool-call))))
+
 ;; run-agent chains tools automatically — geocode then get-weather
 (println "\n--- agent chains geocode → get-weather ---")
-(let [{:keys [text steps]} (llm/run-agent ai [#'geocode #'get-weather]
-                             "What's the weather in Tokyo?")]
+(let [{:keys [text steps]}
+      (llm/run-agent provider [#'geocode #'get-weather]
+                     {:on-tool-calls tool-call-reporter}
+                     "What's the weather in Tokyo?")]
   (println "Steps:" (count steps))
-  (doseq [{:keys [tool-calls]} steps]
-    (doseq [tc tool-calls]
-      (println "  Called:" (:name tc) (:arguments tc))))
   (println "Final:" text))
 
 ;; Multiple cities — the LLM can call geocode in parallel
 (println "\n--- multi-city ---")
-(let [{:keys [text steps]} (llm/run-agent ai [#'geocode #'get-weather]
-                             "Compare weather in Tokyo and Paris right now")]
+(let [{:keys [text steps]}
+      (llm/run-agent provider [#'geocode #'get-weather]
+                     {:on-tool-calls tool-call-reporter}
+                     "Compare weather in Tokyo and Paris right now")]
   (println "Steps:" (count steps))
-  (doseq [{:keys [tool-calls]} steps]
-    (doseq [tc tool-calls]
-      (println "  Called:" (:name tc) (:arguments tc))))
-  (println "Final:" text))
-
-;; With options
-(println "\n--- with max-steps ---")
-(let [{:keys [text steps truncated]} (llm/run-agent ai [#'geocode #'get-weather]
-                                       {:max-steps 3}
-                                       "Weather in Tokyo?")]
-  (println "Steps:" (count steps) (when truncated "(truncated)"))
   (println "Final:" text))

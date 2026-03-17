@@ -2,7 +2,7 @@
 
 (require '[co.poyo.clj-llm.core :as llm]
          '[co.poyo.clj-llm.content :as content]
-         '[co.poyo.clj-llm.backends.openai :as openai])
+         '[co.poyo.clj-llm.backend.openai :as openai])
 
 
 ;; use first argument as image path

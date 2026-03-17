@@ -1,9 +1,9 @@
 (ns co.poyo.clj-llm.anthropic-test
   (:require [clojure.test :refer [deftest testing is]]
-            [co.poyo.clj-llm.backends.anthropic]))
+            [co.poyo.clj-llm.backend.anthropic]))
 
-(def ^:private data->event @#'co.poyo.clj-llm.backends.anthropic/data->event)
-(def ^:private build-body @#'co.poyo.clj-llm.backends.anthropic/build-body)
+(def ^:private data->event @#'co.poyo.clj-llm.backend.anthropic/data->event)
+(def ^:private build-body @#'co.poyo.clj-llm.backend.anthropic/build-body)
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; data->internal-event

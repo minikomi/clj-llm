@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai]
+         '[co.poyo.clj-llm.backend.openai :as openai]
          '[org.httpkit.server :as hk]
          '[hiccup2.core :as h]
          '[hiccup.util :refer [raw-string]]
