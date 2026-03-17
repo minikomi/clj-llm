@@ -13,7 +13,7 @@ A Clojure library for talking to LLMs. Providers are plain maps. Results are pla
 
 ```clojure
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai])
+         '[co.poyo.clj-llm.backend.openai :as openai])
 
 (def ai (openai/backend {:api-key "sk-..."
                          :defaults {:model "gpt-4o-mini"}))
@@ -258,7 +258,7 @@ Works out of the box — the HTTP layer switches automatically between `java.net
 ```bash
 #!/usr/bin/env bb
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai])
+         '[co.poyo.clj-llm.backend.openai :as openai])
 
 (def ai (openai/backend {:api-key "sk-..."
                          :defaults {:model "gpt-4o-mini"}))

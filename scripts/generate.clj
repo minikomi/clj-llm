@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai])
+         '[co.poyo.clj-llm.backend.openai :as openai])
 
 ;; Works with OPENAI_API_KEY or OPENROUTER_KEY
 (def provider

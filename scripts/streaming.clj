@@ -1,11 +1,11 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.backends.openai :as openai])
+         '[co.poyo.clj-llm.backend.openai :as openai]
+         '[co.poyo.clj-llm.backend.openrouter :as openrouter])
 
 (def user-input (or (first *command-line-args*) "Write a haiku about Clojure"))
 (def start-time (System/nanoTime))
-;; timestamps of first tokens
 (def state (volatile! {}))
 
 (defn format-ms [ns]
@@ -16,12 +16,14 @@
 
 ;; Provider
 ;; prefer OPENROUTER_KEY if set, otherwise fall back to regular OpenAI backend
-(def ai
-  (let [k (System/getenv "OPENROUTER_KEY")]
-    (-> (if k
-          (openai/backend {:api-key k :api-base "https://openrouter.ai/api/v1"})
-          (openai/backend))
-        (assoc :defaults {:model (or (System/getenv "LLM_MODEL") "gpt-4o-mini")}))))
+(def provider
+  (cond->
+      (if (System/getenv "OPENROUTER_KEY")
+        (openrouter/backend)
+        (openai/backend))
+    ;; Override default model
+    (System/getenv "LLM_MODEL")
+    (assoc-in [:defaults :model] (System/getenv "LLM_MODEL"))))
 
 ;; Generate Settings
 (def ai-settings
@@ -46,7 +48,7 @@
      (flush))})
 
 ;; Run
-
+(println provider)
 (println "--- Start ---\nRequest Sent: " (format-ms (- (System/nanoTime) start-time)) "\n")
-(llm/generate ai ai-settings user-input)
+(llm/generate provider ai-settings user-input)
 (println "\n--- Done ---\nTotal time:" (format-ms (- (System/nanoTime) start-time)))

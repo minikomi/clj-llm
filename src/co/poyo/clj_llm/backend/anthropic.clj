@@ -1,4 +1,4 @@
-(ns co.poyo.clj-llm.backends.anthropic
+(ns co.poyo.clj-llm.backend.anthropic
   "Anthropic API provider implementation"
   (:require
    [camel-snake-kebab.core :as csk]

@@ -509,7 +509,7 @@
              usage (assoc :usage usage))
 
            (let [_        (when (and on-tool-calls (seq parsed-calls))
-                            (on-tool-calls {:step step :tool-calls parsed-calls :text text}))
+                            (on-tool-calls {:step step :tool-calls parsed-calls :text (not-empty text)}))
                  results  (when (seq parsed-calls)
                             (mapv (fn [tc]
                                     (let [tool-exec (try

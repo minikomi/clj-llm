@@ -6,7 +6,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [co.poyo.clj-llm.stream :as stream]
-            [co.poyo.clj-llm.backends.openai]))
+            [co.poyo.clj-llm.backend.openai]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Helpers
@@ -22,7 +22,7 @@
 ;; OpenAI event converter — delegates to real implementation
 ;; ════════════════════════════════════════════════════════════════════
 
-(def ^:private data->events* @#'co.poyo.clj-llm.backends.openai/data->events)
+(def ^:private data->events* @#'co.poyo.clj-llm.backend.openai/data->events)
 
 (defn openai-events
   "Convert parsed SSE data to internal events via real openai backend. Returns seq or nil."
