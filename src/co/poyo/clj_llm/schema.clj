@@ -27,10 +27,10 @@
    (fn [acc child]
      (if-not (and (vector? child) (keyword? (first child)))
        acc
-       (let [[k & rest] child
-             [props schema-val] (if (= 2 (count rest))
-                                 [(first rest) (second rest)]
-                                 [{} (first rest)])
+       (let [[k & more] child
+             [props schema-val] (if (= 2 (count more))
+                                 [(first more) (second more)]
+                                 [{} (first more)])
              prop-name (name k)
              js (cond-> (malli->json-schema schema-val (inc depth))
                   (:description props) (assoc :description (:description props)))]
