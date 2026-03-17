@@ -1,4 +1,4 @@
-(ns co.poyo.clj-llm.impl.net-jvm
+(ns co.poyo.clj-llm.impl.net.jvm
   (:import
    (java.net.http
     HttpClient

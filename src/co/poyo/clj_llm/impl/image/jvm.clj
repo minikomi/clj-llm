@@ -1,4 +1,4 @@
-(ns co.poyo.clj-llm.impl.image-jvm
+(ns co.poyo.clj-llm.impl.image.jvm
   "JVM image resizing implementation for clj-llm.content."
   (:require
    [co.poyo.clj-llm.impl.mime-util :as mime-util]

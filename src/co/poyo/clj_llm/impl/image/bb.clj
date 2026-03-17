@@ -1,4 +1,4 @@
-(ns co.poyo.clj-llm.impl.image-bb
+(ns co.poyo.clj-llm.impl.image.bb
   "Babashka image resizing implementation for clj-llm.content.
    Uses ImageMagick if available."
   (:require
