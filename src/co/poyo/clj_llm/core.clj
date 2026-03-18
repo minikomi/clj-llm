@@ -466,11 +466,12 @@
 
    opts (optional):
      :max-steps       - max iterations (default 10)
-     :stop-when       - (fn [{:keys [tool-calls text]}] ...) called after each LLM
-                        response, before executing tools. Return truthy to stop.
-                        Default: stop when no tool calls (model is done).
+     :stop-when       - (fn [{:keys [tool-calls text step tool-results]}] ...) called
+                        twice per step: pre-execution (no :tool-results) and post-execution
+                        (with :tool-results). Return truthy to stop. Default: stop when
+                        no tool calls.
      :on-tool-calls   - (fn [{:keys [step tool-calls text]}] ...) called when the
-                        model returns tool calls, before they are executed.
+                        model returns tool calls, before stop-when evaluation.
      :on-tool-result  - (fn [{:keys [step tool-call result error]}] ...) called
                         after each individual tool finishes.
      :on-text         - (fn [text-chunk] ...) called for each text chunk as it
@@ -511,16 +512,17 @@
                             init-state
                             (events provider request-opts history)))
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
-             stop?    (stop-when {:tool-calls parsed-calls :text text})]
-         (if stop?
+             _        (when (and on-tool-calls (seq parsed-calls))
+                        (on-tool-calls {:step step :tool-calls parsed-calls :text (not-empty text)}))
+             pre-stop? (stop-when {:tool-calls parsed-calls :text text :step step})]
+         (if pre-stop?
            (cond-> {:text       text
                     :history    (conj history {:role :assistant :content (or text "")})
                     :steps      steps
                     :tool-calls (not-empty parsed-calls)}
              usage (assoc :usage usage))
 
-           (let [_        (when (and on-tool-calls (seq parsed-calls))
-                            (on-tool-calls {:step step :tool-calls parsed-calls :text (not-empty text)}))
+           (let [
                  results  (when (seq parsed-calls)
                             (mapv (fn [tc]
                                     (let [tool-exec (try
@@ -534,6 +536,7 @@
                                                          :error (:error tool-exec)}))
                                       tool-exec))
                                   parsed-calls))
+                 tool-results (mapv :result results)
                  assistant-msg (if results
                                  (tool-calls->assistant-message parsed-calls text)
                                  {:role :assistant :content (or text "")})
@@ -547,9 +550,14 @@
                                  (into tool-msgs))
                  next-steps   (if results
                                 (conj steps {:tool-calls   (vec parsed-calls)
-                                             :tool-results (mapv :result results)})
-                                steps)]
-             (if (>= (inc step) max-steps)
-               (cond-> {:text text :history next-history :steps next-steps :truncated true}
+                                             :tool-results tool-results})
+                                steps)
+                 post-stop? (when results
+                              (stop-when {:tool-calls parsed-calls :text text :step step :tool-results tool-results}))]
+             (if (or post-stop? (>= (inc step) max-steps))
+               (cond-> {:text text :history next-history :steps next-steps}
+                 post-stop? (assoc :tool-calls (not-empty parsed-calls)
+                                   :tool-results (not-empty tool-results))
+                 (and (not post-stop?) (>= (inc step) max-steps)) (assoc :truncated true)
                  usage (assoc :usage usage))
                (recur next-history next-steps (inc step))))))))))
