@@ -124,6 +124,24 @@ Build reusable extractors with `update`/`merge`:
 ;; prints live, then returns {:text "..." :usage {...}}
 ```
 
+For reasoning models (o1, o3, etc.), `:on-reasoning` streams the model's internal reasoning:
+
+```clojure
+(llm/generate ai {:on-reasoning (fn [chunk] (print "[thinking]" chunk) (flush))
+                  :on-text      (fn [chunk] (print chunk) (flush))}
+  "Solve this logic puzzle: ...")
+;; prints reasoning chunks with [thinking] prefix, then the final answer
+```
+
+For reasoning models (o1, o3, etc.), `:on-reasoning` streams the model's internal reasoning:
+
+```clojure
+(llm/generate ai {:on-reasoning (fn [chunk] (print "[thinking]" chunk) (flush))
+                  :on-text      (fn [chunk] (print chunk) (flush))}
+  "Solve this logic puzzle: ...")
+;; prints reasoning chunks with [thinking] prefix, then the final answer
+```
+
 ## Conversations
 
 Message history is a vector you pass as input:
@@ -233,7 +251,7 @@ All Malli schema styles work: `{:malli/schema ...}` metadata, `mx/defn`, `m/=>`.
 ;; :done {}
 ```
 
-Event types: `:content`, `:tool-call`, `:tool-call-delta`, `:usage`, `:finish`, `:error`, `:done`.
+Event types: `:content`, `:reasoning`, `:tool-call`, `:tool-call-delta`, `:usage`, `:finish`, `:error`, `:done`.
 
 ## Error handling
 
