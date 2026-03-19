@@ -277,7 +277,7 @@
         (when-let [ns-sym (some-> (:ns m) ns-name)]
           (:schema (get-in (m/function-schemas) [ns-sym (:name m)])))
         (throw (ex-info
-                "Tool missing Malli schema. Use {:malli/schema ...}, mx/defn, or m/=>."
+                "Tool missing Malli schema. Use {:malli/schema ...} and pass function as a #'var, mx/defn, or m/=>."
                 {:error-type :llm/invalid-request :tool tool})))))
 
 (defn- extract-input-schema
@@ -352,7 +352,6 @@
   [tool-call-id content]
   {:role :tool :tool-call-id tool-call-id :content (serialize-tool-result content)})
 
-
 (defn generate
   "Blocking generation. Returns a result map:
 
@@ -393,27 +392,42 @@
   ([provider input]
    (generate provider {} input))
   ([provider opts input]
-   (let [tools          (or (:tools opts) (:tools (:defaults provider)))
+   (let [start-time     (System/currentTimeMillis)
+         tools          (or (:tools opts) (:tools (:defaults provider)))
          schema         (or (:schema opts) (:schema (:defaults provider)))
          model          (or (:model opts) (:model (:defaults provider)))
          on-text        (:on-text opts)
          on-tool-calls  (:on-tool-calls opts)
          on-tool-result (:on-tool-result opts)
-         on-reasoning  (:on-reasoning opts)
+         on-reasoning   (:on-reasoning opts)
          input-schemas  (when tools (tools->input-schemas tools))
          api-opts       (cond-> (dissoc opts :on-text :on-tool-calls :on-tool-result :on-reasoning)
                           tools (-> (dissoc :tools) (assoc :tools input-schemas)))
+         timings        (atom {})
          result         (finalize-state
                          (chan-reduce
                           (fn [state event]
-                            (when (and on-text (= :content (:type event)))
-                              (on-text (:content event)))
-                            (when (and on-reasoning (= :reasoning (:type event)))
-                              (on-reasoning (:content event)))
+                            (when (= :reasoning (:type event))
+                              (swap! timings update :reasoning-start #(or % (System/currentTimeMillis)))
+                              (when on-reasoning (on-reasoning (:content event))))
+                            (when (= :content (:type event))
+                              (swap! timings update :content-start #(or % (System/currentTimeMillis)))
+                              (when on-text (on-text (:content event))))
                             (next-state state event))
                           init-state
                           (events provider api-opts input)))
-         usage        (when (:usage result) (assoc (:usage result) :model model))]
+         end-time       (System/currentTimeMillis)
+         {:keys [reasoning-start content-start]} @timings
+         base           (cond-> {:timings {:total (- end-time start-time)}}
+                          reasoning-start (update :timings assoc
+                                                  :reasoning-start (- reasoning-start start-time)
+                                                   :reasoning-time-ms (- (or content-start end-time) reasoning-start))
+                          content-start (update :timings assoc
+                                                :generation-start (- content-start start-time)
+                                                :generation-time-ms (- end-time content-start))
+                          (not-empty (:text result))      (assoc :text (:text result))
+                          (not-empty (:reasoning result)) (assoc :reasoning (:reasoning result))
+                          (:usage result)                 (assoc :usage (assoc (:usage result) :model model)))]
      (cond
        tools
        (let [name->fn      (build-name->fn tools input-schemas)
@@ -433,20 +447,13 @@
                                                         :error (:error res)}))
                                      (:result res)))
                                  parsed-calls)]
-         (cond-> {:text         (not-empty (:text result))
-                  :tool-calls   parsed-calls
-                  :tool-results tool-results}
-           usage (assoc :usage usage)))
+         (merge base {:tool-calls   parsed-calls
+                      :tool-results tool-results}))
 
        schema
-       (cond-> {:text (:text result)
-                :structured (parse-structured-output (:text result) schema)}
-         usage (assoc :usage usage))
+       (merge base {:structured (parse-structured-output (:text result) schema)})
 
-       :else
-       (cond-> {:text (:text result)}
-         usage (assoc :usage usage))))))
-
+       :else base))))
 
 (defn run-agent
   "Run an agentic tool-calling loop. Tools are plain functions with standard

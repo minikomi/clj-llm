@@ -15,6 +15,10 @@
 (def ^:private default-config
   {:api-base "https://api.openai.com/v1"})
 
+(defn- default-api-key-fn []
+    (or (System/getenv "OPENAI_API_KEY")
+        (throw (ex-info "No API key provided and OPENAI_API_KEY env var not set" {}))))
+
 (def ^:private ->snake-key (memoize csk/->snake_case_keyword))
 
 (defn- convert-options-for-api [opts]
@@ -165,16 +169,11 @@
   ([{:keys [api-key api-base defaults]}]
    (let [b (->OpenAIBackend
             (or api-base (:api-base default-config))
-            (cond (false? api-key)  (constantly nil)
-                  (fn? api-key)     api-key
-                  :else             (constantly api-key)))]
+            (cond
+              (string? api-key) (constantly api-key)
+              (= api-key false) (constantly nil)
+              (fn? api-key)     api-key
+              :else             default-api-key-fn))]
      (if defaults
        (assoc b :defaults defaults)
        b))))
-
-(defmethod print-method OpenAIBackend [b writer]
-  (let [model (get-in b [:defaults :model])]
-    (.write writer "#OpenAI")
-    (when model
-      (.write writer (str " " (pr-str model))))
-    (.write writer (str " " (pr-str (:api-base b))))))
