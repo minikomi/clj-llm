@@ -2,6 +2,7 @@
   (:require
    [clojure.core.async :as a]
    [clojure.set]
+   [clojure.string :as str]
    [cheshire.core :as json]
    [malli.core :as m]
    [malli.error :as me]
@@ -299,7 +300,7 @@
         (throw (ex-info
                 "Tool function schema has no input arguments"
                 {:error-type :llm/invalid-request :schema fn-schema})))
-      (first args))))
+       (first args))))
 
 (defn- extract-tool-name
   "Get the tool name from a Malli schema's properties."
@@ -313,7 +314,14 @@
 (defn- tools->input-schemas
   "Extract Malli input schemas from a vector of tool vars/fns."
   [tools]
-  (mapv (comp extract-input-schema resolve-tool-schema) tools))
+  (mapv (fn [tool]
+          (let [tool-name (last (str/split (str tool) #"\/" ))
+                tool-schema (resolve-tool-schema tool)
+                input-schema (extract-input-schema tool-schema)]
+            (cond-> input-schema
+                (not (:name (m/properties input-schema)))
+                (mu/update-properties assoc :name tool-name))))
+        tools))
 
 (defn- build-name->fn
   "Build a map from tool name (string) to tool function."
@@ -418,13 +426,13 @@
                           (events provider api-opts input)))
          end-time       (System/currentTimeMillis)
          {:keys [reasoning-start content-start]} @timings
-         base           (cond-> {:timings {:total (- end-time start-time)}}
+         base           (cond-> {:timings {:duration-ms (- end-time start-time)}}
                           reasoning-start (update :timings assoc
-                                                  :reasoning-start (- reasoning-start start-time)
-                                                   :reasoning-time-ms (- (or content-start end-time) reasoning-start))
+                                                  :reasoning {:start-ms (- reasoning-start start-time)
+                                                              :duration-ms (- (or content-start end-time) reasoning-start)})
                           content-start (update :timings assoc
-                                                :generation-start (- content-start start-time)
-                                                :generation-time-ms (- end-time content-start))
+                                                :text {:start-ms (- content-start start-time)
+                                                       :duration-ms (- end-time content-start)})
                           (not-empty (:text result))      (assoc :text (:text result))
                           (not-empty (:reasoning result)) (assoc :reasoning (:reasoning result))
                           (:usage result)                 (assoc :usage (assoc (:usage result) :model model)))]
