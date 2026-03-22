@@ -109,19 +109,19 @@
         (str/replace #"[^a-zA-Z0-9_]" "_")
         (subs 0 (min 64 (count (str "extract_" (str/join "_" fields))))))))
 
-(defn malli->tool-definition
-  "Convert a Malli :map schema to a tool/function definition for LLM APIs.
-   Returns {:type 'function' :function {:name ... :description ... :parameters ...}}."
-  [schema]
-  (let [compiled (m/schema schema)
-        props (m/properties compiled)
-        fields (->> (m/children compiled)
-                    (filter vector?)
-                    (map (comp name first)))
-        tool-name (or (:name props) (infer-tool-name compiled))
-        tool-desc (or (:description props)
-                      (str "Extract " (str/join ", " fields) " from input"))]
-    {:type "function"
-     :function {:name tool-name
-                :description tool-desc
-                :parameters (malli->json-schema schema)}}))
+(def malli->tool-definition
+  "Memoized wrapper for malli->tool-definition to cache repeated transformations."
+  (let [f (fn [schema]
+            (let [compiled (m/schema schema)
+                  props (m/properties compiled)
+                  fields (->> (m/children compiled)
+                              (filter vector?)
+                              (map (comp name first)))
+                  tool-name (or (:name props) (infer-tool-name compiled))
+                  tool-desc (or (:description props)
+                                (str "Extract " (str/join ", " fields) " from input"))]
+              {:type "function"
+               :function {:name tool-name
+                          :description tool-desc
+                          :parameters (malli->json-schema schema)}}))]
+    (memoize f)))
