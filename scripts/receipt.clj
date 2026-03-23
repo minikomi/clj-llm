@@ -36,8 +36,8 @@
    [:currency :string]
    [:items [:vector
             [:map
-             [:name {:description "expand from abreviations, convert to english"} :string]
-             [:category {:description "eg. dairy, produce, meat etc"} :string]
+             [:name {:description "expand all abbreviations, convert to english"} :string]
+             [:category {:description "eg. sweets, dairy, produce, meat etc. ON AN INDIVIDUAL ITEM BASIS. Ignore on-receipt categories/groupings. Be precise, not general."} :string]
              [:value [:map
                       [:unit {:description "eg. kg, per-unit etc"} :string]
                       [:price :double]]]
