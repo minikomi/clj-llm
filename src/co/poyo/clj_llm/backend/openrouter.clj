@@ -7,11 +7,11 @@
    [co.poyo.clj-llm.backend.openai :as openai]))
 
 (def ^:private default-api-base "https://openrouter.ai/api/v1")
-(def ^:private default-model "minimax/minimax-m2.5"))
+(def ^:private default-model "minimax/minimax-m2.5")
 
 (defn- default-api-key-fn []
-    (or (System/getenv "OPENROUTER_KEY")
-        (throw (ex-info "No API key provided and OPENROUTER_KEY env var not set" {}))))
+  (or (System/getenv "OPENROUTER_KEY")
+      (throw (ex-info "No API key provided and OPENROUTER_KEY env var not set" {}))))
 
 (defn backend
   "Create an OpenRouter provider.
