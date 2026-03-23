@@ -26,7 +26,8 @@
                          unit
                          price
                          total-price))))
-    (println (str/join (repeat 55 "-")))))
+    (println (str/join (repeat 55 "-")))
+    (println "Total:" total currency)))
 
 (def ai (openrouter/backend {:defaults {:model "google/gemini-3-flash-preview"}}))
 
@@ -35,7 +36,7 @@
    [:currency :string]
    [:items [:vector
             [:map
-             [:name {:description "expand from abreviations"} :string]
+             [:name {:description "expand from abreviations, convert to english"} :string]
              [:category {:description "eg. dairy, produce, meat etc"} :string]
              [:value [:map
                       [:unit {:description "eg. kg, per-unit etc"} :string]
