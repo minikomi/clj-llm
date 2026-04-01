@@ -275,6 +275,12 @@
       (is (thrown? clojure.lang.ExceptionInfo
             (llm/run-agent provider {:tools []} "test")))))
 
+  (testing "run-agent errors when no tools provided"
+    (let [provider (mock-provider [{:type :content :content "hi"}])]
+      (is (thrown? clojure.lang.ExceptionInfo
+            (llm/run-agent provider {} "test")))))
+
+
   (testing "run-agent :stop-when predicate"
     (let [call-count (atom 0)
           provider (->MockProvider
