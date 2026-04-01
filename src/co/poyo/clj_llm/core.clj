@@ -487,12 +487,13 @@
      :model, :system-prompt, :temperature, :max-tokens, :top-p, :provider-opts
 
    Returns {:text ... :history ... :steps [...] :tool-calls ... :usage ...}"
-  ([provider tools input]
-   (run-agent provider tools {} input))
-  ([provider tools opts input]
+  ([provider input]
+   (run-agent provider {} input))
+  ([provider opts input]
    (let [parsed (parse-opts opts agent-opts-schema)
+         tools  (or (:tools parsed) (:tools (:defaults provider)))
          _      (when-not (and (sequential? tools) (seq tools))
-                  (throw (ex-info "run-agent requires a non-empty tools vector"
+                  (throw (ex-info "run-agent requires a non-empty :tools vector"
                                    {:error-type :llm/invalid-request
                                     :tools tools})))
          input-schemas (tools->input-schemas tools)
@@ -504,7 +505,7 @@
          on-tool-result (:on-tool-result parsed)
          on-text        (:on-text parsed)
          on-reasoning   (:on-reasoning parsed)
-         request-opts (-> (dissoc parsed :max-steps :stop-when :on-tool-calls :on-tool-result :on-text :on-reasoning)
+         request-opts (-> (dissoc parsed :max-steps :stop-when :on-tool-calls :on-tool-result :on-text :on-reasoning :tools)
                           (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
