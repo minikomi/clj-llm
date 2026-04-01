@@ -263,7 +263,7 @@
                         {:malli/schema [:=> [:cat [:map {:name "get_weather" :description "Get weather"}
                                                    [:city :string]]]
                                             :string]})
-          result (llm/run-agent provider [get-weather] "Weather in Tokyo?")]
+          result (llm/run-agent provider {:tools [get-weather]} "Weather in Tokyo?")]
       (is (= "It's sunny in Tokyo!" (:text result)))
       (is (vector? (:history result)))
       (is (= 1 (count (:steps result))))
@@ -273,7 +273,7 @@
   (testing "run-agent requires non-empty tools vector"
     (let [provider (mock-provider [{:type :content :content "hi"}])]
       (is (thrown? clojure.lang.ExceptionInfo
-            (llm/run-agent provider [] "test")))))
+            (llm/run-agent provider {:tools []} "test")))))
 
   (testing "run-agent :stop-when predicate"
     (let [call-count (atom 0)
@@ -291,8 +291,9 @@
                       {:malli/schema [:=> [:cat [:map {:name "done" :description "Signal completion"}
                                                  [:result :string]]]
                                          :string]})
-          result (llm/run-agent provider [done-tool]
-                   {:stop-when (fn [{:keys [tool-calls]}]
+          result (llm/run-agent provider
+                   {:tools [done-tool]
+                    :stop-when (fn [{:keys [tool-calls]}]
                                  (some #(= "done" (:name %)) tool-calls))}
                    "do something")]
       ;; Tool was NOT executed (stop-when fires before execution)
@@ -308,7 +309,7 @@
                        {:malli/schema [:=> [:cat [:map {:name "dummy" :description "Dummy"}
                                                   [:x :string]]]
                                           :string]})
-          result (llm/run-agent provider [dummy-tool] "hello")]
+          result (llm/run-agent provider {:tools [dummy-tool]} "hello")]
       (is (= "Just text, no tools" (:text result)))
       (is (nil? (:tool-calls result)))
       (is (empty? (:steps result)))))
@@ -329,7 +330,7 @@
                    {:malli/schema [:=> [:cat [:map {:name "lookup" :description "Lookup"}
                                               [:id :string]]]
                                        :string]})
-          result (llm/run-agent provider [lookup] "find user 123")]
+          result (llm/run-agent provider {:tools [lookup]} "find user 123")]
       ;; run-agent always returns text as a string
       (is (string? (:text result)))
       (is (= "Alice is 30 years old" (:text result)))
@@ -372,7 +373,7 @@
           dummy (with-meta (fn [{:keys [x]}] x)
                   {:malli/schema [:=> [:cat [:map {:name "dummy" :description "D"}
                                              [:x :string]]] :string]})
-          result (llm/run-agent provider [dummy] "test")]
+          result (llm/run-agent provider {:tools [dummy]} "test")]
       (is (contains? result :text)))))
 
 (deftest test-generate-result-str-coercion
