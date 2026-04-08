@@ -30,3 +30,6 @@ working.org
 /.clj-kondo/*
 !/.clj-kondo/config.edn
 .chat-data/
+flow-mercari.html
+flow-mercari-create.html
+flow-idea.html

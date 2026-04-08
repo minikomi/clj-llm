@@ -42,19 +42,23 @@
                         body-str (assoc :body body-str)))))))
 
 (defn open-event-stream [url headers body]
-  (let [{:keys [^InputStream body] :as response} (net/post-stream url headers body)
-        _ (check-status! response)
-        ch (a/chan 256 (keep parse-sse-data))]
-    (a/thread
-      (try
-        (with-open [rdr (io/reader body)]
-          (loop []
-            (when-let [line (.readLine rdr)]
-              (when (a/>!! ch line)
-                (recur)))))
-        (catch Exception e
-          (when-not (.isInterrupted (Thread/currentThread))
-            (a/>!! ch e)))
-        (finally
-          (a/close! ch))))
-    ch))
+  (let [{:keys [^InputStream body] :as response} (net/post-stream url headers body)]
+    (try
+      (check-status! response)
+      (let [ch (a/chan 256 (keep parse-sse-data))]
+        (a/thread
+          (try
+            (with-open [rdr (io/reader body)]
+              (loop []
+                (when-let [line (.readLine rdr)]
+                  (when (a/>!! ch line)
+                    (recur)))))
+            (catch Exception e
+              (when-not (.isInterrupted (Thread/currentThread))
+                (a/>!! ch e)))
+          (finally
+            (a/close! ch))))
+        ch)
+      (catch Exception e
+        (.close body)
+        (throw e)))))

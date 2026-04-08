@@ -398,7 +398,7 @@
       (is (= "hi" (:text result)))
       (is (= 5 (get-in result [:usage :prompt-tokens])))
       (is (contains? result :text))
-      (is (= #{:text :usage} (set (keys result))))
+      (is (#{#{:text :usage} #{:text :usage :timings}} (set (keys result))))
       (is (= "hi" (:text result))))))
 
 (deftest test-generate-result-auto-unwrap-chaining
