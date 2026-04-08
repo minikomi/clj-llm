@@ -32,7 +32,7 @@ A Clojure library for talking to LLMs. Providers are plain maps. Results are pla
 | Options | `(generate ai {:system-prompt "..."} "prompt")` |
 | Structured | `(generate ai {:schema s} "prompt")` → `{:structured {...} ...}` |
 | Tool call | `(generate ai {:tools [...]} "prompt")` → `{:tool-calls [...] :tool-results [...]}` |
-| Agent loop | `(run-agent ai [#'tool] "prompt")` → `{:text ... :steps ... :history ...}` |
+| Agent loop | `(run-agent ai {:tools [#'tool]} "prompt")` → `{:text ... :steps ... :history ...}` |
 | Streaming | `(generate ai {:on-text print} "prompt")` |
 | Raw events | `(events ai "prompt")` → core.async channel |
 | Images/PDFs | `(generate ai ["describe" (content/image "photo.jpg")])` |
@@ -185,7 +185,7 @@ Tools are plain functions with [Malli function schemas](https://github.com/metos
 ;;     :usage {...}}
 
 ;; Agent loop — keeps calling tools until the model is done
-(llm/run-agent ai [#'get-weather] "Weather in Tokyo?")
+(llm/run-agent ai {:tools [#'get-weather]} "Weather in Tokyo?")
 ;; => {:text    "It's currently sunny and 22°C in Tokyo."
 ;;     :history [...]
 ;;     :steps   [{:tool-calls [...] :tool-results [...]}]
@@ -197,8 +197,9 @@ All Malli schema styles work: `{:malli/schema ...}` metadata, `mx/defn`, `m/=>`.
 ### Agent options
 
 ```clojure
-(llm/run-agent ai [#'search #'done]
-  {:max-steps  5
+(llm/run-agent ai
+  {:tools [#'search #'done]
+   :max-steps  5
    :stop-when  (fn [{:keys [tool-calls]}]
                  (some #(= "done" (:name %)) tool-calls))
    :on-text        (fn [chunk] (print chunk) (flush))
@@ -214,7 +215,7 @@ All Malli schema styles work: `{:malli/schema ...}` metadata, `mx/defn`, `m/=>`.
 ### Structured output after tool use
 
 ```clojure
-(let [{:keys [history]} (llm/run-agent ai [#'lookup] "Find user 123")]
+(let [{:keys [history]} (llm/run-agent ai {:tools [#'lookup]} "Find user 123")]
   (:structured (llm/generate ai {:schema [:map [:name :string] [:status :string]]} history)))
 ```
 
@@ -223,7 +224,7 @@ All Malli schema styles work: `{:malli/schema ...}` metadata, `mx/defn`, `m/=>`.
 | | `generate` | `run-agent` |
 |---|---|---|
 | LLM calls | Exactly one | Loop until done |
-| Tools | Optional (`:tools` in opts) | Required (second arg) |
+| Tools | Optional (`:tools` in opts) | Required (`:tools` in opts) |
 | Stop control | N/A | `:stop-when`, `:max-steps` |
 | Returns | `{:text :usage}` or `{:structured}` or `{:tool-calls :tool-results}` | `{:text :history :steps}` |
 

@@ -117,8 +117,16 @@
        :arguments ""})
 
     "message_delta"
-    (when-let [usage (:usage data)]
-      (into {:type :usage} usage))
+    (let [events (when-let [usage (:usage data)]
+                   [(into {:type :usage} usage)])
+          stop-reason (get-in data [:delta :stop_reason])
+          events (if stop-reason
+                   (conj (or events []) {:type :finish :reason stop-reason})
+                   events)]
+      (when (seq events)
+        (if (= (count events) 1)
+          (first events)
+          events)))
 
     "message_stop"
     {:type :done}
@@ -157,7 +165,10 @@
     (build-body model system-prompt messages schema tools tool-choice provider-opts))
 
   (parse-chunk [_ chunk schema tools]
-    (or (data->event chunk schema tools) []))
+    (let [result (data->event chunk schema tools)]
+      (cond (nil? result) []
+            (vector? result) result
+            :else [result])))
 
   (stream-events [_ url headers body]
     (stream/open-event-stream url headers body)))

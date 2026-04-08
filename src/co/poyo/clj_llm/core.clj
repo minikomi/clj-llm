@@ -488,8 +488,8 @@
   "Run an agentic tool-calling loop. Tools are plain functions with standard
    Malli function schemas attached via metadata.
 
-   (run-agent ai [#'get-weather] \"Weather in Tokyo?\")
-   (run-agent ai [#'get-weather #'search] {:max-steps 5} \"plan a trip\")
+   (run-agent ai {:tools [#'get-weather]} \"Weather in Tokyo?\")
+   (run-agent ai {:tools [#'get-weather #'search] :max-steps 5} \"plan a trip\")
 
    tools: vector of tool vars or fns (each carries its Malli schema in metadata)
 
