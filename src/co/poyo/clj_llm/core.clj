@@ -207,14 +207,25 @@
 ;; Core API
 ;; ════════════════════════════════════════════════════════════════════
 
+(def ^:dynamic *stream-timeout-ms*
+  "Maximum milliseconds to wait for a single event from the provider stream.
+   Default 5 minutes. Bind to a smaller value for interactive use."
+  (* 5 60 1000))
+
 (defn- chan-reduce
   "Blocking reduce over a core.async channel.
-   Returns the final accumulated value.  Closes ch on early termination."
+   Returns the final accumulated value.  Closes ch on early termination.
+   Throws on timeout (configurable via *stream-timeout-ms*)."
   [rf init ch]
   (loop [acc init]
-    (let [v (a/<!! ch)]
+    (let [timeout-ch (a/timeout *stream-timeout-ms*)
+          [v port] (a/alts!! [ch timeout-ch])]
       (cond
-        (nil? v)            acc
+        (= port timeout-ch)
+        (do (a/close! ch)
+            (throw (ex-info (str "LLM stream timed out after " *stream-timeout-ms* "ms")
+                            {:error-type :llm/timeout})))
+        (nil? v) acc
         (instance? Throwable v) (throw v)
         :else (let [acc' (rf acc v)]
                 (if (reduced? acc')
@@ -241,13 +252,23 @@
         :provider-opts (or provider-opts {})}))))
 
 (defn- parse-tool-calls
-  "Parse JSON argument strings in tool calls."
+  "Parse JSON argument strings in tool calls.
+   Throws on malformed JSON so callers get a clear error."
   [raw-tool-calls]
   (when raw-tool-calls
     (mapv (fn [t]
-            (let [args (try (json/parse-string (:arguments t) true)
-                           (catch Exception _ (:arguments t)))]
-              {:id (:id t) :name (:name t) :arguments args}))
+            (let [raw (:arguments t)]
+              {:id   (:id t)
+               :name (:name t)
+               :arguments
+               (if (string? raw)
+                 (try (json/parse-string raw true)
+                      (catch Exception e
+                        (throw (ex-info (str "Malformed tool call arguments for " (:name t) ": " (.getMessage e))
+                                        {:error-type :llm/server-error
+                                         :tool       (:name t)
+                                         :arguments  raw}))))
+                 raw)}) )
           raw-tool-calls)))
 
 (defn- tool-calls->assistant-message

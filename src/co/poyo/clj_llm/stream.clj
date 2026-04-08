@@ -18,14 +18,22 @@
 
 (defn parse-sse-data
   "Extract and parse JSON from a 'data: …' SSE line.
-   Returns a decoded map, or nil for non-data / blank / [DONE] / bad JSON."
+   Returns a decoded map, or nil for non-data / blank / [DONE].
+   Returns an :error map for unparseable JSON so the stream doesn't silently
+   swallow provider errors."
   [^String line]
   (when (str/starts-with? line "data:")
     (let [payload (str/trim (subs line 5))]
-      (when (and (seq payload) (not= "[DONE]" payload))
-        (try
-          (cske/transform-keys ->kebab-key (json/parse-string payload))
-          (catch Exception _ nil))))))
+      (cond
+        (empty? payload) nil
+        (= "[DONE]" payload) nil
+        :else (try
+                (cske/transform-keys ->kebab-key (json/parse-string payload))
+                (catch Exception _
+                  ;; Emit as an error event — the provider's parse-chunk
+                  ;; will surface it through the normal error path.
+                  {:type "error"
+                   :error {:message (str "Unparseable SSE data: " payload)}}))))))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; HTTP streaming
