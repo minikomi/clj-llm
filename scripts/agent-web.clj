@@ -354,35 +354,12 @@
 
 ;; ══════ HTML helpers ══════
 
-(defn render-tool-result
-  "Render a single tool result — canvas gets inline HTML, others plain text."
-  [result]
-  (if (and (map? result) (= :canvas (:type result)))
-    (raw-string (canvas-html result))
-    (str "→ " result)))
-
-(defn render-message [{:keys [role content tool-steps]}]
-  (case (keyword role)
-    :user
-    (str (h/html [:div.msg.user [:div.bubble content]]))
-    :assistant
-    (str (h/html
-      [:div.msg.assistant
-       (when (seq tool-steps)
-         [:div.tool-steps
-          (for [{:keys [calls results]} tool-steps]
-            [:div.tool-step
-             (for [[call result] (map vector calls results)]
-               (if (and (map? result) (= :canvas (:type result)))
-                 [:div.tool-use
-                  [:div.tool-call "🛠️ " [:strong (:name call)] " "
-                   (or (:title result) "canvas")]
-                  (raw-string (canvas-html result))]
-                 [:div.tool-use
-                  [:div.tool-call "🛠️ " [:strong (:name call)] " " (pr-str (:arguments call))]
-                  [:div.tool-result "→ " result]]))])])
-       [:div.bubble content]]))
-    ""))
+(defn escape-html [s]
+  (-> s
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
 
 (defn render-sidebar [chats active-id]
   (str (h/html
@@ -394,13 +371,14 @@
         [:a {:href (str "/c/" id)} (or title "New chat")]
         [:button.del {:onclick (str "fetch('/c/" id "/delete',{method:'POST'}).then(()=>location.href='/')")} "×"]])])))
 
+
 ;; ══════ CSS ══════
 
 (def css "
 * { box-sizing:border-box; margin:0; padding:0 }
 body { font-family:-apple-system,system-ui,sans-serif; background:#0a0a0a; color:#e0e0e0; height:100vh; display:flex }
 a { color:#8ab4f8; text-decoration:none }
-.sidebar { width:260px; background:#111; border-right:1px solid #222; display:flex; flex-direction:column; height:100vh; overflow-y:auto }
+.sidebar { width:260px; background:#111; border-right:1px solid #222; display:flex; flex-direction:column; height:100vh; overflow-y:auto; flex-shrink:0 }
 .sidebar-hdr { padding:16px; display:flex; justify-content:space-between; align-items:center }
 .sidebar-hdr h2 { font-size:16px; color:#aaa }
 .sidebar-close { display:none; background:none; border:none; color:#888; font-size:20px; cursor:pointer }
@@ -413,28 +391,49 @@ a { color:#8ab4f8; text-decoration:none }
 .chat-item:hover a { background:#1a1a2e }
 .chat-item .del { background:none; border:none; color:#555; cursor:pointer; font-size:14px; padding:4px 8px; opacity:0 }
 .chat-item:hover .del { opacity:1 }
-.main { flex:1; display:flex; flex-direction:column; height:100vh }
+.main { flex:1; display:flex; flex-direction:column; height:100vh; min-width:0 }
 .messages { flex:1; overflow-y:auto; padding:20px; max-width:800px; margin:0 auto; width:100% }
 .msg { margin:8px 0; display:flex }
 .msg.user { justify-content:flex-end }
 .msg.user .bubble { background:#1a3a5c; border-radius:16px 16px 4px 16px; padding:10px 16px; max-width:70%; white-space:pre-wrap }
 .msg.assistant { flex-direction:column }
-.msg.assistant .bubble { background:#1a1a2e; border-radius:16px 16px 16px 4px; padding:10px 16px; max-width:85%; white-space:pre-wrap }
+.msg.assistant .bubble { background:#1a1a2e; border-radius:16px 16px 16px 4px; padding:10px 16px; max-width:85% }
+.msg.assistant .bubble p { margin:0.4em 0 }
+.msg.assistant .bubble p:first-child { margin-top:0 }
+.msg.assistant .bubble p:last-child { margin-bottom:0 }
+.msg.assistant .bubble code { background:#111; padding:1px 5px; border-radius:4px; font-size:0.9em }
+.msg.assistant .bubble pre { background:#111; padding:10px; border-radius:6px; overflow-x:auto; margin:0.5em 0 }
+.msg.assistant .bubble pre code { background:none; padding:0 }
+.msg.assistant .bubble ul,.msg.assistant .bubble ol { padding-left:1.5em }
+.msg.assistant .bubble blockquote { border-left:3px solid #333; padding-left:10px; color:#999 }
+.msg.assistant .bubble strong { color:#fff }
+.msg.assistant .bubble a { color:#8ab4f8 }
+.msg.assistant .bubble h1,.msg.assistant .bubble h2,.msg.assistant .bubble h3 { margin:0.5em 0 0.3em; color:#fff }
 .tool-steps { margin-bottom:6px }
 .tool-step { margin:4px 0 }
 .tool-use { background:#111; border:1px solid #2a2a3a; border-radius:8px; padding:8px 12px; margin:2px 0; font-size:12px; font-family:monospace }
-.tool-call { color:#b8d4f0 }
-.tool-result { color:#7a9; margin-top:2px }
-.canvas-wrap { margin:6px 0; }
-.canvas-wrap canvas { display:block; background:#0d0d1a; }
+.tool-call { color:#b8d4f0; cursor:pointer; display:flex; align-items:center; gap:4px; user-select:none }
+.tool-call::before { content:'▸'; font-size:10px; transition:transform .15s }
+.tool-call.open::before { transform:rotate(90deg) }
+.tool-call:hover { color:#d0e8ff }
+.tool-details { overflow:hidden }
+.tool-details.collapsed .tool-result { display:none }
+.tool-details.collapsed .canvas-wrap { display:none }
+.tool-result { color:#7a9; margin-top:4px; padding-left:12px; border-left:2px solid #2a2a3a; max-height:300px; overflow-y:auto }
+.canvas-wrap { margin:6px 0 }
+.canvas-wrap canvas { display:block; background:#0d0d1a; border-radius:8px }
 .canvas-title { font-size:12px; color:#8ab4f8; margin-bottom:4px; font-weight:500 }
-.input-row { display:flex; padding:12px 20px; border-top:1px solid #222; max-width:800px; margin:0 auto; width:100%; gap:8px }
-.input-row textarea { flex:1; background:#111; color:#e0e0e0; border:1px solid #333; border-radius:8px; padding:10px 14px; font-size:15px; resize:none; font-family:inherit; min-height:44px }
-.input-row textarea:focus { outline:none; border-color:#555 }
-.input-row button { background:#2563eb; color:white; border:none; border-radius:8px; padding:10px 20px; font-size:15px; cursor:pointer }
+.input-area { border-top:1px solid #222; padding:12px 20px; max-width:800px; margin:0 auto; width:100% }
+.input-row { display:flex; gap:8px; background:#111; border:1px solid #333; border-radius:12px; padding:4px 4px 4px 14px; align-items:flex-end }
+.input-row textarea { flex:1; background:transparent; color:#e0e0e0; border:none; padding:8px 0; font-size:15px; resize:none; font-family:inherit; min-height:24px; max-height:200px; line-height:1.5 }
+.input-row textarea:focus { outline:none }
+.input-row button { background:#2563eb; color:white; border:none; border-radius:8px; padding:8px 16px; font-size:15px; cursor:pointer; white-space:nowrap; flex-shrink:0 }
 .input-row button:hover { background:#1d4ed8 }
 .input-row button:disabled { background:#333; cursor:not-allowed }
-.thinking { color:#888; font-style:italic; padding:8px 16px; font-size:13px }
+.thinking { color:#888; padding:8px 16px; font-size:13px; display:flex; align-items:center; gap:8px }
+.thinking .spinner { width:16px; height:16px; border:2px solid #333; border-top-color:#888; border-radius:50%; animation:spin .8s linear infinite }
+@keyframes spin { to { transform:rotate(360deg) } }
+.error-msg { background:#3a1a1a !important; border:1px solid #5a2a2a }
 .hamburger { display:none; position:fixed; top:10px; left:10px; z-index:100; background:#222; border:1px solid #444; color:#e0e0e0; font-size:20px; padding:6px 10px; border-radius:6px; cursor:pointer }
 .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:49 }
 @media(max-width:768px) {
@@ -450,9 +449,17 @@ a { color:#8ab4f8; text-decoration:none }
 ;; ══════ Client JS ══════
 
 (def client-js (str
+  "function md(s){if(typeof marked!=='undefined'){try{return marked.parse(s)}catch(e){}}"
+  "var d=document.createElement('div');d.textContent=s;return d.innerHTML;}"
+  "function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}"
+  "function toggleTool(el){"
+  "  el.classList.toggle('open');"
+  "  var details=el.nextElementSibling;"
+  "  if(details)details.classList.toggle('collapsed');"
+  "}"
   "function send(){"
   "var ta=document.getElementById('msg');var msg=ta.value.trim();"
-  "if(!msg)return;ta.value='';ta.disabled=true;"
+  "if(!msg)return;ta.value='';ta.style.height='auto';ta.disabled=true;"
   "document.getElementById('send-btn').disabled=true;"
   "var form=document.getElementById('form');var url=form.action;"
   "fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},"
@@ -462,40 +469,82 @@ a { color:#8ab4f8; text-decoration:none }
   "  document.getElementById('sidebar').innerHTML=d.sidebarHtml;"
   "  var msgs=document.getElementById('messages');"
   "  msgs.insertAdjacentHTML('beforeend',d.userHtml);"
-  "  msgs.insertAdjacentHTML('beforeend','<div class=\"thinking\" id=\"status\">Thinking...</div>');"
+  "  msgs.insertAdjacentHTML('beforeend','<div class=\"thinking\" id=\"status\"><div class=\"spinner\"></div>Thinking...</div>');"
   "  scrollDown();"
   "  var es=new EventSource('/c/'+d.chatId+'/stream');"
   "  var buf='';"
   "  es.addEventListener('step',function(e){"
   "    var s=document.getElementById('status');"
-  "    if(s){s.innerHTML=e.data;runCanvasScripts(s);}"
+  "    if(s){s.innerHTML='<div class=\"spinner\"></div>'+e.data;renderMarkdown();}"
   "  });"
   "  es.addEventListener('chunk',function(e){"
   "    var s=document.getElementById('status');if(s)s.remove();"
-  "    buf+=e.data.replace(/\\n/g,'\\n');"
+  "    buf+=e.data;"
   "    var el=document.getElementById('assistant-streaming');"
   "    if(!el){msgs.insertAdjacentHTML('beforeend','<div class=\"msg assistant\"><div class=\"bubble\" id=\"assistant-streaming\"></div></div>');el=document.getElementById('assistant-streaming');}"
-  "    el.textContent=buf;scrollDown();"
+  "    el.innerHTML=md(buf);scrollDown();"
   "  });"
   "  es.addEventListener('done',function(e){"
   "    es.close();"
   "    var s=document.getElementById('status');if(s)s.remove();"
   "    ta.disabled=false;document.getElementById('send-btn').disabled=false;ta.focus();"
   "    var d2=JSON.parse(e.data);"
-  "    msgs.innerHTML=d2.messagesHtml;runCanvasScripts(msgs);scrollDown();"
+  "    msgs.innerHTML=d2.messagesHtml;renderMarkdown();scrollDown();"
   "    if(window.history.replaceState)window.history.replaceState(null,null,'/c/'+d2.chatId);"
   "    document.getElementById('form').action='/c/'+d2.chatId+'/send';"
   "  });"
-  "  es.onerror=function(){es.close();ta.disabled=false;document.getElementById('send-btn').disabled=false;};"
-  "})}"
+  "  es.onerror=function(){es.close();"
+  "    var s=document.getElementById('status');"
+  "    if(s){s.innerHTML='Connection lost';s.classList.add('error-msg');s.querySelector('.spinner')?.remove();}"
+  "    ta.disabled=false;document.getElementById('send-btn').disabled=false;"
+  "  };"
+  "}).catch(function(err){"
+  "  var s=document.getElementById('status');"
+  "  if(s){s.innerHTML='Error: '+err.message;s.classList.add('error-msg');s.querySelector('.spinner')?.remove();}"
+  "  ta.disabled=false;document.getElementById('send-btn').disabled=false;"
+  "});}"
   "function runCanvasScripts(el){var scripts=el.querySelectorAll('.canvas-wrap script');"
   "scripts.forEach(function(s){var ns=document.createElement('script');ns.textContent=s.textContent;s.parentNode.replaceChild(ns,s);});}\n"
   "function scrollDown(){var el=document.getElementById('messages');el.scrollTop=el.scrollHeight;}"
   "function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('overlay').classList.toggle('open');}"
   "function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('open');}"
+  "function renderMarkdown(){document.querySelectorAll('.bubble[data-raw]').forEach(function(el){"
+  "  if(el.getAttribute('data-rendered'))return;el.setAttribute('data-rendered','1');"
+  "  var raw=el.getAttribute('data-raw');el.innerHTML=md(raw);});"
+  "  document.querySelectorAll('.canvas-wrap script').forEach(function(s){"
+  "  var ns=document.createElement('script');ns.textContent=s.textContent;s.parentNode.replaceChild(ns,s);});}"
   ))
 
 ;; ══════ Page ══════
+
+(defn tool-use-html [tool-call display-r]
+  (if (and (map? display-r) (= :canvas (:type display-r)))
+    (str "<div class='tool-use'>"
+         "<div class='tool-call open' onclick='toggleTool(this)'>🛠️ <strong>" (:name tool-call) "</strong> "
+         (or (:title display-r) "canvas") "</div>"
+         "<div class='tool-details'>" (canvas-html display-r) "</div></div>")
+    (let [arg-str (pr-str (:arguments tool-call))
+          truncated-arg (if (> (count arg-str) 120) (str (subs arg-str 0 120) "…") arg-str)]
+      (str "<div class='tool-use'>"
+           "<div class='tool-call' onclick='toggleTool(this)'>🛠️ <strong>" (:name tool-call) "</strong> "
+           truncated-arg "</div>"
+           "<div class='tool-details collapsed'><div class='tool-result'>→ " display-r "</div></div></div>"))))
+
+(defn render-message [{:keys [role content tool-steps]}]
+  (case (keyword role)
+    :user
+    (str (h/html [:div.msg.user [:div.bubble content]]))
+    :assistant
+    (str (h/html
+      [:div.msg.assistant
+       (when (seq tool-steps)
+         [:div.tool-steps
+          (for [{:keys [calls results]} tool-steps]
+            [:div.tool-step
+             (for [[call result] (map vector calls results)]
+               (raw-string (tool-use-html call result)))])])
+       [:div.bubble {:data-raw (escape-html content)} (raw-string "")]]))
+    ""))
 
 (defn page [chat-id]
   (let [chat (when chat-id (load-chat chat-id))
@@ -507,7 +556,8 @@ a { color:#8ab4f8; text-decoration:none }
         [:meta {:charset "utf-8"}]
         [:meta {:name "viewport" :content "width=device-width, initial-scale=1"}]
         [:title "clj-llm agent"]
-        [:style (raw-string css)]]
+        [:style (raw-string css)]
+        [:script {:src "https://cdn.jsdelivr.net/npm/marked/marked.min.js"}]]
        [:body
         [:button.hamburger {:onclick "toggleSidebar()"} "☰"]
         [:div#overlay.overlay {:onclick "closeSidebar()"}]
@@ -516,16 +566,19 @@ a { color:#8ab4f8; text-decoration:none }
          [:div#messages.messages
           (if (empty? messages)
             [:div {:style "text-align:center;color:#555;margin-top:40vh"}
-             [:p {:style "font-size:18px"} "🤖 Agent with tools"]
+             [:p {:style "font-size:24px"} "🤖"]
+             [:p {:style "font-size:16px;margin-top:8px"} "Agent with tools"]
              [:p {:style "font-size:13px;margin-top:8px;color:#444"}
               "Weather · Search · Wikipedia · Read URLs · Currency · Dictionary · Hacker News · Canvas · Math"]]
             (raw-string (apply str (map render-message messages))))]
-         [:form#form.input-row {:method "POST" :action (str "/c/" (or chat-id "new") "/send")}
-          [:textarea#msg {:name "message" :placeholder "Ask me anything..." :rows 1 :autofocus true
-                          :onkeydown "if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"}]
-          [:button#send-btn {:type "button" :onclick "send()"} "Send"]]
+         [:div.input-area
+          [:form#form.input-row {:method "POST" :action (str "/c/" (or chat-id "new") "/send")}
+           [:textarea#msg {:name "message" :placeholder "Ask me anything..." :rows 1 :autofocus true
+                           :oninput "autoResize(this)"
+                           :onkeydown "if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"}]
+           [:button#send-btn {:type "button" :onclick "send()"} "Send"]]]
          [:script (raw-string client-js)]
-         [:script (raw-string "runCanvasScripts(document.getElementById('messages'));")]]]]))))
+         [:script (raw-string "renderMarkdown();document.getElementById('msg').addEventListener('input',function(){autoResize(this)});")]]]]))))
 
 ;; ══════ Pending responses (for SSE) ══════
 
@@ -543,7 +596,6 @@ a { color:#8ab4f8; text-decoration:none }
            (map #(str/split % #"=" 2))
            (map (fn [[k v]] [(keyword k) (java.net.URLDecoder/decode (or v "") "UTF-8")]))
            (into {})))))
-
 (defn handler [{:keys [uri request-method body] :as req}]
   (cond
     ;; Home
@@ -615,17 +667,7 @@ a { color:#8ab4f8; text-decoration:none }
                                          display-r (if canvas? canvas-data r)]
                                      (swap! step-displays update (dec (count @step-displays))
                                             update :results conj display-r)
-                                     (let [step-html
-                                           (str "<div class='tool-use'>"
-                                                (if canvas?
-                                                  (str "<div class='tool-call'>🛠️ <strong>" (:name tool-call) "</strong> "
-                                                       (or (:title canvas-data) "canvas") "</div>"
-                                                       (canvas-html canvas-data))
-                                                  (str "<div class='tool-call'>🛠️ <strong>" (:name tool-call) "</strong> "
-                                                       (pr-str (:arguments tool-call)) "</div>"
-                                                       "<div class='tool-result'>→ " r "</div>"))
-                                                "</div>")]
-                                       (hk/send! ch (sse-event "step" step-html) false))))
+                                     (hk/send! ch (sse-event "step" (tool-use-html tool-call display-r)) false)))
                                  :on-text
                                  (fn [chunk]
                                    (hk/send! ch (sse-event "chunk" chunk) false))}
@@ -644,7 +686,7 @@ a { color:#8ab4f8; text-decoration:none }
                  (catch Exception e
                    (println "Agent error:" (.getMessage e))
                    (try
-                     (hk/send! ch (sse-event "chunk" (str "Error: " (.getMessage e))) false)
+                     (hk/send! ch (sse-event "chunk" (str "⚠️ Error: " (.getMessage e))) false)
                      (hk/close ch)
                      (catch Exception _))))))})))
 
