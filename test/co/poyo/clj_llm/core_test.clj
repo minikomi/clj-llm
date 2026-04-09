@@ -343,6 +343,34 @@
       ;; history is reusable for structured extraction via generate
       (is (vector? (:history result))))))
 
+(deftest test-run-agent-usage-accumulates
+  (testing "run-agent accumulates usage across all steps"
+    (let [provider (->MockProvider
+                    (atom [{:type :tool-call :index 0 :id "call_1"
+                            :name "search" :arguments ""}
+                           {:type :tool-call-delta :index 0
+                            :arguments "{\"q\":\"tokyo\"}"}
+                           {:type :usage :prompt-tokens 100 :completion-tokens 50 :total-tokens 150}])
+                    {:model "test-model"}
+                    (atom []))
+          search-tool (with-meta
+                         (fn [{:keys [q]}]
+                           ;; After first call, return a final text response with its own usage
+                           (reset! (.responses provider)
+                                   [{:type :content :content (str "Results for " q)}
+                                    {:type :usage :prompt-tokens 200 :completion-tokens 80 :total-tokens 280}])
+                           (str "found: " q))
+                         {:malli/schema [:=> [:cat [:map {:name "search" :description "Search"}
+                                                    [:q :string]]]
+                                            :string]})
+          result (llm/run-agent provider {:tools [search-tool]} "search tokyo")]
+      ;; Two steps happened: step 0 (tool call) and step 1 (final text)
+      (is (= "Results for tokyo" (:text result)))
+      ;; Usage should be accumulated: step 0 + step 1
+      (is (= 300 (get-in result [:usage :prompt-tokens])))
+      (is (= 130 (get-in result [:usage :completion-tokens])))
+      (is (= 430 (get-in result [:usage :total-tokens]))))))
+
 (deftest test-tool-result
   (testing "tool-result creates correct message map with string"
     (let [msg (llm/tool-result "call_abc" "Sunny, 22°C")]
