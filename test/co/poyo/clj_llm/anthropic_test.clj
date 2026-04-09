@@ -167,6 +167,27 @@
 
 (def ^:private normalize-messages @#'co.poyo.clj-llm.backend.anthropic/normalize-messages)
 
+;; ════════════════════════════════════════════════════════════════════
+;; backend api-key-fn behavior
+;; ════════════════════════════════════════════════════════════════════
+
+(deftest test-backend-no-api-key-uses-default-fn
+  (testing "backend with no :api-key uses default-api-key-fn (not constantly nil)"
+    (let [b (anthropic-backend* {})]
+      ;; The key-fn should NOT be (constantly nil) — it should throw
+      ;; when ANTHROPIC_API_KEY env var is absent.
+      (is (thrown? Exception ((.-api-key-fn b)))))))
+
+(deftest test-backend-api-key-false-returns-nil
+  (testing "backend with :api-key false returns nil from key fn"
+    (let [b (anthropic-backend* {:api-key false})]
+      (is (nil? ((.-api-key-fn b)))))))
+
+(deftest test-backend-api-key-string-returns-string
+  (testing "backend with :api-key string returns that string"
+    (let [b (anthropic-backend* {:api-key "sk-test-123"})]
+      (is (= "sk-test-123" ((.-api-key-fn b)))))))
+
 (deftest test-normalize-messages-basic
   (testing "renames :tool-calls and :tool-call-id to snake_case"
     (let [msgs [{:role "assistant" :tool-calls [{:id "c1" :type "function"

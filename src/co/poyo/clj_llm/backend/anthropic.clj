@@ -184,7 +184,8 @@
     (or api-base (:api-base default-config))
     (cond (false? api-key)  (constantly nil)
           (fn? api-key)     api-key
-          :else             (constantly api-key))
+          (string? api-key) (constantly api-key)
+          :else             default-api-key-fn)
     (or api-version (:api-version default-config))
     (or defaults {}))))
 
