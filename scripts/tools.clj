@@ -78,8 +78,8 @@
 ;; run-agent chains tools automatically — geocode then get-weather
 (println "\n--- agent chains geocode → get-weather ---")
 (let [{:keys [text steps]}
-      (llm/run-agent provider [#'geocode #'get-weather]
-                     {:on-tool-calls tool-call-reporter}
+      (llm/run-agent provider {:tools [#'geocode #'get-weather]
+                              :on-tool-calls tool-call-reporter}
                      "What's the weather in Tokyo?")]
   (println "Steps:" (count steps))
   (println "Final:" text))
@@ -87,8 +87,8 @@
 ;; Multiple cities — the LLM can call geocode in parallel
 (println "\n--- multi-city ---")
 (let [{:keys [text steps]}
-      (llm/run-agent provider [#'geocode #'get-weather]
-                     {:on-tool-calls tool-call-reporter}
+      (llm/run-agent provider {:tools [#'geocode #'get-weather]
+                              :on-tool-calls tool-call-reporter}
                      "Compare weather in Tokyo and Paris right now")]
   (println "Steps:" (count steps))
   (println "Final:" text))

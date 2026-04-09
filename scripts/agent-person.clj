@@ -23,8 +23,8 @@
 
 (println "Running agent with person image...\n")
 
-(let [result (llm/run-agent ai [#'guess-age]
-               {:max-steps 3
+(let [result (llm/run-agent ai {:tools [#'guess-age]
+               :max-steps 3
                 :on-tool-calls (fn [{:keys [tool-calls]}]
                                  (doseq [tc tool-calls]
                                    (println "🛠️ " (:name tc) (:arguments tc))))

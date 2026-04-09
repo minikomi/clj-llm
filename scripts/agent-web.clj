@@ -599,8 +599,8 @@ a { color:#8ab4f8; text-decoration:none }
              (future
                (try
                  (let [step-displays (atom [])
-                       result (llm/run-agent ai agent-tools
-                                {:max-steps 5
+                       result (llm/run-agent ai {:tools agent-tools
+                                :max-steps 5
                                  :system-prompt "You are a helpful assistant with tools. Always use tools to answer questions — never guess or say you cannot access data. Use geocode before get_weather. Use search_web for general queries. Use wikipedia for factual info about people, places, concepts. Use fetch_url to read full articles. Use exchange_rate for currency questions. Use define_word for vocabulary. Use hacker_news for tech news. Use render_canvas to draw charts, graphs, diagrams, or any visual. When rendering canvas, always set a dark background first (e.g. ctx.fillStyle='#1a1a2e'; ctx.fillRect(0,0,w,h)). Use vibrant colors. Chain tools when needed."
                                  :on-tool-calls
                                  (fn [{:keys [tool-calls]}]

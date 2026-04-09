@@ -63,7 +63,7 @@
 
 (defn ask [image-path-or-url]
   (let [input [(content/image image-path-or-url {:max-edge 512})]]
-    (llm/run-agent ai [#'search-web] opts input)))
+    (llm/run-agent ai (assoc opts :tools [#'search-web]) input)))
 
 ;; ── Main ──────────────────────────────────────────────────────────
 
