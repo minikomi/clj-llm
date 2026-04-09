@@ -59,6 +59,14 @@ A provider is just a map. Put defaults on `:defaults`:
 
 `api-key` can be a string, a zero-arg function (called on every request), or `false`.
 
+When no `:api-key` is provided, each backend reads from a default environment variable:
+
+| Backend | Env var |
+|---|---|
+| OpenAI | `OPENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenRouter | `OPENROUTER_KEY` |
+
 ## Generate
 
 Input is always last. Options go before it:
@@ -203,6 +211,7 @@ All Malli schema styles work: `{:malli/schema ...}` metadata, `mx/defn`, `m/=>`.
    :stop-when  (fn [{:keys [tool-calls]}]
                  (some #(= "done" (:name %)) tool-calls))
    :on-text        (fn [chunk] (print chunk) (flush))
+   :on-reasoning   (fn [chunk] (print "[thinking]" chunk) (flush))
    :on-tool-calls  (fn [{:keys [step tool-calls]}]
                      (println "Step" step (mapv :name tool-calls)))
    :on-tool-result (fn [{:keys [tool-call result error]}]

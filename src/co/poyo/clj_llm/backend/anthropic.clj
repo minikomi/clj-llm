@@ -179,7 +179,7 @@
    Config: :api-key, :api-base, :api-version, :defaults.
    :api-key can be a string, a zero-arg fn, or false (skip auth)."
   ([] (backend {}))
-([{:keys [api-key api-base api-version defaults]}]
+  ([{:keys [api-key api-base api-version defaults]}]
    (->AnthropicBackend
     (or api-base (:api-base default-config))
     (cond (false? api-key)  (constantly nil)

@@ -1,6 +1,7 @@
 (ns co.poyo.clj-llm.anthropic-test
   (:require [clojure.test :refer [deftest testing is]]
-            [co.poyo.clj-llm.backend.anthropic]))
+            [co.poyo.clj-llm.backend.anthropic]
+            [co.poyo.clj-llm.protocol :as proto]))
 
 (def ^:private data->event @#'co.poyo.clj-llm.backend.anthropic/data->event)
 (def ^:private build-body @#'co.poyo.clj-llm.backend.anthropic/build-body)
@@ -118,3 +119,66 @@
   (let [body (build-body "claude-3" nil [{:role "user" :content "hi"}]
                          nil nil nil {:max-tokens 1000})]
     (is (= 1000 (:max_tokens body)))))
+
+;; ════════════════════════════════════════════════════════════════════
+;; parse-chunk round-trip — the mapcat bug regression test
+;; ════════════════════════════════════════════════════════════════════
+
+(def ^:private anthropic-backend* @#'co.poyo.clj-llm.backend.anthropic/backend)
+
+(deftest test-parse-chunk-returns-vector
+  (testing "parse-chunk always returns a vector for valid events"
+    (let [b (anthropic-backend* {:api-key false})]
+      ;; text content event
+      (is (vector? (proto/parse-chunk b {:type "content_block_delta"
+                                         :delta {:text "hello"}} nil nil)))
+      (is (= :content (:type (first (proto/parse-chunk b {:type "content_block_delta"
+                                                          :delta {:text "hello"}} nil nil)))))
+      ;; nil event returns empty vector
+      (is (= [] (proto/parse-chunk b {:type "ping"} nil nil)))
+      ;; tool call event
+      (is (vector? (proto/parse-chunk b {:type "content_block_start"
+                                         :index 0
+                                         :content_block {:type "tool_use"
+                                                         :id "toolu_1"
+                                                         :name "test"}} nil [:some-tool])))
+      ;; error event
+      (is (vector? (proto/parse-chunk b {:type "error"
+                                         :error {:message "bad"}} nil nil))))))
+
+(deftest test-parse-chunk-mapcat-safe
+  (testing "parse-chunk results work correctly with mapcat"
+    (let [b (anthropic-backend* {:api-key false})
+          chunks [{:type "content_block_delta" :delta {:text "Hello "}}
+                  {:type "content_block_delta" :delta {:text "world!"}}
+                  {:type "message_delta" :usage {:output-tokens 5}
+                   :delta {:stop_reason "end_turn"}}
+                  {:type "message_stop"}]
+          events (mapcat #(proto/parse-chunk b % nil nil) chunks)]
+      ;; Should get: content, content, usage, finish, done
+      (is (every? map? events))
+      (is (every? #(contains? % :type) events))
+      (is (= [:content :content :usage :finish :done] (mapv :type events)))
+      (is (= "end_turn" (:reason (some #(when (= :finish (:type %)) %) events)))))))
+
+;; ════════════════════════════════════════════════════════════════════
+;; normalize-messages
+;; ════════════════════════════════════════════════════════════════════
+
+(def ^:private normalize-messages @#'co.poyo.clj-llm.backend.anthropic/normalize-messages)
+
+(deftest test-normalize-messages-basic
+  (testing "renames :tool-calls and :tool-call-id to snake_case"
+    (let [msgs [{:role "assistant" :tool-calls [{:id "c1" :type "function"
+                                                :function {:name "f" :arguments "{}"}}]
+                 :content "ok"}
+                {:role "tool" :tool-call-id "c1" :content "result"}]
+          result (normalize-messages msgs)]
+      (is (= :tool_calls (first (keys (dissoc (first result) :role :content)))))
+      (is (= :tool_call_id (first (keys (dissoc (second result) :role :content))))))))
+
+(deftest test-normalize-messages-preserves-strings
+  (testing "string content passes through unchanged"
+    (let [msgs [{:role "user" :content "hello"}]
+          result (normalize-messages msgs)]
+      (is (= [{:role "user" :content "hello"}] result)))))
