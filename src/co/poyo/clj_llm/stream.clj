@@ -53,20 +53,25 @@
   (let [{:keys [^InputStream body] :as response} (net/post-stream url headers body)]
     (try
       (check-status! response)
-      (let [ch (a/chan 256 (keep parse-sse-data))]
+      (let [data-ch (a/chan 256 (keep parse-sse-data))
+            out-ch  (a/chan 256)]
+        ;; Pipe parsed SSE data to output; false = don't close out-ch when data-ch closes
+        (a/pipe data-ch out-ch false)
         (a/thread
           (try
             (with-open [rdr (io/reader body)]
               (loop []
                 (when-let [line (.readLine rdr)]
-                  (when (a/>!! ch line)
+                  (when (a/>!! data-ch line)
                     (recur)))))
             (catch Exception e
               (when-not (.isInterrupted (Thread/currentThread))
-                (a/>!! ch e)))
-          (finally
-            (a/close! ch))))
-        ch)
+                ;; Put exception directly on output channel (bypasses transducer)
+                (a/>!! out-ch e)))
+            (finally
+              (a/close! data-ch)
+              (a/close! out-ch))))
+        out-ch)
       (catch Exception e
         (.close body)
         (throw e)))))
