@@ -284,3 +284,20 @@
                                                              :arguments ""}}]}}]}]
       (is (= :tool-call (:type (openai-event data nil [:some-tool])))
           "Should produce :tool-call when tools are present"))))
+
+;; ════════════════════════════════════════════════════════════════════
+;; Tests: Tool call with name AND args in same chunk
+;; ════════════════════════════════════════════════════════════════════
+
+(deftest test-tool-call-name-and-args-in-same-chunk
+  (testing "Tool call with name AND args in same chunk preserves arguments"
+    (let [data {:choices [{:index 0
+                           :delta {:tool-calls [{:id "call_1"
+                                                  :index 0
+                                                  :function {:name "get_weather"
+                                                             :arguments "{\"city\":\"Tokyo\"}"}}]}}]}
+          result (openai-events data nil [:some-tool])]
+      (is (= 1 (count result)))
+      (is (= :tool-call (:type (first result))))
+      (is (= "get_weather" (:name (first result))))
+      (is (= "{\"city\":\"Tokyo\"}" (:arguments (first result)))))))

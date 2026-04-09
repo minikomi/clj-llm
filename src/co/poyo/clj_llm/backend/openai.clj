@@ -122,7 +122,7 @@
                    :id (:id tool-call)
                    :index (:index tool-call)
                    :name fn-name
-                   :arguments ""}
+                   :arguments (or fn-args "")}
 
                   (and tools fn-args)
                   {:type :tool-call-delta
