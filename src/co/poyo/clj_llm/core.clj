@@ -426,6 +426,9 @@
    (let [start-time     (System/currentTimeMillis)
          tools          (or (:tools opts) (:tools (:defaults provider)))
          schema         (or (:schema opts) (:schema (:defaults provider)))
+         _              (when (and tools schema)
+                           (throw (ex-info "Cannot use :tools and :schema simultaneously"
+                                           {:error-type :llm/invalid-request})))
          model          (or (:model opts) (:model (:defaults provider)))
          on-text        (:on-text opts)
          on-tool-calls  (:on-tool-calls opts)
@@ -532,8 +535,10 @@
                           (assoc :tools input-schemas))]
      (loop [history (build-messages input)
             steps []
-            step 0]
-       (let [{:keys [text usage] :as result}
+            step 0
+            total-usage {}]
+       (let [model (or (:model request-opts) (:model (:defaults provider)))
+             {:keys [text usage] :as result}
              (finalize-state
                (chan-reduce (fn [state event]
                               (when (and on-text (= :content (:type event)))
@@ -548,11 +553,12 @@
                         (on-tool-calls {:step step :tool-calls parsed-calls :text (not-empty text)}))
              pre-stop? (stop-when {:tool-calls parsed-calls :text text :step step})]
          (if pre-stop?
-           (cond-> {:text       text
-                    :history    (conj history {:role :assistant :content (or text "")})
-                    :steps      steps
-                    :tool-calls (not-empty parsed-calls)}
-             usage (assoc :usage usage))
+           (let [step-usage (if usage (merge-with (fn [a b] (if (number? a) (+ a b) b)) total-usage usage) total-usage)]
+             (cond-> {:text       text
+                      :history    (conj history {:role :assistant :content (or text "")})
+                      :steps      steps
+                      :tool-calls (not-empty parsed-calls)}
+               (seq step-usage) (assoc :usage (cond-> step-usage model (assoc :model model)))))
 
            (let [
                  results  (when (seq parsed-calls)
@@ -587,9 +593,11 @@
                  post-stop? (when results
                               (stop-when {:tool-calls parsed-calls :text text :step step :tool-results tool-results}))]
              (if (or post-stop? (>= (inc step) max-steps))
-               (cond-> {:text text :history next-history :steps next-steps}
-                 post-stop? (assoc :tool-calls (not-empty parsed-calls)
-                                   :tool-results (not-empty tool-results))
-                 (and (not post-stop?) (>= (inc step) max-steps)) (assoc :truncated true)
-                 usage (assoc :usage usage))
-               (recur next-history next-steps (inc step))))))))))
+               (let [step-usage (if usage (merge-with (fn [a b] (if (number? a) (+ a b) b)) total-usage usage) total-usage)]
+                 (cond-> {:text text :history next-history :steps next-steps}
+                   post-stop? (assoc :tool-calls (not-empty parsed-calls)
+                                     :tool-results (not-empty tool-results))
+                   (and (not post-stop?) (>= (inc step) max-steps)) (assoc :truncated true)
+                   (seq step-usage) (assoc :usage (cond-> step-usage model (assoc :model model)))))
+               (let [next-usage (if usage (merge-with (fn [a b] (if (number? a) (+ a b) b)) total-usage usage) total-usage)]
+                 (recur next-history next-steps (inc step) next-usage))))))))))
