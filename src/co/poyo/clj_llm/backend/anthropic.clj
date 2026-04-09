@@ -6,6 +6,8 @@
    [cheshire.core :as json]
    [clojure.core.async :as a]
    [clojure.set]
+   [clojure.string :as str]
+   [malli.core :as m]
    [co.poyo.clj-llm.schema :as schema]
    [co.poyo.clj-llm.protocol :as proto]
    [co.poyo.clj-llm.stream :as stream]))
@@ -52,11 +54,57 @@
     (mapv content-part->anthropic content)
     content))
 
+(defn- malli->anthropic-tool-definition
+  "Convert a Malli schema to Anthropic tool definition format."
+  [schema]
+  (let [compiled (m/schema schema)
+        props (m/properties compiled)
+        fields (->> (m/children compiled)
+                    (filter vector?)
+                    (map (comp name first)))
+        tool-name (or (:name props)
+                      (-> (str "extract_" (clojure.string/join "_" fields))
+                          (clojure.string/replace #"[^a-zA-Z0-9_]" "_")
+                          (subs 0 (min 64 (count (str "extract_" (clojure.string/join "_" fields)))))))
+        tool-desc (or (:description props)
+                      (str "Extract " (clojure.string/join ", " fields) " from input"))]
+    {:name tool-name
+     :description tool-desc
+     :input_schema (schema/malli->json-schema schema)}))
+
 (defn- normalize-messages [messages]
   (mapv (fn [msg]
-          (cond-> (clojure.set/rename-keys msg {:tool-calls :tool_calls
-                                                :tool-call-id :tool_call_id})
-            (:content msg) (update :content normalize-content)))
+          (let [msg (clojure.set/rename-keys msg {:tool-calls :tool_calls
+                                                  :tool-call-id :tool_call_id})]
+            (cond
+              ;; Convert OpenAI-style assistant tool_calls to Anthropic content array
+              (and (= :assistant (:role msg)) (:tool_calls msg))
+              (let [tool-use-blocks (mapv (fn [tc]
+                                            {:type "tool_use"
+                                             :id (:id tc)
+                                             :name (get-in tc [:function :name])
+                                             :input (let [args (get-in tc [:function :arguments])]
+                                                      (if (string? args)
+                                                        (try (json/parse-string args true)
+                                                             (catch Exception _ {}))
+                                                        (or args {})))})
+                                          (:tool_calls msg))
+                    text-block (when (seq (:content msg))
+                                 [{:type "text" :text (:content msg)}])]
+                (cond-> {:role :assistant}
+                  true (assoc :content (into (or text-block []) tool-use-blocks))))
+
+              ;; Convert OpenAI-style tool result messages to Anthropic user messages
+              (= :tool (:role msg))
+              {:role :user
+               :content [{:type "tool_result"
+                          :tool_use_id (:tool_call_id msg)
+                          :content (:content msg)}]}
+
+              ;; Normal messages: normalize content parts
+              :else
+              (cond-> msg
+                (:content msg) (update :content normalize-content)))))
         messages))
 
 (defn- build-body
@@ -65,7 +113,7 @@
   (let [messages (normalize-messages messages)
         tools-config (cond
                        tools
-                       (cond-> {:tools (mapv schema/malli->tool-definition tools)}
+                       (cond-> {:tools (mapv malli->anthropic-tool-definition tools)}
                          (not= tool-choice "none")
                          (assoc :tool_choice (cond
                                               (= tool-choice "auto") {:type "auto"}
@@ -74,7 +122,7 @@
                                               :else (or tool-choice {:type "auto"}))))
 
                        schema
-                       {:tools [(schema/malli->tool-definition schema)]
+                       {:tools [(malli->anthropic-tool-definition schema)]
                         :tool_choice {:type "any"}})
         api-opts (convert-options-for-api opts)
         max-tokens (or (:max_tokens api-opts) 4096)

@@ -189,14 +189,33 @@
       (is (= "sk-test-123" ((.-api-key-fn b)))))))
 
 (deftest test-normalize-messages-basic
-  (testing "renames :tool-calls and :tool-call-id to snake_case"
-    (let [msgs [{:role "assistant" :tool-calls [{:id "c1" :type "function"
-                                                :function {:name "f" :arguments "{}"}}]
-                 :content "ok"}
-                {:role "tool" :tool-call-id "c1" :content "result"}]
-          result (normalize-messages msgs)]
-      (is (= :tool_calls (first (keys (dissoc (first result) :role :content)))))
-      (is (= :tool_call_id (first (keys (dissoc (second result) :role :content))))))))
+  (testing "assistant tool_calls become Anthropic content array with tool_use blocks"
+    (let [msgs [{:role :assistant :tool-calls [{:id "c1" :type "function"
+                                                :function {:name "f" :arguments "{\"x\":1}"}}]
+                 :content "ok"}]
+          result (normalize-messages msgs)
+          assistant-msg (first result)]
+      (is (= :assistant (:role assistant-msg)))
+      (is (vector? (:content assistant-msg)))
+      (is (= [{:type "text" :text "ok"}
+              {:type "tool_use" :id "c1" :name "f" :input {:x 1}}]
+             (:content assistant-msg)))))
+
+  (testing "tool messages become user messages with tool_result blocks"
+    (let [msgs [{:role :tool :tool-call-id "c1" :content "result"}]
+          result (normalize-messages msgs)
+          tool-msg (first result)]
+      (is (= :user (:role tool-msg)))
+      (is (= [{:type "tool_result" :tool_use_id "c1" :content "result"}]
+             (:content tool-msg)))))
+
+  (testing "assistant tool_calls with parsed arguments (not string)"
+    (let [msgs [{:role :assistant :tool-calls [{:id "c2" :type "function"
+                                                :function {:name "g" :arguments {:y 2}}}]}]
+          result (normalize-messages msgs)
+          assistant-msg (first result)]
+      (is (= [{:type "tool_use" :id "c2" :name "g" :input {:y 2}}]
+             (:content assistant-msg))))))
 
 (deftest test-normalize-messages-preserves-strings
   (testing "string content passes through unchanged"
