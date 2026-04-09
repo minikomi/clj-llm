@@ -16,7 +16,7 @@ A Clojure library for talking to LLMs. Providers are plain maps. Results are pla
          '[co.poyo.clj-llm.backend.openai :as openai])
 
 (def ai (openai/backend {:api-key "sk-..."
-                         :defaults {:model "gpt-4o-mini"}))
+                         :defaults {:model "gpt-4o-mini"}}))
 
 (:text (llm/generate ai "What is the capital of France?"))
 ;; => "The capital of France is Paris."
@@ -280,6 +280,6 @@ Works out of the box — the HTTP layer switches automatically between `java.net
          '[co.poyo.clj-llm.backend.openai :as openai])
 
 (def ai (openai/backend {:api-key "sk-..."
-                         :defaults {:model "gpt-4o-mini"}))
+                         :defaults {:model "gpt-4o-mini"}}))
 (println (:text (llm/generate ai "Hello from Babashka!")))
 ```

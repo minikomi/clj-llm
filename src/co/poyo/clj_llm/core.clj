@@ -234,7 +234,9 @@
 
 (defn events
   "Return a bounded core.async channel of provider events.
-   Close the channel to cancel and clean up HTTP resources.
+   Close the channel to signal cancellation. Note: the underlying HTTP body stream
+   will drain until the server closes the connection — for immediate cancellation,
+   set a short *stream-timeout-ms* binding before calling.
 
    Events are maps with :type — :content, :tool-call, :tool-call-delta,
    :usage, :finish, :error, :done."
