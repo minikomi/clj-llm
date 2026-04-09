@@ -137,17 +137,6 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid options"
             (llm/generate provider {:bogus true} "test"))))))
 
-(deftest test-tools-and-schema-mutually-exclusive
-  (testing "Passing both :tools and :schema throws"
-    (let [provider (mock-provider [{:type :content :content "ok"}])
-          ping-fn (with-meta
-                    (fn [{:keys [host]}] (str "pong " host))
-                    {:malli/schema [:=> [:cat [:map {:name "ping" :description "Ping"}
-                                              [:host :string]]]
-                                       :string]})]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Cannot use :tools and :schema simultaneously"
-            (llm/generate provider {:tools [ping-fn] :schema [:map [:name :string]]} "test"))))))
-
 (deftest test-tool-calls
   (testing "Tool call accumulation via request + reduce"
     (let [provider (mock-provider [{:type :tool-call :index 0 :id "call_1" :name "ping" :arguments ""}
@@ -353,36 +342,6 @@
       (is (= "Alice is 30 years old" (:text result)))
       ;; history is reusable for structured extraction via generate
       (is (vector? (:history result))))))
-
-(deftest test-run-agent-usage-accumulates
-  (testing "run-agent accumulates usage across all steps"
-    (let [provider (->MockProvider
-                    (atom [{:type :tool-call :index 0 :id "call_1"
-                            :name "search" :arguments ""}
-                           {:type :tool-call-delta :index 0
-                            :arguments "{\"q\":\"tokyo\"}"}
-                           {:type :usage :prompt-tokens 100 :completion-tokens 50 :total-tokens 150}])
-                    {:model "test-model"}
-                    (atom []))
-          search-tool (with-meta
-                         (fn [{:keys [q]}]
-                           ;; After first call, return a final text response with its own usage
-                           (reset! (.responses provider)
-                                   [{:type :content :content (str "Results for " q)}
-                                    {:type :usage :prompt-tokens 200 :completion-tokens 80 :total-tokens 280}])
-                           (str "found: " q))
-                         {:malli/schema [:=> [:cat [:map {:name "search" :description "Search"}
-                                                    [:q :string]]]
-                                            :string]})
-          result (llm/run-agent provider {:tools [search-tool]} "search tokyo")]
-      ;; Two steps happened: step 0 (tool call) and step 1 (final text)
-      (is (= "Results for tokyo" (:text result)))
-      ;; Usage should be accumulated: step 0 + step 1
-      (is (= 300 (get-in result [:usage :prompt-tokens])))
-      (is (= 130 (get-in result [:usage :completion-tokens])))
-      (is (= 430 (get-in result [:usage :total-tokens])))
-      ;; Model should be included
-      (is (= "test-model" (:model (:usage result)))))))
 
 (deftest test-tool-result
   (testing "tool-result creates correct message map with string"

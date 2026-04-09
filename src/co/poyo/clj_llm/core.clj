@@ -199,9 +199,19 @@
         headers (proto/build-headers provider)
         body (json/generate-string body-map)]
     (let [raw-ch (proto/stream-events provider url headers body)
-          ch (a/chan 256 (mapcat #(proto/parse-chunk provider % schema tools)))]
-      (a/pipe raw-ch ch)
-      ch)))
+          out-ch (a/chan 256)]
+      (a/go
+        (loop []
+          (let [v (a/<! raw-ch)]
+            (cond
+              (nil? v)                (a/close! out-ch)
+              (instance? Throwable v) (do (a/>! out-ch v) (a/close! out-ch))
+              :else
+              (do
+                (doseq [event (proto/parse-chunk provider v schema tools)]
+                  (a/>! out-ch event))
+                (recur))))))
+      out-ch)))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Core API
@@ -537,8 +547,7 @@
             steps []
             step 0
             total-usage {}]
-       (let [model (or (:model request-opts) (:model (:defaults provider)))
-             {:keys [text usage] :as result}
+       (let [{:keys [text usage] :as result}
              (finalize-state
                (chan-reduce (fn [state event]
                               (when (and on-text (= :content (:type event)))
@@ -549,16 +558,16 @@
                             init-state
                             (events provider request-opts history)))
              parsed-calls (or (parse-tool-calls (:tool-calls result)) [])
+             acc-usage (if (seq usage) (merge-with (fn [a b] (if (and (number? a) (number? b)) (+ a b) b)) total-usage usage) total-usage)
              _        (when (and on-tool-calls (seq parsed-calls))
                         (on-tool-calls {:step step :tool-calls parsed-calls :text (not-empty text)}))
              pre-stop? (stop-when {:tool-calls parsed-calls :text text :step step})]
          (if pre-stop?
-           (let [step-usage (if usage (merge-with (fn [a b] (if (number? a) (+ a b) b)) total-usage usage) total-usage)]
-             (cond-> {:text       text
-                      :history    (conj history {:role :assistant :content (or text "")})
-                      :steps      steps
-                      :tool-calls (not-empty parsed-calls)}
-               (seq step-usage) (assoc :usage (cond-> step-usage model (assoc :model model)))))
+           (cond-> {:text       text
+                    :history    (conj history {:role :assistant :content (or text "")})
+                    :steps      steps
+                    :tool-calls (not-empty parsed-calls)}
+             (seq acc-usage) (assoc :usage acc-usage))
 
            (let [
                  results  (when (seq parsed-calls)
@@ -593,11 +602,9 @@
                  post-stop? (when results
                               (stop-when {:tool-calls parsed-calls :text text :step step :tool-results tool-results}))]
              (if (or post-stop? (>= (inc step) max-steps))
-               (let [step-usage (if usage (merge-with (fn [a b] (if (number? a) (+ a b) b)) total-usage usage) total-usage)]
-                 (cond-> {:text text :history next-history :steps next-steps}
-                   post-stop? (assoc :tool-calls (not-empty parsed-calls)
-                                     :tool-results (not-empty tool-results))
-                   (and (not post-stop?) (>= (inc step) max-steps)) (assoc :truncated true)
-                   (seq step-usage) (assoc :usage (cond-> step-usage model (assoc :model model)))))
-               (let [next-usage (if usage (merge-with (fn [a b] (if (number? a) (+ a b) b)) total-usage usage) total-usage)]
-                 (recur next-history next-steps (inc step) next-usage))))))))))
+               (cond-> {:text text :history next-history :steps next-steps}
+                 post-stop? (assoc :tool-calls (not-empty parsed-calls)
+                                   :tool-results (not-empty tool-results))
+                 (and (not post-stop?) (>= (inc step) max-steps)) (assoc :truncated true)
+                 (seq acc-usage) (assoc :usage acc-usage))
+               (recur next-history next-steps (inc step) acc-usage)))))))))
