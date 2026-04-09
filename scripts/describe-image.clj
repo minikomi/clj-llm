@@ -9,7 +9,7 @@
 
 (def image-path (first *command-line-args*))
 (when (not image-path)
-  (println "Usage: describe-person.clj <image-path>")
+  (println "Usage: bb scripts/describe-image.clj <image-path>")
   (System/exit 1))
 
 (def openrouter-key (System/getenv "OPENROUTER_KEY"))

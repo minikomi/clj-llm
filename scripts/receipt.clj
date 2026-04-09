@@ -50,6 +50,9 @@
 (def system-prompt "Extract structured data from the receipt image and return it in the specified schema format.")
 
 (def image-path (first *command-line-args*))
+(when-not image-path
+  (println "Usage: bb scripts/receipt.clj <receipt-image-path>")
+  (System/exit 1))
 
 (let [result
       (llm/generate ai

@@ -14,7 +14,7 @@
          '[clojure.edn :as edn]
          '[babashka.http-client :as http])
 
-(def port (or (System/getenv "PORT") 8001))
+(def port (parse-long (or (System/getenv "PORT") "8001")))
 
 (def openrouter-key (System/getenv "OPENROUTER_KEY"))
 (def openai-key (System/getenv "OPENAI_API_KEY"))
