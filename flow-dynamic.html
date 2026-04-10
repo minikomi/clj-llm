@@ -230,11 +230,11 @@
     body { font-family: Georgia, serif; max-width: 780px; margin: 2em auto; padding: 0 1.5em; line-height: 1.65; color: #1a1a1a; }
     h1 { font-size: 2em; margin-bottom: 0.2em; }
     h2 { font-size: 1.3em; margin-top: 2.2em; border-bottom: 1px solid #e0e0e0; padding-bottom: 0.3em; }
+    h3 { font-size: 1.1em; margin-top: 1.8em; }
     p { margin: 1em 0; }
     pre { background: #f6f6f6; border-radius: 6px; padding: 1em 1.2em; overflow-x: auto; font-size: 0.88em; }
     code { font-family: 'Fira Code', 'Menlo', monospace; }
     p > code, li > code { background: #f0f0f0; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
-    blockquote { border-left: 3px solid #ccc; margin: 1.5em 0; padding: 0.5em 1.2em; color: #555; }
     hr { border: none; border-top: 1px solid #e0e0e0; margin: 2.5em 0; }
     table { border-collapse: collapse; width: 100%; margin: 1.5em 0; }
     th, td { border: 1px solid #ddd; padding: 0.5em 0.8em; text-align: left; }
@@ -477,5 +477,141 @@ Subgraphs spawning subgraphs, all coordinated by data, all
 stoppable.</p>
 <p>The LLM doesn’t need to know Clojure. It just needs to know the
 schema.</p>
+<hr />
+<h2 id="beyond-fan-out-arbitrary-dags">Beyond fan-out: arbitrary
+DAGs</h2>
+<p>The fan-out pattern has a constraint built into it: the LLM generates
+a flat list of tasks, all parallel, all feeding the same aggregator.
+That’s useful, but it’s not the full shape of what
+<code>create-flow</code> can express.</p>
+<p>A more interesting question is whether the LLM can generate a genuine
+DAG — one where intermediate nodes depend on earlier nodes, producing a
+multi-stage pipeline where some analysis waits on other analysis.</p>
+<p>The key change is giving the plan a dependency field:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>{<span class="at">:nodes</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a> [{<span class="at">:id</span> <span class="st">&quot;search-rust&quot;</span>   <span class="at">:type</span> <span class="st">&quot;search&quot;</span> <span class="at">:query</span> <span class="st">&quot;Rust data pipeline performance 2025&quot;</span>}</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:id</span> <span class="st">&quot;search-go&quot;</span>     <span class="at">:type</span> <span class="st">&quot;search&quot;</span> <span class="at">:query</span> <span class="st">&quot;Go data pipeline performance 2025&quot;</span>}</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:id</span> <span class="st">&quot;analyze-rust&quot;</span>  <span class="at">:type</span> <span class="st">&quot;llm&quot;</span>    <span class="at">:deps</span> [<span class="st">&quot;search-rust&quot;</span>]</span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>   <span class="at">:prompt</span> <span class="st">&quot;Summarize Rust&#39;s strengths and weaknesses for data pipelines.&quot;</span>}</span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:id</span> <span class="st">&quot;analyze-go&quot;</span>    <span class="at">:type</span> <span class="st">&quot;llm&quot;</span>    <span class="at">:deps</span> [<span class="st">&quot;search-go&quot;</span>]</span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>   <span class="at">:prompt</span> <span class="st">&quot;Summarize Go&#39;s strengths and weaknesses for data pipelines.&quot;</span>}</span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:id</span> <span class="st">&quot;compare&quot;</span>       <span class="at">:type</span> <span class="st">&quot;llm&quot;</span>    <span class="at">:deps</span> [<span class="st">&quot;analyze-rust&quot;</span> <span class="st">&quot;analyze-go&quot;</span>]</span>
+<span id="cb11-9"><a href="#cb11-9" aria-hidden="true" tabindex="-1"></a>   <span class="at">:prompt</span> <span class="st">&quot;Compare these analyses. What are the key trade-offs?&quot;</span>}</span>
+<span id="cb11-10"><a href="#cb11-10" aria-hidden="true" tabindex="-1"></a>  {<span class="at">:id</span> <span class="st">&quot;final&quot;</span>         <span class="at">:type</span> <span class="st">&quot;llm&quot;</span>    <span class="at">:deps</span> [<span class="st">&quot;compare&quot;</span>]</span>
+<span id="cb11-11"><a href="#cb11-11" aria-hidden="true" tabindex="-1"></a>   <span class="at">:prompt</span> <span class="st">&quot;Write a concrete recommendation based on the comparison.&quot;</span>}]}</span></code></pre></div>
+<p>Two node types. <code>search</code> nodes fire immediately at start —
+they have no deps. <code>llm</code> nodes wait on named ports, one per
+dependency, and fire when all have arrived.</p>
+<h3 id="named-ports-for-multi-dep-nodes">Named ports for multi-dep
+nodes</h3>
+<p>In the flat fan-out, the aggregator has a single <code>:in</code>
+port and flow multiplexes all workers onto it. That works when the
+aggregator doesn’t care which result came from where.</p>
+<p>In a DAG, a node like <code>compare</code> receives
+<code>analyze-rust</code> and <code>analyze-go</code> as distinct inputs
+— it needs to know which is which to write a coherent prompt. So each
+dep gets its own named port:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> make-llm-proc </span>[id deps prompt]</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [port-set (<span class="kw">set</span> (<span class="kw">map</span> <span class="kw">keyword</span> deps))]</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    (<span class="kw">fn</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>      ([] {<span class="at">:ins</span>  (<span class="kw">into</span> {} (<span class="kw">map</span> #(<span class="kw">vector</span> (<span class="kw">keyword</span> <span class="va">%</span>) (<span class="kw">str</span> <span class="st">&quot;result from &quot;</span> <span class="va">%</span>)) deps))</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>           <span class="at">:outs</span> {<span class="at">:out</span> <span class="st">&quot;result&quot;</span>}</span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>           <span class="at">:params</span> {}})</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>      ([_] {<span class="at">:collected</span> {}})</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>      ([state _] state)</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>      ([{<span class="at">:keys</span> [collected] <span class="at">:as</span> state} port msg]</span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>       (<span class="kw">let</span> [collected&#39; (<span class="kw">assoc</span> collected port msg)]</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>         (<span class="kw">if</span> (<span class="kw">=</span> (<span class="kw">set</span> (<span class="kw">keys</span> collected&#39;)) port-set)</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>           <span class="co">;; all deps in — build context and generate</span></span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>           (<span class="kw">let</span> [context (str/join <span class="st">&quot;</span><span class="sc">\n\n</span><span class="st">---</span><span class="sc">\n\n</span><span class="st">&quot;</span></span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a>                           (<span class="kw">map</span> #(<span class="kw">str</span> (<span class="kw">name</span> <span class="va">%</span>) <span class="st">&quot;:</span><span class="sc">\n</span><span class="st">&quot;</span> (<span class="kw">get</span> collected&#39; (<span class="kw">keyword</span> <span class="va">%</span>))) deps))</span>
+<span id="cb12-15"><a href="#cb12-15" aria-hidden="true" tabindex="-1"></a>                 answer  (<span class="at">:text</span> (llm/generate ai</span>
+<span id="cb12-16"><a href="#cb12-16" aria-hidden="true" tabindex="-1"></a>                                  {<span class="at">:system-prompt</span> <span class="st">&quot;You are a research analyst.&quot;</span>}</span>
+<span id="cb12-17"><a href="#cb12-17" aria-hidden="true" tabindex="-1"></a>                                  (<span class="kw">str</span> prompt <span class="st">&quot;</span><span class="sc">\n\n</span><span class="st">Context:</span><span class="sc">\n\n</span><span class="st">&quot;</span> context)))]</span>
+<span id="cb12-18"><a href="#cb12-18" aria-hidden="true" tabindex="-1"></a>             [(<span class="kw">assoc</span> state <span class="at">:collected</span> {}) {<span class="at">:out</span> [answer]}])</span>
+<span id="cb12-19"><a href="#cb12-19" aria-hidden="true" tabindex="-1"></a>           <span class="co">;; still waiting</span></span>
+<span id="cb12-20"><a href="#cb12-20" aria-hidden="true" tabindex="-1"></a>           [(<span class="kw">assoc</span> state <span class="at">:collected</span> collected&#39;) {}]))))))</span></code></pre></div>
+<p>State accumulates one message per dep across transform calls. When
+the set of collected keys equals the set of expected deps, the node
+fires. The context string preserves which result came from which node —
+<code>analyze-rust:</code> followed by that content,
+<code>analyze-go:</code> followed by its content.</p>
+<h3 id="wiring-the-graph">Wiring the graph</h3>
+<p><code>dag-&gt;flow-config</code> walks the node list and emits one
+connection per edge — <code>dep :out</code> to
+<code>child :(keyword dep)</code>:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode clojure"><code class="sourceCode clojure"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>(<span class="bu">defn</span><span class="fu"> dag-&gt;flow-config </span>[{<span class="at">:keys</span> [nodes]} out-chan]</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  (<span class="kw">let</span> [terminal (find-terminal nodes)   <span class="co">;; the one node nothing depends on</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>        procs    (<span class="kw">into</span> {<span class="at">:sink</span> ...}</span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>                       (<span class="kw">map</span> (<span class="kw">fn</span> [{<span class="at">:keys</span> [id <span class="kw">type</span> query prompt deps]}]</span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>                              [(<span class="kw">keyword</span> id)</span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>                               {<span class="at">:proc</span> (flow/process</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>                                       (<span class="kw">case</span> <span class="kw">type</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a>                                         <span class="st">&quot;search&quot;</span> (make-search-proc id query)</span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a>                                         <span class="st">&quot;llm&quot;</span>    (make-llm-proc id deps prompt))</span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a>                                       {<span class="at">:workload</span> <span class="at">:io</span>})}])</span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a>                            nodes))</span>
+<span id="cb13-12"><a href="#cb13-12" aria-hidden="true" tabindex="-1"></a>        <span class="co">;; one conn per edge: dep&#39;s :out → child&#39;s :(dep-id) port</span></span>
+<span id="cb13-13"><a href="#cb13-13" aria-hidden="true" tabindex="-1"></a>        conns    (<span class="kw">for</span> [{<span class="at">:keys</span> [id deps]} nodes, dep (<span class="kw">or</span> deps [])]</span>
+<span id="cb13-14"><a href="#cb13-14" aria-hidden="true" tabindex="-1"></a>                   [[(<span class="kw">keyword</span> dep) <span class="at">:out</span>] [(<span class="kw">keyword</span> id) (<span class="kw">keyword</span> dep)]])]</span>
+<span id="cb13-15"><a href="#cb13-15" aria-hidden="true" tabindex="-1"></a>    {<span class="at">:procs</span> procs</span>
+<span id="cb13-16"><a href="#cb13-16" aria-hidden="true" tabindex="-1"></a>     <span class="at">:conns</span> (<span class="kw">into</span> (<span class="kw">vec</span> conns) [[[(<span class="kw">keyword</span> (<span class="at">:id</span> terminal)) <span class="at">:out</span>] [<span class="at">:sink</span> <span class="at">:in</span>]]])}))</span></code></pre></div>
+<p>The loop at the end injects a trigger message to every
+<code>search</code> node to start the graph. Everything else fires
+automatically as data flows through.</p>
+<h3 id="what-the-llm-actually-generates">What the LLM actually
+generates</h3>
+<p>Given the question <em>“What are the key trade-offs between Rust and
+Go for high-throughput data pipelines?”</em> with a tool prompt asking
+for multi-stage research, Claude produces a 9-node plan:</p>
+<pre><code>[llm] final-recommendation
+└── [llm] comparison
+    ├── [llm] analyze-rust
+    │   ├── [search] search-rust-performance
+    │   └── [search] search-rust-ecosystem
+    ├── [llm] analyze-go
+    │   ├── [search] search-go-performance
+    │   └── [search] search-go-ecosystem
+    └── [search] search-rust-vs-go</code></pre>
+<p>Five search nodes fire in parallel at the start.
+<code>analyze-rust</code> waits for its two searches;
+<code>analyze-go</code> waits for its two. <code>comparison</code> waits
+for both analyses and the cross-cutting comparison search.
+<code>final-recommendation</code> waits on <code>comparison</code>.</p>
+<p>The runtime output confirms this:</p>
+<pre><code>  [search-rust-performance] searching...
+  [search-rust-ecosystem] searching...
+  [search-go-performance] searching...
+  [search-go-ecosystem] searching...
+  [search-rust-vs-go] searching...
+  [search-rust-performance] done
+  [search-rust-ecosystem] done
+  [analyze-rust] all deps arrived — generating...
+  [search-go-performance] done
+  [search-go-ecosystem] done
+  [analyze-go] all deps arrived — generating...
+  [analyze-rust] done
+  [analyze-go] done
+  [comparison] all deps arrived — generating...
+  [comparison] done
+  [final-recommendation] all deps arrived — generating...</code></pre>
+<p>The model didn’t just decompose into independent parallel tasks — it
+designed a pipeline with intermediate stages, where earlier analysis
+feeds into later synthesis. <code>comparison</code> receives two focused
+summaries rather than four raw search dumps.</p>
+<h3 id="what-the-schema-affords">What the schema affords</h3>
+<p>The node vocabulary is a fixed set you define. The LLM picks from
+<code>"search"</code> and <code>"llm"</code>. You could add
+<code>"critique"</code> (takes a draft and a set of search results,
+returns criticism), <code>"format"</code> (takes structured data,
+returns markdown), or any other type that makes sense for your domain.
+The LLM’s job is graph architecture, not implementation.</p>
+<p>Validation before execution covers the structural properties: unknown
+deps, search nodes missing queries, llm nodes missing prompts or deps,
+more than one terminal node. These are caught as data errors before a
+single process starts.</p>
 </body>
 </html>

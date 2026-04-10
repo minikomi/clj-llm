@@ -241,3 +241,133 @@ A few things follow naturally from this design:
 **The recursion case is obvious.** Each `llm-worker` could itself be a `run-agent` call with access to `fan-out-research`. Depth is a counter in the task args, decremented at each level, refusing to fan-out at zero. Subgraphs spawning subgraphs, all coordinated by data, all stoppable.
 
 The LLM doesn't need to know Clojure. It just needs to know the schema.
+
+---
+
+## Beyond fan-out: arbitrary DAGs
+
+The fan-out pattern has a constraint built into it: the LLM generates a flat list of tasks, all parallel, all feeding the same aggregator. That's useful, but it's not the full shape of what `create-flow` can express.
+
+A more interesting question is whether the LLM can generate a genuine DAG — one where intermediate nodes depend on earlier nodes, producing a multi-stage pipeline where some analysis waits on other analysis.
+
+The key change is giving the plan a dependency field:
+
+```clojure
+{:nodes
+ [{:id "search-rust"   :type "search" :query "Rust data pipeline performance 2025"}
+  {:id "search-go"     :type "search" :query "Go data pipeline performance 2025"}
+  {:id "analyze-rust"  :type "llm"    :deps ["search-rust"]
+   :prompt "Summarize Rust's strengths and weaknesses for data pipelines."}
+  {:id "analyze-go"    :type "llm"    :deps ["search-go"]
+   :prompt "Summarize Go's strengths and weaknesses for data pipelines."}
+  {:id "compare"       :type "llm"    :deps ["analyze-rust" "analyze-go"]
+   :prompt "Compare these analyses. What are the key trade-offs?"}
+  {:id "final"         :type "llm"    :deps ["compare"]
+   :prompt "Write a concrete recommendation based on the comparison."}]}
+```
+
+Two node types. `search` nodes fire immediately at start — they have no deps. `llm` nodes wait on named ports, one per dependency, and fire when all have arrived.
+
+### Named ports for multi-dep nodes
+
+In the flat fan-out, the aggregator has a single `:in` port and flow multiplexes all workers onto it. That works when the aggregator doesn't care which result came from where.
+
+In a DAG, a node like `compare` receives `analyze-rust` and `analyze-go` as distinct inputs — it needs to know which is which to write a coherent prompt. So each dep gets its own named port:
+
+```clojure
+(defn make-llm-proc [id deps prompt]
+  (let [port-set (set (map keyword deps))]
+    (fn
+      ([] {:ins  (into {} (map #(vector (keyword %) (str "result from " %)) deps))
+           :outs {:out "result"}
+           :params {}})
+      ([_] {:collected {}})
+      ([state _] state)
+      ([{:keys [collected] :as state} port msg]
+       (let [collected' (assoc collected port msg)]
+         (if (= (set (keys collected')) port-set)
+           ;; all deps in — build context and generate
+           (let [context (str/join "\n\n---\n\n"
+                           (map #(str (name %) ":\n" (get collected' (keyword %))) deps))
+                 answer  (:text (llm/generate ai
+                                  {:system-prompt "You are a research analyst."}
+                                  (str prompt "\n\nContext:\n\n" context)))]
+             [(assoc state :collected {}) {:out [answer]}])
+           ;; still waiting
+           [(assoc state :collected collected') {}]))))))
+```
+
+State accumulates one message per dep across transform calls. When the set of collected keys equals the set of expected deps, the node fires. The context string preserves which result came from which node — `analyze-rust:` followed by that content, `analyze-go:` followed by its content.
+
+### Wiring the graph
+
+`dag->flow-config` walks the node list and emits one connection per edge — `dep :out` to `child :(keyword dep)`:
+
+```clojure
+(defn dag->flow-config [{:keys [nodes]} out-chan]
+  (let [terminal (find-terminal nodes)   ;; the one node nothing depends on
+        procs    (into {:sink ...}
+                       (map (fn [{:keys [id type query prompt deps]}]
+                              [(keyword id)
+                               {:proc (flow/process
+                                       (case type
+                                         "search" (make-search-proc id query)
+                                         "llm"    (make-llm-proc id deps prompt))
+                                       {:workload :io})}])
+                            nodes))
+        ;; one conn per edge: dep's :out → child's :(dep-id) port
+        conns    (for [{:keys [id deps]} nodes, dep (or deps [])]
+                   [[(keyword dep) :out] [(keyword id) (keyword dep)]])]
+    {:procs procs
+     :conns (into (vec conns) [[[(keyword (:id terminal)) :out] [:sink :in]]])}))
+```
+
+The loop at the end injects a trigger message to every `search` node to start the graph. Everything else fires automatically as data flows through.
+
+### What the LLM actually generates
+
+Given the question *"What are the key trade-offs between Rust and Go for high-throughput data pipelines?"* with a tool prompt asking for multi-stage research, Claude produces a 9-node plan:
+
+```
+[llm] final-recommendation
+└── [llm] comparison
+    ├── [llm] analyze-rust
+    │   ├── [search] search-rust-performance
+    │   └── [search] search-rust-ecosystem
+    ├── [llm] analyze-go
+    │   ├── [search] search-go-performance
+    │   └── [search] search-go-ecosystem
+    └── [search] search-rust-vs-go
+```
+
+Five search nodes fire in parallel at the start. `analyze-rust` waits for its two searches; `analyze-go` waits for its two. `comparison` waits for both analyses and the cross-cutting comparison search. `final-recommendation` waits on `comparison`.
+
+The runtime output confirms this:
+
+```
+  [search-rust-performance] searching...
+  [search-rust-ecosystem] searching...
+  [search-go-performance] searching...
+  [search-go-ecosystem] searching...
+  [search-rust-vs-go] searching...
+  [search-rust-performance] done
+  [search-rust-ecosystem] done
+  [analyze-rust] all deps arrived — generating...
+  [search-go-performance] done
+  [search-go-ecosystem] done
+  [analyze-go] all deps arrived — generating...
+  [analyze-rust] done
+  [analyze-go] done
+  [comparison] all deps arrived — generating...
+  [comparison] done
+  [final-recommendation] all deps arrived — generating...
+```
+
+The model didn't just decompose into independent parallel tasks — it designed a pipeline with intermediate stages, where earlier analysis feeds into later synthesis. `comparison` receives two focused summaries rather than four raw search dumps.
+
+### What the schema affords
+
+The node vocabulary is a fixed set you define. The LLM picks from `"search"` and `"llm"`. You could add `"critique"` (takes a draft and a set of search results, returns criticism), `"format"` (takes structured data, returns markdown), or any other type that makes sense for your domain. The LLM's job is graph architecture, not implementation.
+
+Validation before execution covers the structural properties: unknown deps, search nodes missing queries, llm nodes missing prompts or deps, more than one terminal node. These are caught as data errors before a single process starts.
+
