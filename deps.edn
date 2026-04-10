@@ -21,6 +21,8 @@
                  slipset/deps-deploy {:mvn/version "0.2.2"}}
           :ns-default build}
   :neil {:project {:name clj-llm/clj-llm}}
+
+  :flow {:extra-deps {org.clojure/core.async {:mvn/version "1.9.808-alpha1"}}}
   ;; clj mcp
   :nrepl {:extra-paths ["test"]
           :extra-deps {nrepl/nrepl {:mvn/version "1.6.0"}}
