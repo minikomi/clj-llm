@@ -2,13 +2,14 @@
 ;; a runtime-built core.async/flow graph, then synthesizes the results.
 ;;
 ;; Usage:
-;;   echo "Compare the food cultures of Osaka, Lyon, and Mexico City" | clojure -M scripts/fan-out.clj
-;;   clojure -M scripts/fan-out.clj < question.txt
+;;   echo "Compare the food cultures of Osaka, Lyon, and Mexico City" | clojure -M:flow scripts/fan-out.clj
+;;   clojure -M:flow scripts/fan-out.clj < question.txt
 ;;
 ;; Env vars:
 ;;   OPENROUTER_KEY  — use OpenRouter (default)
 ;;   OPENAI_API_KEY  — use OpenAI
 ;;   LLM_MODEL       — override model (default: google/gemini-2.0-flash-lite-001)
+;;   KAGI_API_KEY    — enables kagi_summarize tool for workers
 
 (require
  '[clojure.core.async :as a]
@@ -28,6 +29,82 @@
     (not (System/getenv "LLM_MODEL"))
     (assoc-in [:defaults :model] "google/gemini-2.0-flash-lite-001")))
 
+;; ── Web tools (plain JVM HTTP, no extra deps) ────────────────────
+
+(def kagi-key (System/getenv "KAGI_API_KEY"))
+
+(defn http-get [url & {:as headers}]
+  (let [conn (doto (.openConnection (java.net.URL. url))
+               (.setRequestProperty "User-Agent" "clj-llm-fan-out/1.0"))
+        _ (doseq [[k v] headers] (.setRequestProperty conn k v))]
+    (with-open [in (.getInputStream conn)] (slurp in))))
+
+(defn http-post [url content-type body & {:as headers}]
+  (let [conn (doto (.openConnection (java.net.URL. url))
+               (.setRequestMethod "POST")
+               (.setRequestProperty "Content-Type" content-type)
+               (.setRequestProperty "User-Agent" "clj-llm-fan-out/1.0")
+               (.setDoOutput true))
+        _ (doseq [[k v] headers] (.setRequestProperty conn k v))]
+    (with-open [out (.getOutputStream conn)]
+      (.write out (.getBytes body "UTF-8")))
+    (with-open [in (.getInputStream conn)] (slurp in))))
+
+(defn kagi-summarize
+  "Summarize a URL via Kagi API. Returns summary text or error string."
+  {:malli/schema
+   [:=> [:cat [:map {:name        "kagi_summarize"
+                     :description "Fetch and summarize a webpage via Kagi. Use to get real content from a specific URL."}
+               [:url {:description "Full URL to summarize"} :string]]]
+        :string]}
+  [{:keys [url]}]
+  (if-not kagi-key
+    "KAGI_API_KEY not set"
+    (try
+      (let [resp (http-get (str "https://kagi.com/api/v0/summarize?url="
+                                (java.net.URLEncoder/encode url "UTF-8")
+                                "&engine=agnes")
+                           "Authorization" (str "Bot " kagi-key))
+            ;; simple JSON extraction without extra deps
+            output (second (re-find #"\"output\":\"((?:[^\"\\\\]|\\\\.)*)\"" resp))]
+        (if output
+          (str/replace output #"\\n" "\n")
+          (str "Kagi error: " resp)))
+      (catch Exception e (str "Kagi error: " (.getMessage e))))))
+
+(defn ddg-search
+  "Search via DuckDuckGo HTML endpoint. Returns snippets + URLs."
+  {:malli/schema
+   [:=> [:cat [:map {:name        "ddg_search"
+                     :description "Search the web. Returns title, snippet, and URL for top results."}
+               [:query {:description "Search query"} :string]]]
+        :string]}
+  [{:keys [query]}]
+  (try
+    (let [html     (http-post "https://html.duckduckgo.com/html/"
+                              "application/x-www-form-urlencoded"
+                              (str "q=" (java.net.URLEncoder/encode query "UTF-8")))
+          links    (re-seq #"(?s)class=\"result__a\" href=\"([^\"]+)\"[^>]*>([^<]+)</a>" html)
+          snippets (re-seq #"(?s)class=\"result__snippet\"[^>]*>(.+?)</a>" html)]
+      (if (seq links)
+        (str/join "\n\n"
+          (map-indexed
+            (fn [i [_ url title]]
+              (let [snip (some-> (nth snippets i nil) second
+                                 (str/replace #"<[^>]+>" "") str/trim)]
+                (str (inc i) ". " (str/trim title)
+                     (when (seq snip) (str "\n   " snip))
+                     "\n   URL: " url)))
+            (take 5 links)))
+        "No results found."))
+    (catch Exception e (str "Search error: " (.getMessage e)))))
+
+;; ── Worker tools ─────────────────────────────────────────────────
+
+(def worker-tools
+  (cond-> [#'ddg-search]
+    kagi-key (conj #'kagi-summarize)))
+
 ;; ── Process templates ─────────────────────────────────────────────
 
 (defn llm-worker-fn
@@ -36,8 +113,10 @@
   ([state _] state)
   ([state _port {:keys [id prompt]}]
    (binding [*out* *err*] (println (str "  [" id "] running...")))
-   (let [answer (:text (llm/generate ai
-                         {:system-prompt "You are a concise research assistant. Answer in 2-4 sentences."}
+   (let [answer (:text (llm/run-agent ai
+                         {:tools worker-tools
+                          :system-prompt "You are a concise research assistant with web search tools. Use ddg_search to find relevant sources, and kagi_summarize to read specific pages when needed. Answer in 3-5 sentences based on real search results."
+                          :max-steps 4}
                          prompt))]
      (binding [*out* *err*] (println (str "  [" id "] done")))
      [state {:out [answer]}])))
@@ -109,7 +188,7 @@
       (flow/stop g)
       result)))
 
-;; ── Tool for run-agent ────────────────────────────────────────────
+;; ── Tool exposed to run-agent ─────────────────────────────────────
 
 (defn fan-out-research
   {:malli/schema
@@ -128,7 +207,8 @@
         :string]}
   [{:keys [tasks] :as plan}]
   (binding [*out* *err*]
-    (println (str "\n[fan-out] " (count tasks) " parallel workers"))
+    (println (str "\n[fan-out] " (count tasks) " parallel workers"
+                  (when kagi-key " (kagi+ddg)") " (ddg)"))
     (doseq [{:keys [id prompt]} tasks]
       (println (str "  " id ": " (subs prompt 0 (min 72 (count prompt))) "...")))
     (println))
@@ -138,7 +218,7 @@
 
 (let [question (str/trim (slurp *in*))]
   (when (str/blank? question)
-    (binding [*out* *err*] (println "Usage: echo \"your question\" | clojure -M scripts/fan-out.clj"))
+    (binding [*out* *err*] (println "Usage: echo \"your question\" | clojure -M:flow scripts/fan-out.clj"))
     (System/exit 1))
   (binding [*out* *err*] (println "Question:" question "\n"))
   (let [result (llm/run-agent
