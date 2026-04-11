@@ -1,6 +1,11 @@
 ;; DAG research: LLM generates a nodes+edges plan, translated into a
 ;; runtime core.async/flow graph. Nodes fire when all their inputs arrive.
 ;;
+;; Node types:
+;;   search  — Kagi FastGPT query; fires on trigger
+;;   llm     — waits for all incoming edges, then synthesises
+;;   dag     — recursively spawns a full sub-DAG pipeline; fires on trigger
+;;
 ;; Usage:
 ;;   echo "your question" | clojure -M:flow scripts/dag-research.clj
 ;;
@@ -20,6 +25,9 @@
  '[co.poyo.clj-llm.backend.openrouter :as openrouter])
 
 (def kagi-key (System/getenv "KAGI_API_KEY"))
+
+(def ^:dynamic *depth* 0)
+(defn- indent-str [] (str/join (repeat *depth* "  ")))
 
 (def ai
   (cond-> (if (System/getenv "OPENROUTER_KEY") (openrouter/backend) (openai/backend))
@@ -78,6 +86,21 @@
              [(assoc state :collected {}) {:out [answer]}]))
          [(assoc state :collected collected') {}])))))
 
+(declare make-subdag-system-prompt run-subdag!)
+
+(defn make-dag-proc [id question]
+  (fn
+    ([] {:ins {:trigger "start signal"} :outs {:out "sub-dag result"} :params {}})
+    ([_] {})
+    ([state _] state)
+    ([state _port _msg]
+     (binding [*out* *err*]
+       (println (str (indent-str) "  [" id "] spawning sub-dag for: " question)))
+     (let [result (binding [*depth* (inc *depth*)]
+                    (run-subdag! question))]
+       (binding [*out* *err*] (println (str (indent-str) "  [" id "] sub-dag done")))
+       [state {:out [result]}]))))
+
 (defn sink-proc [out-chan]
   (fn
     ([] {:ins {:in "final result"} :outs {} :params {}})
@@ -92,7 +115,8 @@
    [:nodes [:vector {:min-count 2}
             [:or
              [:map [:id :string] [:type [:= "search"]] [:query :string]]
-             [:map [:id :string] [:type [:= "llm"]]    [:prompt :string]]]]]
+             [:map [:id :string] [:type [:= "llm"]]    [:prompt :string]]
+             [:map [:id :string] [:type [:= "dag"]]    [:question :string]]]]]
    [:edges [:vector {:min-count 1}
             [:map [:from :string] [:to :string]]]]])
 
@@ -148,12 +172,13 @@
                          {} edges)
         procs    (into
                   {:sink {:proc (flow/process (sink-proc out-chan) {:workload :io})}}
-                  (map (fn [{:keys [id type query prompt]}]
+                  (map (fn [{:keys [id type query prompt question]}]
                          [(keyword id)
                           {:proc (flow/process
                                   (case type
                                     "search" (make-search-proc id query)
-                                    "llm"    (make-llm-proc id (get in-ports id #{}) prompt))
+                                    "llm"    (make-llm-proc id (get in-ports id #{}) prompt)
+                                    "dag"    (make-dag-proc id question))
                                   {:workload :io})}])
                        nodes))
         conns    (into
@@ -177,7 +202,7 @@
         (binding [*out* *err*] (println "FLOW ERROR:" (pr-str err)))
         (recur)))
     (flow/resume g)
-    (doseq [{:keys [id type]} (:nodes plan) :when (= type "search")]
+    (doseq [{:keys [id type]} (:nodes plan) :when (#{ "search" "dag"} type)]
       (flow/inject g [(keyword id) :trigger] [:go]))
     (let [result (a/<!! out-chan)]
       (flow/stop g)
@@ -189,9 +214,9 @@
   {:malli/schema
    [:=> [:cat
          [:map {:name        "execute_dag"
-                :description "Build and execute a multi-stage research DAG. Define nodes and edges separately. Search nodes fire immediately in parallel. LLM nodes wait for all their incoming edges before generating. Use intermediate LLM nodes to analyse before a final synthesis node."}
+                :description "Build and execute a multi-stage research DAG. Three node types: 'search' (Kagi FastGPT query, fires immediately), 'llm' (waits for all incoming edges, then synthesises), 'dag' (recursively spawns a complete sub-DAG research pipeline for complex sub-topics — use when a sub-question itself warrants parallel research and multi-stage synthesis). All search/dag nodes fire in parallel. Use intermediate llm nodes to analyse per-topic before a single terminal llm node synthesises everything."}
           [:nodes
-           {:description "Nodes: search (needs :query) or llm (needs :prompt). Must have exactly one terminal node (no outgoing edges)."}
+           {:description "Nodes: search (needs :query), llm (needs :prompt), or dag (needs :question for recursive sub-pipeline). Must have exactly one terminal node (no outgoing edges)."}
            [:vector {:min-count 2}
             [:or
              [:map [:id {:description "unique kebab-case id"} :string]
@@ -199,7 +224,10 @@
                    [:query {:description "web search query"} :string]]
              [:map [:id {:description "unique kebab-case id"} :string]
                    [:type [:= "llm"]]
-                   [:prompt {:description "generation instruction; all incoming results provided as labelled context"} :string]]]]]
+                   [:prompt {:description "generation instruction; all incoming results provided as labelled context"} :string]]
+             [:map [:id {:description "unique kebab-case id"} :string]
+                   [:type [:= "dag"]]
+                   [:question {:description "complex sub-question to research via its own full DAG pipeline"} :string]]]]]
           [:edges
            {:description "Directed edges. Each {:from A :to B} delivers A's output to B's named input port."}
            [:vector {:min-count 1}
@@ -209,13 +237,46 @@
         :string]}
   [{:keys [nodes edges] :as plan}]
   (let [search-n (count (filter #(= (:type %) "search") nodes))
-        llm-n    (count (filter #(= (:type %) "llm") nodes))]
+        llm-n    (count (filter #(= (:type %) "llm") nodes))
+        dag-n    (count (filter #(= (:type %) "dag") nodes))
+        dag-str  (if (pos? dag-n) (str ", " dag-n " dag") "")]
     (binding [*out* *err*]
-      (println (str "\n[dag] " (count nodes) " nodes — " search-n " search, " llm-n " llm"))
-      (println (str "      " (count edges) " edges\n"))
-      (println (dag-tree plan))
+      (println (str (indent-str) "\n" (when (pos? *depth*) (str "[sub-dag depth=" *depth* "] "))
+                    (count nodes) " nodes — " search-n " search, " llm-n " llm" dag-str))
+      (println (str (indent-str) "      " (count edges) " edges\n"))
+      (println (str/join "\n" (map #(str (indent-str) %) (str/split-lines (dag-tree plan)))))
       (println)))
   (run-dag plan))
+
+;; ── Sub-DAG runner (used by make-dag-proc) ─────────────────────
+
+(defn run-subdag! [question]
+  (let [max-depth 2
+        result (llm/run-agent
+                ai
+                {:tools        [#'execute-dag]
+                 :system-prompt
+                 (str "You are a research coordinator. Call execute_dag IMMEDIATELY with a nodes+edges plan.\n"
+                      "\n"
+                      "Node types:\n"
+                      "  search  - Kagi web search; fires immediately; use for focused factual queries\n"
+                      "  llm     - waits for ALL incoming edges, then synthesises; use for analysis nodes\n"
+                      (when (< *depth* max-depth)
+                        (str "  dag     - recursively runs a COMPLETE sub-pipeline; use this for any sub-topic "
+                             "that itself needs multiple searches + synthesis steps (e.g. one per country, "
+                             "one per era, one per technology). Prefer dag over a flat cluster of search nodes "
+                             "when a sub-question is rich enough to warrant its own research plan.\n"))
+                      "\n"
+                      "Rules:\n"
+                      "  - All search/dag nodes fire in parallel\n"
+                      "  - Use intermediate llm nodes to analyse per-topic before the final terminal node\n"
+                      "  - Exactly ONE terminal node (no outgoing edges)\n"
+                      "  - Keep node ids short (snake_case). Keep prompts concise.\n"
+                      "  - ALWAYS call the tool — never answer in text.")
+                 :max-steps    3
+                 :max-tokens   4096}
+                question)]
+    (:text result)))
 
 ;; ── Entry point ───────────────────────────────────────────────────
 
@@ -225,11 +286,4 @@
       (println "Usage: echo \"your question\" | clojure -M:flow scripts/dag-research.clj"))
     (System/exit 1))
   (binding [*out* *err*] (println "Question:" question "\n"))
-  (let [result (llm/run-agent
-                ai
-                {:tools        [#'execute-dag]
-                 :system-prompt "You are a research coordinator. Call execute_dag immediately with a nodes+edges plan. Design search nodes to run in parallel, intermediate llm nodes to analyse per-topic, and a single terminal llm node to synthesise. Keep node ids short. Keep prompts concise. Always call the tool — never answer directly."
-                 :max-steps    3
-                 :max-tokens   4096}
-                question)]
-    (println (:text result))))
+  (println (run-subdag! question)))
