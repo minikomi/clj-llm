@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Recursive DAG Visualisation</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'SF Mono', 'Cascadia Code', monospace; }
+  h1 { font-size: 14px; padding: 12px 16px; color: #8b949e; border-bottom: 1px solid #21262d; letter-spacing: 0.05em; }
+  #question { font-size: 12px; padding: 8px 16px; color: #58a6ff; border-bottom: 1px solid #21262d; }
+  #canvas { width: 100vw; height: calc(100vh - 80px); }
+  .node circle { stroke-width: 2; cursor: pointer; }
+  .node text { font-size: 10px; fill: #e6edf3; cursor: pointer; }
+  .node .sublabel { font-size: 9px; fill: #8b949e; }
+  .link { fill: none; stroke: #30363d; stroke-width: 1.5; }
+  .link.dag-link { stroke: #388bfd; stroke-width: 2; stroke-dasharray: 5,3; }
+  .tooltip {
+    position: fixed; background: #161b22; border: 1px solid #30363d;
+    border-radius: 6px; padding: 10px 14px; font-size: 11px; pointer-events: none;
+    max-width: 320px; line-height: 1.6; z-index: 100; display: none;
+  }
+  .tooltip .tt-id { color: #58a6ff; font-weight: bold; margin-bottom: 4px; }
+  .tooltip .tt-type { color: #8b949e; font-size: 10px; margin-bottom: 6px; }
+  .tooltip .tt-body { color: #e6edf3; }
+  .legend { position: fixed; bottom: 16px; left: 16px; font-size: 10px; color: #8b949e; }
+  .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .depth-badge {
+    position: fixed; top: 84px; right: 16px; font-size: 10px; color: #8b949e;
+    background: #161b22; border: 1px solid #21262d; border-radius: 4px; padding: 6px 10px;
+  }
+</style>
+</head>
+<body>
+<h1>core.async/flow — Recursive DAG Execution</h1>
+<div id="question">Q: What is the current state of fusion energy research? Use dag nodes for tokamak, inertial confinement, and private ventures.</div>
+<svg id="canvas"></svg>
+<div class="tooltip" id="tooltip"></div>
+<div class="legend">
+  <div class="legend-row"><div class="legend-dot" style="background:#238636"></div> search node</div>
+  <div class="legend-row"><div class="legend-dot" style="background:#8957e5"></div> llm node</div>
+  <div class="legend-row"><div class="legend-dot" style="background:#388bfd; border: 2px solid #58a6ff"></div> dag node (recursive)</div>
+  <div class="legend-row" style="margin-top:8px"><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" stroke="#30363d" stroke-width="1.5"/></svg> data edge</div>
+  <div class="legend-row"><svg width="30" height="10"><line x1="0" y1="5" x2="30" y2="5" stroke="#388bfd" stroke-width="2" stroke-dasharray="4,2"/></svg> dag spawn</div>
+</div>
+<script>
+const COLOR = { search: '#238636', llm: '#8957e5', dag: '#388bfd' };
+const STROKE = { search: '#2ea043', llm: '#a371f7', dag: '#58a6ff' };
+const R = { search: 7, llm: 10, dag: 14 };
+
+// Full graph: nodes with x/y hints for layout, edges
+// Top-level: fusion_comparison (llm) <- tokamak_dag, inertial_dag, private_ventures_dag
+// Each dag node expands into a sub-graph
+
+const graph = {
+  nodes: [
+    // top level
+    { id: 'fusion_comparison', type: 'llm', label: 'fusion_comparison', level: 0, group: 'top', detail: 'Synthesises all three sub-DAG results to compare timelines, funding, and physics challenges.' },
+    { id: 'tokamak_dag',       type: 'dag', label: 'tokamak_dag',       level: 1, group: 'top', detail: 'Spawns full sub-DAG: ITER status, SPARC design, tokamak breakthroughs.' },
+    { id: 'inertial_dag',      type: 'dag', label: 'inertial_dag',      level: 1, group: 'top', detail: 'Spawns full sub-DAG: NIF achievements, laser fusion, ICF commercialisation path.' },
+    { id: 'private_ventures_dag', type: 'dag', label: 'private_ventures_dag', level: 1, group: 'top', detail: 'Spawns full sub-DAG: CFS, TAE, Helion — tech, funding, timeline, commercialisation.' },
+
+    // tokamak sub-dag (depth=1)
+    { id: 'tok/final_synthesis',      type: 'llm',    label: 'final_synthesis',    level: 2, group: 'tok', detail: 'Synthesises ITER, SPARC, and tokamak innovation analyses.' },
+    { id: 'tok/iter_analysis',        type: 'llm',    label: 'iter_analysis',      level: 3, group: 'tok', detail: 'Analyses ITER status, specs, setbacks, funding.' },
+    { id: 'tok/sparc_analysis',       type: 'llm',    label: 'sparc_analysis',     level: 3, group: 'tok', detail: 'Analyses SPARC design, progress, funding.' },
+    { id: 'tok/tokamak_innovations',  type: 'llm',    label: 'tokamak_innovations',level: 3, group: 'tok', detail: 'Analyses tokamak breakthroughs.' },
+    { id: 'tok/iter_status',          type: 'search', label: 'iter_status',        level: 4, group: 'tok', detail: 'Search: ITER construction status 2024' },
+    { id: 'tok/iter_setbacks',        type: 'search', label: 'iter_setbacks',      level: 4, group: 'tok', detail: 'Search: ITER delays and setbacks' },
+    { id: 'tok/iter_specs',           type: 'search', label: 'iter_specs',         level: 4, group: 'tok', detail: 'Search: ITER technical specifications' },
+    { id: 'tok/iter_funding',         type: 'search', label: 'iter_funding',       level: 4, group: 'tok', detail: 'Search: ITER funding and budget' },
+    { id: 'tok/sparc_design',         type: 'search', label: 'sparc_design',       level: 4, group: 'tok', detail: 'Search: SPARC reactor design CFS' },
+    { id: 'tok/sparc_progress',       type: 'search', label: 'sparc_progress',     level: 4, group: 'tok', detail: 'Search: SPARC construction progress' },
+    { id: 'tok/sparc_funding',        type: 'search', label: 'sparc_funding',      level: 4, group: 'tok', detail: 'Search: Commonwealth Fusion Systems funding' },
+    { id: 'tok/tokamak_breakthroughs',type: 'search', label: 'tokamak_breakthroughs', level: 4, group: 'tok', detail: 'Search: recent tokamak breakthroughs 2023-2024' },
+
+    // inertial sub-dag (depth=1)
+    { id: 'icf/terminal',           type: 'llm',    label: 'terminal',           level: 2, group: 'icf', detail: 'Synthesises NIF, tech, challenges, and viability analyses.' },
+    { id: 'icf/nif_analysis',       type: 'llm',    label: 'nif_analysis',       level: 3, group: 'icf', detail: 'Analyses NIF recent results and ignition experiments.' },
+    { id: 'icf/tech_analysis',      type: 'llm',    label: 'tech_analysis',      level: 3, group: 'icf', detail: 'Analyses competing laser technologies.' },
+    { id: 'icf/challenges_analysis',type: 'llm',    label: 'challenges_analysis',level: 3, group: 'icf', detail: 'Analyses ICF funding and technical challenges.' },
+    { id: 'icf/viability_analysis', type: 'llm',    label: 'viability_analysis', level: 3, group: 'icf', detail: 'Analyses commercial path and technical challenges.' },
+    { id: 'icf/nif_recent',         type: 'search', label: 'nif_recent',         level: 4, group: 'icf', detail: 'Search: NIF recent achievements 2024' },
+    { id: 'icf/nif_ignition',       type: 'search', label: 'nif_ignition',       level: 4, group: 'icf', detail: 'Search: NIF ignition experiments results' },
+    { id: 'icf/laser_fusion',       type: 'search', label: 'laser_fusion_progress', level: 4, group: 'icf', detail: 'Search: laser fusion progress (shared: feeds nif_analysis + tech_analysis)' },
+    { id: 'icf/competing_tech',     type: 'search', label: 'competing_tech',     level: 4, group: 'icf', detail: 'Search: competing laser fusion technologies' },
+    { id: 'icf/icf_funding',        type: 'search', label: 'icf_funding',        level: 4, group: 'icf', detail: 'Search: inertial confinement fusion funding' },
+    { id: 'icf/technical_challenges',type:'search', label: 'technical_challenges',level: 4, group: 'icf', detail: 'Search: ICF technical challenges (shared: feeds challenges + viability)' },
+    { id: 'icf/commercial_path',    type: 'search', label: 'commercial_path',    level: 4, group: 'icf', detail: 'Search: inertial confinement commercial path' },
+
+    // private ventures sub-dag (depth=1)
+    { id: 'prv/final_synthesis', type: 'llm',    label: 'final_synthesis',   level: 2, group: 'prv', detail: 'Synthesises CFS, TAE, and Helion analyses.' },
+    { id: 'prv/cfs_analysis',    type: 'llm',    label: 'cfs_analysis',      level: 3, group: 'prv', detail: 'Analyses Commonwealth Fusion Systems.' },
+    { id: 'prv/tae_analysis',    type: 'llm',    label: 'tae_analysis',      level: 3, group: 'prv', detail: 'Analyses TAE Technologies.' },
+    { id: 'prv/helion_analysis', type: 'llm',    label: 'helion_analysis',   level: 3, group: 'prv', detail: 'Analyses Helion Energy.' },
+    { id: 'prv/cfs_tech',        type: 'search', label: 'cfs_tech',          level: 4, group: 'prv', detail: 'Search: CFS SPARC technology' },
+    { id: 'prv/cfs_timeline',    type: 'search', label: 'cfs_timeline',      level: 4, group: 'prv', detail: 'Search: CFS project timeline' },
+    { id: 'prv/cfs_funding',     type: 'search', label: 'cfs_funding',       level: 4, group: 'prv', detail: 'Search: CFS funding rounds' },
+    { id: 'prv/cfs_commercialization', type: 'search', label: 'cfs_comm', level: 4, group: 'prv', detail: 'Search: CFS commercialization goals' },
+    { id: 'prv/tae_tech',        type: 'search', label: 'tae_tech',          level: 4, group: 'prv', detail: 'Search: TAE Technologies approach' },
+    { id: 'prv/tae_timeline',    type: 'search', label: 'tae_timeline',      level: 4, group: 'prv', detail: 'Search: TAE timeline' },
+    { id: 'prv/tae_funding',     type: 'search', label: 'tae_funding',       level: 4, group: 'prv', detail: 'Search: TAE funding' },
+    { id: 'prv/tae_commercialization', type: 'search', label: 'tae_comm', level: 4, group: 'prv', detail: 'Search: TAE commercialization' },
+    { id: 'prv/helion_tech',     type: 'search', label: 'helion_tech',       level: 4, group: 'prv', detail: 'Search: Helion technology' },
+    { id: 'prv/helion_timeline', type: 'search', label: 'helion_timeline',   level: 4, group: 'prv', detail: 'Search: Helion timeline' },
+    { id: 'prv/helion_funding',  type: 'search', label: 'helion_funding',    level: 4, group: 'prv', detail: 'Search: Helion funding' },
+    { id: 'prv/helion_commercialization', type: 'search', label: 'helion_comm', level: 4, group: 'prv', detail: 'Search: Helion commercialization' },
+  ],
+  edges: [
+    // top level
+    { source: 'tokamak_dag',          target: 'fusion_comparison', dag: true },
+    { source: 'inertial_dag',         target: 'fusion_comparison', dag: true },
+    { source: 'private_ventures_dag', target: 'fusion_comparison', dag: true },
+    // tokamak dag -> sub nodes (dag spawn)
+    { source: 'tokamak_dag', target: 'tok/final_synthesis', dag: true },
+    // tok sub-dag
+    { source: 'tok/iter_analysis',       target: 'tok/final_synthesis' },
+    { source: 'tok/sparc_analysis',      target: 'tok/final_synthesis' },
+    { source: 'tok/tokamak_innovations', target: 'tok/final_synthesis' },
+    { source: 'tok/iter_status',   target: 'tok/iter_analysis' },
+    { source: 'tok/iter_setbacks', target: 'tok/iter_analysis' },
+    { source: 'tok/iter_specs',    target: 'tok/iter_analysis' },
+    { source: 'tok/iter_funding',  target: 'tok/iter_analysis' },
+    { source: 'tok/sparc_design',  target: 'tok/sparc_analysis' },
+    { source: 'tok/sparc_progress',target: 'tok/sparc_analysis' },
+    { source: 'tok/sparc_funding', target: 'tok/sparc_analysis' },
+    { source: 'tok/tokamak_breakthroughs', target: 'tok/tokamak_innovations' },
+    // inertial dag -> sub nodes
+    { source: 'inertial_dag', target: 'icf/terminal', dag: true },
+    // icf sub-dag
+    { source: 'icf/nif_analysis',       target: 'icf/terminal' },
+    { source: 'icf/tech_analysis',      target: 'icf/terminal' },
+    { source: 'icf/challenges_analysis',target: 'icf/terminal' },
+    { source: 'icf/viability_analysis', target: 'icf/terminal' },
+    { source: 'icf/nif_recent',   target: 'icf/nif_analysis' },
+    { source: 'icf/nif_ignition', target: 'icf/nif_analysis' },
+    { source: 'icf/laser_fusion', target: 'icf/nif_analysis' },
+    { source: 'icf/competing_tech',target: 'icf/tech_analysis' },
+    { source: 'icf/laser_fusion', target: 'icf/tech_analysis' },
+    { source: 'icf/icf_funding',        target: 'icf/challenges_analysis' },
+    { source: 'icf/technical_challenges',target: 'icf/challenges_analysis' },
+    { source: 'icf/commercial_path',    target: 'icf/viability_analysis' },
+    { source: 'icf/technical_challenges',target: 'icf/viability_analysis' },
+    // private dag -> sub nodes
+    { source: 'private_ventures_dag', target: 'prv/final_synthesis', dag: true },
+    // prv sub-dag
+    { source: 'prv/cfs_analysis',   target: 'prv/final_synthesis' },
+    { source: 'prv/tae_analysis',   target: 'prv/final_synthesis' },
+    { source: 'prv/helion_analysis',target: 'prv/final_synthesis' },
+    { source: 'prv/cfs_tech',    target: 'prv/cfs_analysis' },
+    { source: 'prv/cfs_timeline',target: 'prv/cfs_analysis' },
+    { source: 'prv/cfs_funding', target: 'prv/cfs_analysis' },
+    { source: 'prv/cfs_commercialization', target: 'prv/cfs_analysis' },
+    { source: 'prv/tae_tech',    target: 'prv/tae_analysis' },
+    { source: 'prv/tae_timeline',target: 'prv/tae_analysis' },
+    { source: 'prv/tae_funding', target: 'prv/tae_analysis' },
+    { source: 'prv/tae_commercialization', target: 'prv/tae_analysis' },
+    { source: 'prv/helion_tech',    target: 'prv/helion_analysis' },
+    { source: 'prv/helion_timeline',target: 'prv/helion_analysis' },
+    { source: 'prv/helion_funding', target: 'prv/helion_analysis' },
+    { source: 'prv/helion_commercialization', target: 'prv/helion_analysis' },
+  ]
+};
+
+const svg = d3.select('#canvas');
+const W = window.innerWidth, H = window.innerHeight - 80;
+svg.attr('viewBox', `0 0 ${W} ${H}`);
+
+// Layout: top-down tree, grouped by sub-dag
+const byId = Object.fromEntries(graph.nodes.map(n => [n.id, n]));
+
+// Manual positions — level-based with group columns
+const groupX = { top: W/2, tok: W*0.18, icf: W*0.5, prv: W*0.82 };
+const levelY = [60, 140, 230, 330, 430];
+
+// Assign x within group for level 3-4 nodes
+const grouped = {};
+graph.nodes.forEach(n => {
+  const key = `${n.group}-${n.level}`;
+  (grouped[key] = grouped[key]||[]).push(n);
+});
+Object.entries(grouped).forEach(([key, nodes]) => {
+  const [grp, lvl] = key.split('-');
+  const cx = groupX[grp] || W/2;
+  const spread = Math.min(180, nodes.length * 28);
+  nodes.forEach((n, i) => {
+    n.x = cx + (nodes.length === 1 ? 0 : -spread/2 + spread * i/(nodes.length-1));
+    n.y = levelY[parseInt(lvl)] || 400;
+  });
+});
+
+// Draw defs (arrow marker)
+svg.append('defs').append('marker')
+  .attr('id','arrow').attr('markerWidth',8).attr('markerHeight',8)
+  .attr('refX',8).attr('refY',3).attr('orient','auto')
+  .append('path').attr('d','M0,0 L0,6 L8,3 z').attr('fill','#30363d');
+svg.append('defs').append('marker')
+  .attr('id','arrow-dag').attr('markerWidth',8).attr('markerHeight',8)
+  .attr('refX',8).attr('refY',3).attr('orient','auto')
+  .append('path').attr('d','M0,0 L0,6 L8,3 z').attr('fill','#388bfd');
+
+// Draw edges
+const link = svg.append('g').selectAll('path')
+  .data(graph.edges).enter().append('path')
+  .attr('class', d => 'link' + (d.dag ? ' dag-link' : ''))
+  .attr('marker-end', d => d.dag ? 'url(#arrow-dag)' : 'url(#arrow)')
+  .attr('d', d => {
+    const s = byId[d.source], t = byId[d.target];
+    if (!s||!t) return '';
+    const dx = t.x - s.x, dy = t.y - s.y;
+    return `M${s.x},${s.y} C${s.x},${s.y+dy*0.5} ${t.x},${t.y-dy*0.5} ${t.x},${t.y}`;
+  });
+
+// Draw sub-dag bounding boxes
+const groups = ['tok','icf','prv'];
+const groupLabels = { tok: 'sub-dag: tokamak', icf: 'sub-dag: inertial confinement', prv: 'sub-dag: private ventures' };
+groups.forEach(g => {
+  const gnodes = graph.nodes.filter(n => n.group === g);
+  const xs = gnodes.map(n=>n.x), ys = gnodes.map(n=>n.y);
+  const pad = 24;
+  svg.append('rect')
+    .attr('x', Math.min(...xs)-pad).attr('y', Math.min(...ys)-pad)
+    .attr('width', Math.max(...xs)-Math.min(...xs)+pad*2)
+    .attr('height', Math.max(...ys)-Math.min(...ys)+pad*2)
+    .attr('rx', 8)
+    .attr('fill', 'none')
+    .attr('stroke', '#388bfd')
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '4,3')
+    .attr('opacity', 0.3);
+  svg.append('text')
+    .attr('x', Math.min(...xs)-pad+6)
+    .attr('y', Math.min(...ys)-pad+14)
+    .attr('fill','#388bfd').attr('font-size',9).attr('opacity',0.7)
+    .text(groupLabels[g]);
+});
+
+// Draw nodes
+const node = svg.append('g').selectAll('g')
+  .data(graph.nodes).enter().append('g')
+  .attr('class','node')
+  .attr('transform', d => `translate(${d.x},${d.y})`);
+
+node.append('circle')
+  .attr('r', d => R[d.type])
+  .attr('fill', d => COLOR[d.type])
+  .attr('stroke', d => STROKE[d.type])
+  .attr('stroke-width', d => d.type==='dag' ? 2.5 : 1.5);
+
+node.append('text')
+  .attr('dy', d => R[d.type] + 11)
+  .attr('text-anchor','middle')
+  .text(d => d.label);
+
+// Tooltip
+const tt = document.getElementById('tooltip');
+node.on('mousemove', function(evt, d) {
+  tt.style.display = 'block';
+  tt.style.left = (evt.clientX+14)+'px';
+  tt.style.top  = (evt.clientY-10)+'px';
+  tt.innerHTML = `<div class="tt-id">${d.id}</div><div class="tt-type">[${d.type}]${d.group!=='top'?' depth=1':' depth=0'}</div><div class="tt-body">${d.detail}</div>`;
+}).on('mouseleave', () => { tt.style.display='none'; });
+</script>
+</body>
+</html>
