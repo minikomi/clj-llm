@@ -274,7 +274,7 @@
                       "  - Keep node ids short (snake_case). Keep prompts concise.\n"
                       "  - ALWAYS call the tool — never answer in text.")
                  :max-steps    3
-                 :max-tokens   4096}
+                 :max-tokens   8192}
                 question)]
     (:text result)))
 
