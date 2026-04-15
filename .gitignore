@@ -30,3 +30,5 @@ working.org
 /.clj-kondo/*
 !/.clj-kondo/config.edn
 .chat-data/
+.tasks/
+*.html

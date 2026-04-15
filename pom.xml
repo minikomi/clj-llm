@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>net.clojars.clj-llm</groupId>
   <artifactId>clj-llm</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0</version>
   <name>clj-llm/clj-llm</name>
   <description>A Clojure library for interacting with various LLM providers.</description>
   <url>https://github.com/clj-llm/clj-llm</url>
