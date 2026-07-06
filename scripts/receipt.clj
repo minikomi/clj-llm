@@ -4,7 +4,6 @@
 (require
  '[clojure.string :as str]
  '[co.poyo.clj-llm.core :as llm]
- '[co.poyo.clj-llm.content :as content]
  '[co.poyo.clj-llm.backend.openrouter :as openrouter])
 
 (defn print-receipt-table [structured-output]
@@ -58,5 +57,5 @@
       (llm/generate ai
                     {:schema ReceiptSchema
                      :system-prompt system-prompt}
-                    [(content/image image-path  {:max-width 512})])]
+                    [{:type :image :path image-path :max-width 512}])]
   (print-receipt-table (:structured result)))

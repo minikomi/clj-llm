@@ -4,8 +4,11 @@
             [clojure.core.async :as a]
             [cheshire.core :as json]
             [co.poyo.clj-llm.core :as llm]
+            [co.poyo.clj-llm.impl.image.jvm :as image-impl]
             [co.poyo.clj-llm.protocol :as proto]
-            [malli.core]))
+            [malli.core])
+  (:import
+   [java.io File FileOutputStream]))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; Mock provider
@@ -49,6 +52,14 @@
                    (merge {:model "test-model"} defaults)
                    (atom []))))
 
+(defn- temp-bytes-file
+  [suffix bs]
+  (let [f (File/createTempFile "clj-llm-test-" suffix)]
+    (.deleteOnExit f)
+    (with-open [out (FileOutputStream. f)]
+      (.write out bs))
+    f))
+
 ;; Tests
 ;; ════════════════════════════════════════════════════════════════════
 
@@ -84,6 +95,94 @@
     (let [provider (mock-provider [{:type :content :content "OK"}])
           messages [{:role :user :content "Hello"}]]
       (is (= "OK" (:text (llm/generate provider messages)))))))
+
+(deftest test-map-content-input
+  (testing "Image path maps normalize through the main API"
+    (let [image-file (temp-bytes-file ".png" (.getBytes "png bytes" "UTF-8"))
+          provider (mock-provider [{:type :content :content "OK"}])]
+      (llm/generate provider ["Describe" {:type :image :path (.getPath image-file)}])
+      (let [content (get-in (first @(:calls provider)) [:messages 0 :content])
+            image-part (second content)]
+        (is (= {:type :text :text "Describe"} (first content)))
+        (is (= :image (:type image-part)))
+        (is (= :base64 (:source image-part)))
+        (is (= "image/png" (:media-type image-part)))
+        (is (string? (:data image-part))))))
+
+  (testing "Image URL maps pass through by reference"
+    (let [provider (mock-provider [{:type :content :content "OK"}])]
+      (llm/generate provider ["Describe" {:type :image :url "https://example.com/photo.png"}])
+      (is (= {:type :image
+              :source :url
+              :url "https://example.com/photo.png"}
+             (second (get-in (first @(:calls provider)) [:messages 0 :content]))))))
+
+  (testing "Image path maps accept resize options"
+    (let [image-file (temp-bytes-file ".png" (.getBytes "png bytes" "UTF-8"))
+          provider (mock-provider [{:type :content :content "OK"}])
+          resize-call (atom nil)]
+      (with-redefs [image-impl/resize-image
+                    (fn [path opts]
+                      (reset! resize-call {:path path :opts opts})
+                      {:media-type "image/png" :data "resized"})]
+        (llm/generate provider ["Describe" {:type :image
+                                            :path (.getPath image-file)
+                                            :max-edge 1
+                                            :format "png"}]))
+      (let [image-part (second (get-in (first @(:calls provider)) [:messages 0 :content]))]
+        (is (= {:path (.getPath image-file)
+                :opts {:max-edge 1 :format "png"}}
+               @resize-call))
+        (is (= {:type :image
+                :source :base64
+                :media-type "image/png"
+                :data "resized"}
+               image-part)))))
+
+  (testing "PDF path maps normalize through the main API"
+    (let [pdf-file (temp-bytes-file ".pdf" (.getBytes "%PDF-1.4\n%%EOF\n" "UTF-8"))
+          provider (mock-provider [{:type :content :content "OK"}])]
+      (llm/generate provider ["Summarize" {:type :pdf :path (.getPath pdf-file)}])
+      (let [pdf-part (second (get-in (first @(:calls provider)) [:messages 0 :content]))]
+        (is (= :pdf (:type pdf-part)))
+        (is (= "application/pdf" (:media-type pdf-part)))
+        (is (string? (:data pdf-part))))))
+
+  (testing "Already-normalized content parts still pass through"
+    (let [provider (mock-provider [{:type :content :content "OK"}])
+          image-part {:type :image
+                      :source :url
+                      :url "https://example.com/photo.png"}]
+      (llm/generate provider ["Describe" image-part])
+      (is (= image-part
+             (second (get-in (first @(:calls provider)) [:messages 0 :content]))))))
+
+  (testing "Single content maps are accepted as input"
+    (let [provider (mock-provider [{:type :content :content "OK"}])]
+      (llm/generate provider {:type :image :url "https://example.com/photo.png"})
+      (is (= [{:role :user
+               :content [{:type :image
+                          :source :url
+                          :url "https://example.com/photo.png"}]}]
+             (:messages (first @(:calls provider)))))))
+
+  (testing "Explicit message histories can contain content maps"
+    (let [provider (mock-provider [{:type :content :content "OK"}])
+          history [{:role :user
+                    :content ["Describe" {:type :image :url "https://example.com/photo.png"}]}]]
+      (llm/generate provider history)
+      (is (= [{:role :user
+               :content [{:type :text :text "Describe"}
+                         {:type :image
+                          :source :url
+                          :url "https://example.com/photo.png"}]}]
+             (:messages (first @(:calls provider)))))))
+
+  (testing "Message maps are still treated as message history"
+    (let [provider (mock-provider [{:type :content :content "OK"}])
+          history [{:role :user :content "Hello"}]]
+      (llm/generate provider history)
+      (is (= history (:messages (first @(:calls provider))))))))
 
 (deftest test-provider-defaults
   (testing "Provider with defaults on :defaults key"

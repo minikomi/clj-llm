@@ -58,6 +58,116 @@
   (and (map? x)
        (boolean (content-types (:type x)))))
 
+(declare image pdf)
+
+(defn- normalized-image-part?
+  [x]
+  (and (= :image (:type x))
+       (case (:source x)
+         :url    (string? (:url x))
+         :base64 (and (string? (:media-type x))
+                      (string? (:data x)))
+         false)))
+
+(defn- normalized-pdf-part?
+  [x]
+  (and (= :pdf (:type x))
+       (string? (:media-type x))
+       (string? (:data x))))
+
+(defn- image-opts
+  [m]
+  (apply dissoc m [:type :path :file :url :source :bytes :data :media-type]))
+
+(defn- image-map
+  [m]
+  (cond
+    (normalized-image-part? m)
+    m
+
+    (and (:data m) (:media-type m))
+    {:type       :image
+     :source     :base64
+     :media-type (:media-type m)
+     :data       (:data m)}
+
+    (:bytes m)
+    (if (:media-type m)
+      (image (:bytes m) (:media-type m))
+      (throw (ex-info
+              "Image content map with :bytes must include :media-type"
+              {:error-type :llm/invalid-request
+               :content m})))
+
+    (:url m)
+    (image (:url m) (image-opts m))
+
+    (and (string? (:source m)) (url-string? (:source m)))
+    (image (:source m) (image-opts m))
+
+    (some? (or (:path m) (:file m) (:source m)))
+    (image (or (:path m) (:file m) (:source m)) (image-opts m))
+
+    :else
+    (throw (ex-info
+            "Image content map must include :path, :file, :url, :source, :bytes, or base64 :data with :media-type"
+            {:error-type :llm/invalid-request
+             :content m}))))
+
+(defn- pdf-map
+  [m]
+  (cond
+    (normalized-pdf-part? m)
+    m
+
+    (:data m)
+    {:type       :pdf
+     :media-type (or (:media-type m) "application/pdf")
+     :data       (:data m)}
+
+    (:bytes m)
+    {:type       :pdf
+     :media-type (or (:media-type m) "application/pdf")
+     :data       (bytes-util/bytes->base64 (:bytes m))}
+
+    (some? (or (:path m) (:file m) (:source m)))
+    (pdf (or (:path m) (:file m) (:source m)))
+
+    :else
+    (throw (ex-info
+            "PDF content map must include :path, :file, :source, :bytes, or base64 :data"
+            {:error-type :llm/invalid-request
+             :content m}))))
+
+(defn normalize-part
+  "Normalize a declarative content map to the provider-neutral content part
+   shape used by backends.
+
+   Accepts maps such as:
+
+     {:type :image :path \"photo.jpg\"}
+     {:type :image :url \"https://example.com/photo.png\"}
+     {:type :image :path \"huge.jpg\" :max-edge 512}
+     {:type :pdf :path \"document.pdf\"}
+
+   Already-normalized content parts pass through unchanged."
+  [x]
+  (case (:type x)
+    :text
+    {:type :text
+     :text (str (:text x))}
+
+    :image
+    (image-map x)
+
+    :pdf
+    (pdf-map x)
+
+    (throw (ex-info
+            (str "Invalid content map: expected :type to be :text, :image, or :pdf; got " (:type x))
+            {:error-type :llm/invalid-request
+             :content x}))))
+
 ;; ════════════════════════════════════════════════════════════════════
 ;; Public API
 ;; ════════════════════════════════════════════════════════════════════

@@ -1,7 +1,6 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.content :as content]
          '[co.poyo.clj-llm.backend.openai :as openai])
 
 
@@ -23,11 +22,9 @@
                    :api-base "https://openrouter.ai/api/v1"
                    :defaults {:model "gpt-4o-mini"}}))
 
-(def img (content/image image-path {:max-edge 512}))
+(def img {:type :image :path image-path :max-edge 512})
 
-(println "Image part keys:" (keys img))
-(println "Media type:" (:media-type img))
-(println "Data length:" (count (:data img)) "chars base64")
+(println "Image:" image-path)
 (println)
 
 (println "--- Describing image ---")

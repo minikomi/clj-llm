@@ -4,7 +4,6 @@
 (System/setProperty "java.net.preferIPv4Stack" "true")
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.content :as content]
          '[co.poyo.clj-llm.backend.openai :as openai]
          '[babashka.http-client :as http]
          '[cheshire.core :as json]
@@ -62,7 +61,7 @@
                      (println "  →" (subs (str result) 0 (min 120 (count (str result)))) "..."))})
 
 (defn ask [image-path-or-url]
-  (let [input [(content/image image-path-or-url {:max-edge 512})]]
+  (let [input [{:type :image :source image-path-or-url :max-edge 512}]]
     (llm/run-agent ai (assoc opts :tools [#'search-web]) input)))
 
 ;; ── Main ──────────────────────────────────────────────────────────

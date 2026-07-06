@@ -162,26 +162,35 @@
   [x]
   (cond
     (string? x) (content/text x)
-    (content/content-part? x) x
+    (content/content-part? x) (content/normalize-part x)
     :else (throw (ex-info
                   (str "Invalid content element: expected string or content part, got " (type x))
                   {:error-type :llm/invalid-request :element x}))))
 
+(defn- normalize-message
+  "Normalize provider-neutral content maps inside an explicit message history."
+  [msg]
+  (cond-> msg
+    (mixed-content-vector? (:content msg))
+    (update :content #(mapv normalize-content-element %))))
+
 (defn- build-messages
   "Coerce input to a messages vector.
    Map     → auto-unwrap :text (result from previous generate/run-agent)
+   Content map → [{:role :user :content [normalized-part]}]
    String  → [{:role :user :content input}]
    Vector of content parts/strings → [{:role :user :content [...parts...]}]
    Vector of messages → used as-is (message history)
    nil     → []"
   [input]
   (cond
+    (content/content-part? input) [{:role :user :content [(content/normalize-part input)]}]
     (:structured input) [{:role :user :content (prn-str (:structured input))}]
     (:text input)        [{:role :user :content (:text input)}]
     (string? input) [{:role :user :content input}]
     (mixed-content-vector? input)
     [{:role :user :content (mapv normalize-content-element input)}]
-    (vector? input) input
+    (vector? input) (mapv normalize-message input)
     (nil? input)    []
     :else (throw (ex-info
                   (str "Input must be a string, vector, or nil — got " (type input))
@@ -422,8 +431,12 @@
      :on-tool-calls   - (fn [{:keys [tool-calls text]}] ...) called before tools execute
      :on-tool-result  - (fn [{:keys [tool-call result error]}] ...) called after each tool
 
-   Input is last — string, message-history vector, or a result map from
-   a previous call. Results auto-unwrap :text when chained:
+   Input is last — string, content map, message-history vector, mixed
+   content vector, or a result map from a previous call. Results auto-unwrap
+   :text when chained:
+
+   (generate ai [\"Describe\" {:type :image :path \"photo.jpg\"}])
+   (generate ai [\"Summarize\" {:type :pdf :path \"document.pdf\"}])
 
    (->> \"raw text\"
         (llm/generate ai {:system-prompt \"Fix grammar\"})

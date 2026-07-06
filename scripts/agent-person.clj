@@ -1,13 +1,17 @@
 #!/usr/bin/env bb
 
 (require '[co.poyo.clj-llm.core :as llm]
-         '[co.poyo.clj-llm.content :as content]
          '[co.poyo.clj-llm.backend.openai :as openai])
 
 (def ai
   (-> (openai/backend {:api-key  (System/getenv "OPENROUTER_KEY")
                        :api-base "https://openrouter.ai/api/v1"})
       (assoc :defaults {:model "gpt-4o-mini"})))
+
+(def image-path (first *command-line-args*))
+(when-not image-path
+  (println "Usage: bb scripts/agent-person.clj <person-image-path>")
+  (System/exit 1))
 
 ;; A trivial tool so run-agent has something to work with
 (defn guess-age
@@ -19,7 +23,7 @@
   [{:keys [description]}]
   (str "Based on the description: " description " — estimated age range: 25-35"))
 
-(def img (content/image "/tmp/person.jpg" {:max-edge 512}))
+(def img {:type :image :path image-path :max-edge 512})
 
 (println "Running agent with person image...\n")
 
